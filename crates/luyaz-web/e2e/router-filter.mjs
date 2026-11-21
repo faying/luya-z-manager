@@ -2,17 +2,24 @@
 // fonts, axe light/dark 0, 390 px no sideways scroll, English body without Chinese, no page errors,
 // screenshots) and the page's own: add (read back), validation, the panel's own host refused before
 // sending, remove, quick block with a failed step then "send the rest", no readback → 「设备已接受」,
-// unreadable list locks changes, tier 3 dialog over Tailscale. Needs MOCK (the mock u60d's
+// unreadable list locks changes, tier 3 dialog from off the LAN. Needs MOCK (the mock u60d's
 // /mock/filter, /mock/control, /mock/stats). Run from source/manager:
 //   WEB=http://127.0.0.1:18213 MOCK=http://127.0.0.1:19413 OUT=/tmp/b4f crates/luyaz-web/e2e/run.sh router-filter
 import { chromium } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import os from "node:os";
 
 const WEB = process.env.WEB ?? "http://127.0.0.1:18213";
 const MOCK = process.env.MOCK ?? "http://127.0.0.1:19413";
 const OUT = process.env.OUT ?? "/tmp/b4f";
 const PATH = "/router/telemetry";
 const port = new URL(WEB).port;
+// A real peer from off the LAN: this machine's own non-loopback IPv4. luyaz-web classifies a
+// connection by its peer address alone (topbar::via), never by the Host header, so the remote
+// checks come in through this address — the web under test must listen on it too (--bind /
+// LUYAZ_WEB_BIND, and the interface in LUYAZ_WEB_IFACES), or the checks fail with that message.
+const OFF_LAN = Object.values(os.networkInterfaces()).flat().find((a) => a?.family === "IPv4" && !a.internal)?.address ?? "";
+const RW = OFF_LAN ? WEB.replace(/127\.0\.0\.1|localhost/, OFF_LAN) : "";
 const mock = (path) => fetch(MOCK + path, { method: "POST" });
 const ops = async () => (await fetch(`${MOCK}/mock/stats`).then((r) => r.json())).page_ops ?? [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -164,17 +171,20 @@ async function own(p, ctx) {
 }
 
 async function remote(browser) {
-  // over Tailscale (a single-label MagicDNS name): tier 3 dialog with the warning
+  // from off the LAN (the machine's real non-loopback address): tier 3 dialog with the warning
+  if (!RW) return ok(false, "remote: this machine has no non-loopback IPv4 — the remote checks need a real off-LAN peer");
+  if (!(await fetch(RW + "/login").then(() => true, () => false)))
+    return ok(false, `remote: ${RW} does not answer — the web must listen on a non-loopback address too (--bind, and the interface in LUYAZ_WEB_IFACES)`);
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await ctx.addCookies([{ name: "lw_sid", value: sid, url: `http://u60:${port}` }, { name: "u60_lang", value: "zh", url: `http://u60:${port}` }]);
+  await ctx.addCookies([{ name: "lw_sid", value: sid, url: RW }, { name: "u60_lang", value: "zh", url: RW }]);
   const p = await ctx.newPage();
-  await p.goto(`http://u60:${port}${PATH}`, { waitUntil: "load" });
+  await p.goto(RW + PATH, { waitUntil: "load" });
   await ready(p).catch(() => ok(false, "remote: page never showed"));
   const n = (await ops()).length;
   await p.click("#tf-list button[aria-label='移除 ads.example.com']");
   await p.waitForSelector("dialog#tf-del-confirm[open]", { timeout: 10000 }).catch(() => {});
   const d = await txt(p, "#tf-del-confirm");
-  ok(/Tailscale/.test(d) && /不断网/.test(d) && /连着 U60 Wi-Fi/.test(d), `remote dialog: ${d}`);
+  ok(/按远程处理|你正在远程操作/.test(d) && /不断网/.test(d) && /连着 U60 Wi-Fi/.test(d), `remote dialog: ${d}`);
   const ax = await new AxeBuilder({ page: p }).analyze();
   ok(ax.violations.length === 0, `remote dialog axe: ${ax.violations.map((v) => v.id).join(", ") || "0"}`);
   await p.screenshot({ path: `${OUT}/tf-remote-dialog.png` });
@@ -185,7 +195,7 @@ async function remote(browser) {
 }
 
 await mock("/mock/filter");
-const browser = await chromium.launch({ channel: "chrome", args: ["--host-resolver-rules=MAP u60 127.0.0.1"] });
+const browser = await chromium.launch({ channel: "chrome" });
 for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "en", "dark"], [390, 844, "phone", "zh", "light"]]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });
   for (const url of [WEB, `http://u60.panel.localhost:${port}`]) await ctx.addCookies([{ name: "lw_sid", value: sid, url }, { name: "u60_lang", value: lang, url }]);

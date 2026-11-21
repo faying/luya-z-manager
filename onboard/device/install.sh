@@ -576,8 +576,9 @@ do_chill() {
     rc_add "[ -f $C/disabled ] || /etc/init.d/chill start" "/etc/init.d/chill start"
 
     if [ $fresh = 1 ]; then
+        : > "$C/disabled" || die "CHILL: could not leave the gateway off for first setup"
         log "$(tx 'CHILL: 已装好，没有启动。接下来：' 'CHILL: installed, not started. Next:')"
-        log "$(tx "  1. cp $C/chill.env.example $C/chill.env && chmod 600 $C/chill.env，填订阅地址；节点快照放 $C/providers/" "  1. cp $C/chill.env.example $C/chill.env && chmod 600 $C/chill.env, then fill in the subscription URL; put node snapshots in $C/providers/")"
+        log "$(tx '  1. 在管理网页的 服务 → CHILL 导入配置档案' '  1. Import a configuration from Services → CHILL in the admin web')"
         log "$(tx "  2. sh $C/chill.sh safe-start，网络正常就在 5 分钟内 sh $C/chill.sh confirm" "  2. sh $C/chill.sh safe-start; if the network works, run sh $C/chill.sh confirm within 5 minutes")"
         return 0
     fi

@@ -58,8 +58,13 @@ fn wake() -> &'static tokio::sync::Notify {
 /// A kernel record from the crash watcher's reader: look now when it may be about the channel.
 pub fn poke(text: &str) {
     if dfs::kmsg_hint(text) {
-        wake().notify_one();
+        layout_changed();
     }
+}
+
+/// Re-read the live channel after a Core Wi-Fi operation, including ordinary off/on cycles.
+pub(crate) fn layout_changed() {
+    wake().notify_one();
 }
 
 /// The `wifi_dfs` block.

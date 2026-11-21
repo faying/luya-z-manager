@@ -2,16 +2,15 @@
 //! chill.conf says otherwise): the main group's choice, the mode from /configs (no more than
 //! every 30 s), the group list, /connections, the open group's nodes and the chain behind its
 //! choice. Picks go out without waiting for the answer; the group delay test keeps its socket
-//! and reads a bit each round. The profile goes through luyaz-core, and so does 家里出口
-//! (E3: GET/PUT /api/services/chill/home).
+//! and reads a bit each round. The profile goes through luyaz-core.
 
 use super::core_api::CoreApi;
 use super::http::{self, read_into};
-use super::util::{bytes_cap, find, find_byte, jget, jstr, mono_ms, text, trunc};
+use super::util::{bytes_cap, find, find_byte, jget, mono_ms, text, trunc};
 use crate::cf;
 use crate::json;
 use crate::lang::{self, tr};
-use ui_model::{chill_group_info_t, chill_home_t, chill_node_info_t, chill_pin_t, chill_traffic_item_t};
+use ui_model::{chill_group_info_t, chill_node_info_t, chill_pin_t, chill_traffic_item_t};
 use std::fmt::Write as _;
 use std::os::fd::{AsRawFd, OwnedFd};
 
@@ -21,6 +20,7 @@ const SC_IO_MS: i32 = 1500;
 const SC_TTL_MS: i64 = 5000; // was 2000; reduced poll rate (P2 觸屏降頻 2026-10-19)
 /// /configs is about 170 KB (mostly the TUN route exclusions) for the one field we want
 const SC_CFG_TTL_MS: i64 = 30000;
+const SC_PROFILE_TTL_MS: i64 = 30000;
 /// one hand-picked group had 168 nodes on 2026-09-22
 const SC_MAX_NODE: usize = 200;
 const SC_NAME_MAX: usize = 96;
@@ -48,10 +48,52 @@ const SC_ABSENT_TTL_MS: i64 = 30000;
 const SC_PINS: [(&str, &str); 2] = [("AI", "🤖 AI"), ("VoWiFi", "📞 VoWiFi")];
 const SC_PIN_TTL_MS: i64 = 60000;
 
-pub const CH_MEDIA: usize = 0;
-pub const CH_IP: usize = 1;
-pub const CH_REST: usize = 2;
-const CH_KEYS: [&str; 3] = ["media", "ip", "rest"];
+/// A separate background cache keeps a slow Core API read off the Mihomo control path.
+#[derive(Clone, Default)]
+pub struct ConfigProfile {
+    pub name: Option<String>,
+    pub kind: Option<String>,
+    last_ms: i64,
+}
+
+impl super::background::ReadCopy for ConfigProfile {
+    fn read_copy(&self) -> Self { self.clone() }
+}
+
+impl ConfigProfile {
+    pub fn poll(&mut self, agent: &mut CoreApi, active: bool) -> bool {
+        if !active { return false; }
+        let now = mono_ms();
+        if self.last_ms != 0 && now - self.last_ms < SC_PROFILE_TTL_MS { return false; }
+        self.last_ms = now.max(1);
+        let (status, body) = agent.api("GET", "/api/services/chill/configs", None, SC_RESP_MAX);
+        if status != 200 { return false; }
+        let Some((name, kind)) = body.as_deref().and_then(parse_config_profile) else { return false };
+        let changed = self.name.as_ref() != Some(&name) || self.kind != kind;
+        self.name = Some(name);
+        self.kind = kind;
+        changed
+    }
+}
+
+/// A missing active ID is distinct from a failed or incomplete response.
+fn parse_config_profile(body: &[u8]) -> Option<(String, Option<String>)> {
+    let data = json::get(body, "data", SC_RESP_MAX)?;
+    let id = json::get_str(&data, "active_id", 128)?;
+    let profiles = json::get(&data, "profiles", SC_RESP_MAX)?;
+    if profiles.first() != Some(&b'[') || profiles.last() != Some(&b']') { return None; }
+    if id == "null" || id.is_empty() { return Some((String::new(), None)); }
+    let mut pos = 0;
+    while let Some((entry, next)) = json::arr_next(&profiles, pos, SC_RESP_MAX) {
+        pos = next;
+        if json::get_str(&entry, "id", 128).as_deref() == Some(id.as_str()) {
+            let name = json::get_str(&entry, "name", 512)?;
+            let kind = json::get_str(&entry, "kind", 64)?;
+            return Some((sanitize_name(&name, SC_NAME_MAX), Some(kind)));
+        }
+    }
+    None
+}
 
 /// One (rule group, node) pair's bytes since this process started.
 #[derive(Clone)]
@@ -86,6 +128,7 @@ pub struct Chill {
     profile: String,
     profile_eff: String,
     thermal_eco: bool,
+    ipv6: Option<String>,
     profile_pending_ms: i64,
     node: String,
     /// 「🚀 节点选择」's pick as is: the exit state looks at whether it is DIRECT
@@ -129,9 +172,6 @@ pub struct Chill {
     delay_t0: i64,
     delay_buf: Vec<u8>,
 
-    home: chill_home_t,
-    home_ms: i64,
-
     pins: Vec<chill_pin_t>,
     /// the main selector's current member, tested with the pins: ms, 0 timed out; None = not read or DIRECT
     main_ms: Option<i32>,
@@ -152,6 +192,7 @@ impl super::background::ReadCopy for Chill {
             profile: self.profile.clone(),
             profile_eff: self.profile_eff.clone(),
             thermal_eco: self.thermal_eco,
+            ipv6: self.ipv6.clone(),
             profile_pending_ms: self.profile_pending_ms,
             node: self.node.clone(),
             main_now: self.main_now.clone(),
@@ -185,8 +226,6 @@ impl super::background::ReadCopy for Chill {
             delay_fd: None,
             delay_t0: 0,
             delay_buf: Vec::new(),
-            home: self.home.clone(),
-            home_ms: self.home_ms,
             pins: self.pins.clone(),
             main_ms: self.main_ms,
             pins_ms: self.pins_ms,
@@ -296,6 +335,7 @@ impl Default for Chill {
             profile: "standard".into(),
             profile_eff: "standard".into(),
             thermal_eco: false,
+            ipv6: None,
             profile_pending_ms: 0,
             node: String::new(),
             main_now: String::new(),
@@ -329,8 +369,6 @@ impl Default for Chill {
             delay_fd: None,
             delay_t0: 0,
             delay_buf: Vec::new(),
-            home: chill_home_t { in_china: -1, roaming: -1, home_ok: -1, ms: -1, nitem: -1, on: vec![0; 3], ..Default::default() },
-            home_ms: 0,
             pins: Vec::new(),
             main_ms: None,
             pins_ms: 0,
@@ -484,80 +522,6 @@ fn raw_name(b: &[u8]) -> String {
     text(&b[..b.len().min(SC_NAME_MAX - 1)])
 }
 
-fn jbool(o: &[u8], key: &str) -> i32 {
-    match json::get(o, key, 8).as_deref() {
-        Some(b"true") => 1,
-        Some(b"false") => 0,
-        _ => -1,
-    }
-}
-
-fn home_item(s: &str) -> i32 {
-    CH_KEYS.iter().position(|&k| k == s).map_or(-1, |i| i as i32)
-}
-
-/// GET /api/services/chill/home's "data" (chill_home_parse).
-pub fn home_parse(data: &[u8]) -> chill_home_t {
-    let mut h = chill_home_t { known: 1, in_china: -1, roaming: -1, home_ok: -1, ms: -1, nitem: -1, on: vec![0; 3], ..Default::default() };
-    h.configured = (jbool(data, "configured") == 1) as i32;
-    h.updating = (jbool(data, "updating") == 1) as i32;
-    if h.configured == 0 || h.updating != 0 {
-        return h;
-    }
-    if let Some(o) = json::get(data, "where", 512) {
-        h.in_china = jbool(&o, "in_china");
-        h.roaming = jbool(&o, "true_roaming");
-    }
-    h.blocked = jstr(data, "blocked", 16);
-    if let Some(items) = json::get(data, "items", 1024) {
-        for (i, k) in CH_KEYS.iter().enumerate() {
-            if let Some(it) = json::get(&items, k, 256) {
-                h.on[i] = (jbool(&it, "on") == 1) as i32;
-                if i == CH_IP {
-                    h.sites = json::get_int(&it, "sites", 0) as i32;
-                }
-                if i == CH_REST {
-                    h.until = json::get_int(&it, "until", 0);
-                    h.can_extend = (jbool(&it, "can_extend") == 1) as i32;
-                }
-            }
-        }
-    }
-    if let Some(o) = json::get(data, "home", 512) {
-        h.home_ok = jbool(&o, "ok");
-        h.ms = match json::get(&o, "ms", 64) {
-            Some(v) if v != b"null" => json::atol(&v) as i32,
-            _ => -1,
-        };
-    }
-    let v = jstr(data, "fallback_to", 64);
-    if !v.is_empty() {
-        h.fallback_to = sanitize_name(&v, 64);
-    }
-    h.ts = jstr(data, "tailscale", 12);
-    if let Some(o) = json::get(data, "busy", 512)
-        && o.first() == Some(&b'{')
-    {
-        h.busy = 1;
-        h.busy_item = home_item(&jstr(&o, "item", 64));
-        h.busy_on = (jbool(&o, "on") == 1) as i32;
-        h.busy_phase = jstr(&o, "phase", 12);
-        h.busy_until = json::get_int(&o, "until", 0);
-    }
-    if let Some(o) = json::get(data, "notice", 512)
-        && o.first() == Some(&b'{')
-    {
-        h.nkind = jstr(&o, "kind", 16);
-        h.nitem = home_item(&jstr(&o, "item", 64));
-        let zh = jstr(&o, "text", 200);
-        let en = jstr(&o, "text_en", 200);
-        h.ntext = trunc(if lang::is_en() && !en.is_empty() { &en } else { &zh }, 200);
-        h.ncode = jstr(&o, "code", 24);
-        h.nat = json::get_int(&o, "at", 0);
-    }
-    h
-}
-
 impl Chill {
     /// chill.conf (key=value lines), once: where mihomo listens, its secret, the group to open on.
     fn load_conf(&mut self) {
@@ -700,10 +664,16 @@ impl Chill {
         match self.grp_raw.iter().position(|r| *r == self.group) {
             Some(i) => self.grp_idx = i as i32,
             None if !self.grp_raw.is_empty() => {
+                self.node.clear();
+                self.chain.clear();
                 self.grp_idx = 0;
                 self.group = self.grp_raw[0].clone();
             }
-            None => self.grp_idx = -1,
+            None => {
+                self.grp_idx = -1;
+                self.node.clear();
+                self.chain.clear();
+            }
         }
     }
 
@@ -720,6 +690,8 @@ impl Chill {
         let v = jget(&b, "profile_effective", 16);
         self.profile_eff = if valid_profile(&v) { v } else { self.profile.clone() };
         self.thermal_eco = find(&b, b"\"thermal_eco\":true", 0).is_some();
+        self.ipv6 = json::get_str(&b, "ipv6_mode", 32)
+            .filter(|s| matches!(s.as_str(), "blocked" | "tun" | "unavailable"));
     }
 
     /// Read mihomo if `active` and the last read is older than SC_TTL_MS. true when a read ran.
@@ -905,6 +877,9 @@ impl Chill {
     pub fn mode_raw(&self) -> &str {
         &self.mode_raw
     }
+    pub fn ipv6(&self) -> Option<String> {
+        self.ipv6.clone()
+    }
     pub fn group(&self) -> String {
         sanitize_name(&self.group, SC_NAME_MAX)
     }
@@ -961,8 +936,7 @@ impl Chill {
         }
     }
 
-    /// The exit through luyaz-core (PUT /api/services/chill/exit); shown as asked until the next
-    /// read says otherwise.
+    /// The exit through luyaz-core (PUT /api/services/chill/exit); /configs remains authoritative.
     pub fn set_exit(&mut self, agent: &mut CoreApi, state: &str) -> bool {
         if state.is_empty() {
             return false;
@@ -970,16 +944,6 @@ impl Chill {
         let code = agent.request_status("PUT", "/api/services/chill/exit", Some(&trunc(&format!("{{\"state\":\"{state}\"}}"), 48)));
         if !(200..300).contains(&code) {
             return false;
-        }
-        if state == "direct_all" {
-            self.mode_raw = "direct".into();
-        } else {
-            self.mode_raw = "rule".into();
-            if state == "direct_keep_ai" {
-                self.main_now = "DIRECT".into();
-            } else if self.main_now == "DIRECT" {
-                self.main_now.clear();
-            }
         }
         self.last_ms = 0;
         self.cfg_again = 2; // read the real mode back
@@ -1166,42 +1130,6 @@ impl Chill {
         1
     }
 
-    // ---- 家里出口 (E3) ----
-
-    /// Read when the CHILL page is up: every second while a switch runs, else 5 s. true =
-    /// something new to draw.
-    pub fn home_poll(&mut self, agent: &mut CoreApi, active: bool, fast: bool) -> bool {
-        let t = mono_ms();
-        if !active {
-            self.home_ms = 0;
-            return false;
-        }
-        if self.home_ms != 0 && t - self.home_ms < if fast { 1000 } else { 5000 } {
-            return false;
-        }
-        self.home_ms = t;
-        let (code, b) = agent.api("GET", "/api/services/chill/home", None, 4096);
-        let data = b.filter(|_| code == 200).and_then(|b| json::get(&b, "data", 3072));
-        let Some(data) = data else {
-            if self.home.known == 0 {
-                return false;
-            }
-            let was = self.home.stale;
-            self.home.stale = 1;
-            return was == 0;
-        };
-        let h = home_parse(&data);
-        if h == self.home {
-            return false;
-        }
-        self.home = h;
-        true
-    }
-
-    pub fn home(&self) -> &chill_home_t {
-        &self.home
-    }
-
     // ---- Home's pinned line (🤖 AI, 📞 VoWiFi) ----
 
     /// While Home is up: once a minute, where 🤖 AI and 📞 VoWiFi leave (their chain from
@@ -1261,31 +1189,6 @@ impl Chill {
 
     pub fn pins(&self) -> Vec<chill_pin_t> {
         self.pins.clone()
-    }
-
-    /// One item on or off (the second tap): the HTTP status, and the agent's code on 409.
-    pub fn home_set(&mut self, agent: &mut CoreApi, item: usize, on: bool) -> (i32, String) {
-        if item >= 3 {
-            return (0, String::new());
-        }
-        // the user has seen 「会断一下、走漫游流量」: confirm
-        let body = format!("{{\"item\":\"{}\",\"on\":{},\"confirm\":true}}", CH_KEYS[item], on);
-        let (rc, b) = agent.api("PUT", "/api/services/chill/home", Some(&body), 1024);
-        let code = match (&b, rc) {
-            (Some(b), 409) => jstr(b, "code", 24),
-            _ => String::new(),
-        };
-        self.home_ms = 0; // read the progress at once
-        (rc, code)
-    }
-
-    /// 其余 two more hours: Some(the new end), None = not extended.
-    pub fn home_extend(&mut self, agent: &mut CoreApi) -> Option<i64> {
-        let (rc, b) = agent.api("PUT", "/api/services/chill/home", Some("{\"action\":\"extend\"}"), 512);
-        let b = b.filter(|_| rc == 200)?;
-        let until = json::get(&b, "data", 128).map_or(0, |d| json::get_int(&d, "until", 0));
-        self.home_ms = 0;
-        Some(until)
     }
 }
 

@@ -111,8 +111,6 @@ STAGE_DIR=$SHIP_DIR/stage
 CH_DIR=$ROOT/data/chill
 CH_INITD=$ROOT/etc/init.d/chill
 CH_STATE=$ROOT/tmp/chill.state
-TS_DIR=$ROOT/data/tailscale
-TS_INITD=$ROOT/etc/init.d/tailscale
 LOCK_FILE=$SHIP_DIR/lock
 RECOVER_LOCK=$SHIP_DIR/recover.lock       # recover-live: one at a time (core + sentinel both start it)
 HB_FILE=$SHIP_TMP/heartbeat
@@ -1096,13 +1094,12 @@ c_scripts_check() {
     IFS=$_ifs
 }
 
-# chill: the new template (its side file, name.test) rendered and tested before anything is touched
-# (the new chill.sh, this device's chill.env). A rollback goes back to
-# what ran before, whatever an old chill.sh can validate.
+# chill: test the staged template and the active runtime before promotion.
+# Rollback uses what ran before, whatever the old chill.sh can validate.
 c_chill_pre() {
     case "$X_NOTE" in rollback*) return 0 ;; esac
-    if ! _o=$(sh "$CH_DIR/chill.sh.test" validate "$CH_DIR/template.yaml.test" 2>&1); then
-        REASON="新模板校验不过：$(printf '%s' "$_o" | tail -n 1 | cut -c1-160)"
+    if ! _o=$(sh "$CH_DIR/chill.sh.test" validate --template "$CH_DIR/template.yaml.test" 2>&1); then
+        REASON="CHILL 配置校验不过：$(printf '%s' "$_o" | tail -n 1 | cut -c1-160)"
         return 1
     fi
 }
@@ -1140,7 +1137,7 @@ c_chill_check() {
         _st=$(ch_field state)
         _rs=$(ch_field reason)
         case "$_st:$_rs" in
-            direct:gaveup | direct:render_failed)
+            direct:gaveup | direct:render_failed | direct:profile_not_ready | direct:profile_switch_failed | direct:ipv6_unavailable)
                 REASON="CHILL 回了直连（$_rs）"
                 return 1
                 ;;
@@ -1159,60 +1156,9 @@ c_chill_check() {
                     [ -d "$ROOT/proc/$_cp" ] && return 0
                     REASON="CHILL 说在跑，核心 pid $_cp 不在"
                     ;;
-                direct:idle | direct:paused | direct:captive_wan | direct:overheat | direct:ruleset_missing) return 0 ;;
+                direct:idle | direct:paused | direct:captive_wan | direct:overheat | direct:ruleset_missing | direct:no_profile) return 0 ;;
                 *) REASON="CHILL 状态不对（${_st:-没有状态} ${_rs}）" ;;
             esac
-            return 1
-        fi
-    done
-}
-
-# tailscale: the new start.sh's own check. The way back over the
-# tailnet goes down with the stop; the executor is detached and rolls back alone.
-c_tailscale_pre() {
-    case "$X_NOTE" in rollback*) return 0 ;; esac
-    if ! _o=$(sh "$TS_DIR/start.sh.test" check 2>&1); then
-        REASON="start.sh check 不过：$(printf '%s\n' "$_o" | grep -m1 '^FAIL' | cut -c1-160)"
-        return 1
-    fi
-}
-c_tailscale_stop() {
-    [ -f "$TS_DIR/disabled" ] && return 0
-    step "$TO_INITD" "$TS_INITD" stop >/dev/null 2>&1
-    _i=0
-    while [ -n "$($PIDOF tailscaled 2>/dev/null)" ]; do
-        if [ $_i -ge 20 ]; then
-            REASON="tailscaled 20s 内没有退出"
-            return 1
-        fi
-        $SLEEP 1
-        _i=$((_i + 1))
-    done
-}
-c_tailscale_start() {
-    [ -f "$TS_DIR/disabled" ] && return 0
-    step "$TO_INITD" "$TS_INITD" start >/dev/null 2>&1
-}
-# up by the end and not restarted since first seen; not up before the ship: only the files
-c_tailscale_check() {
-    c_scripts_check || return 1
-    [ -f "$TS_DIR/disabled" ] && return 0
-    case ",$X_CONN," in *,tailscale,*) ;; *) return 0 ;; esac
-    T0=$(num "$(now)")
-    _lp=
-    while :; do
-        wait_step
-        T=$(num "$(now)")
-        _cur=$(first_pid tailscaled)
-        _up=$(conn_probe | awk '$1 == "tailscale" { print $2 }')
-        if [ -n "$_lp" ] && [ -n "$_cur" ] && [ "$_cur" != "$_lp" ]; then
-            REASON="tailscaled 被重启过（pid $_lp → $_cur）"
-            return 1
-        fi
-        [ -n "$_cur" ] && _lp=$_cur
-        if [ $((T - T0)) -ge "$X_CHECK" ]; then
-            [ "$_up" = ok ] && return 0
-            REASON="检查窗口结束时 tailscale0 还没起来"
             return 1
         fi
     done
@@ -1245,7 +1191,7 @@ comp_load() {
             C_FILES="$CORE_BIN"
             # settings an older core would silently reset (crates/luyaz-core/ship/core/state-files).
             # Only stage checks this list: a rollback restores what its own txn log names
-            C_STATE_ALLOW="$ROOT/data/scenario/scenarios.json $ROOT/data/apn-pick.json $ROOT/data/local/tmp/scheduler.json $ROOT/data/local/tmp/charge_limit.json $ROOT/data/local/tmp/sms_forward.json $ROOT/data/luyaz/lanid/aliases.json $ROOT/data/luyaz/core/poller-allow.json $ROOT/data/luyaz/core/long/regress-limits.json $ROOT/data/luyaz/core/ops/agent-limit.json $ROOT/data/luyaz/core/ops/roam-cheap.json"
+            C_STATE_ALLOW="$ROOT/data/scenario/scenarios.json $ROOT/data/apn-pick.json $ROOT/data/local/tmp/scheduler.json $ROOT/data/local/tmp/charge_limit.json $ROOT/data/local/tmp/sms_forward.json $ROOT/data/luyaz/lanid/aliases.json $ROOT/data/luyaz/core/long/regress-limits.json $ROOT/data/luyaz/core/ops/agent-limit.json $ROOT/data/luyaz/core/ops/roam-cheap.json"
             TEST_BIN=$CORE_BIN.test
             ;;
         touch)
@@ -1294,15 +1240,6 @@ comp_load() {
             C_PRE=1
             C_CHECK=120
             [ -f "$CH_DIR/chill.sh" ] && [ -f "$CH_INITD" ] || C_NOTREADY="这台设备没装 CHILL（${CH_DIR#"$ROOT"}/chill.sh 或 ${CH_INITD#"$ROOT"} 不在）"
-            ;;
-        tailscale)
-            # tuning.env (each device its own) and the tailscaled binary are never part of it
-            C_KIND=direct
-            C_FILES="$TS_DIR/start.sh $TS_DIR/apply.sh $TS_DIR/VERSION"
-            C_ALLOW_NEW=1
-            C_PRE=1
-            C_CHECK=180
-            [ -f "$TS_DIR/start.sh" ] && [ -f "$TS_INITD" ] || C_NOTREADY="这台设备没装 Tailscale（${TS_DIR#"$ROOT"}/start.sh 或 ${TS_INITD#"$ROOT"} 不在）"
             ;;
         selftest)
             # sandbox only: never exists on the real paths
@@ -2219,11 +2156,7 @@ manifest_write() {
 record_list() {
     echo "chill.sh $ROOT/data/chill/chill.sh"
     echo "template.yaml $ROOT/data/chill/template.yaml"
-    echo "tailscale-start.sh $ROOT/data/tailscale/start.sh"
-    echo "tuning.env $ROOT/data/tailscale/tuning.env"
-    echo "tailscaled $ROOT/data/tailscale/tailscaled"
-    echo "tailscaled-nofight $ROOT/data/tailscale/nofight/tailscaled"
-    for _s in $CORE_NAME tailscale; do echo "init.d/$_s $ROOT/etc/init.d/$_s"; done
+    echo "init.d/$CORE_NAME $ROOT/etc/init.d/$CORE_NAME"
     echo "rc.local $ROOT/etc/rc.local"
     echo "luyaz-recover.sh $SHIP_DIR/$REC_NAME"
     # directories (third word "tree"): recorded by their fingerprint
@@ -3080,10 +3013,6 @@ conn_probe() {
         ip -4 addr show br-lan 2>/dev/null | grep -q ' inet ' && _cs=ok
     echo "lan $_cs"
     _cs=bad
-    [ -n "$($PIDOF tailscaled 2>/dev/null)" ] &&
-        ip -4 addr show tailscale0 2>/dev/null | grep -q ' inet ' && _cs=ok
-    echo "tailscale $_cs"
-    _cs=bad
     ip route get 1.1.1.1 2>/dev/null | head -n 1 | grep -q ' dev ' && _cs=ok
     echo "route $_cs"
     # the path back to the computer doing this ship, if it came over SSH
@@ -3100,7 +3029,7 @@ conn_baseline() {
     log "连通基线：$(printf '%s' "$CONN_BASE" | tr '\n' ' ')"
     # what the sentinel keeps comparing after the promote: never the routes, a base station can
     # take those away from a good build, and the computer may simply have left
-    X_CONN=$(printf '%s\n' "$CONN_BASE" | awk '$2 == "ok" && $1 ~ /^(ssh|lan|tailscale)$/ { s = s (s == "" ? "" : ",") $1 } END { print s }')
+    X_CONN=$(printf '%s\n' "$CONN_BASE" | awk '$2 == "ok" && $1 ~ /^(ssh|lan)$/ { s = s (s == "" ? "" : ",") $1 } END { print s }')
 }
 
 # conn_lost: what the baseline had and is gone for the whole wait (a blip is not a loss, and what
@@ -3464,7 +3393,7 @@ ship_screen_restart() {
 # ── known-good set (docs/SHIP.md「已知良好组合」): one saved copy of every shipped component,
 # the executor and the recover script. KEEP_PREV never touches it; only keep-good replaces it.
 KNOWN_GOOD=$SHIP_DIR/known-good
-KG_COMPS="core touch lweb sentinel scripts chill tailscale phone audio"
+KG_COMPS="core touch lweb sentinel scripts chill phone audio"
 
 # a power cut in the swap: the old set comes back, a half-built one goes.
 kg_heal() {

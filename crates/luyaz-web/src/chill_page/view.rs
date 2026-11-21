@@ -44,7 +44,7 @@ impl Slot {
 #[derive(Default)]
 pub struct Got {
     pub status: Slot,
-    pub home: Slot,
+    pub configs: Slot,
     pub prov: Slot,
     pub bypass: Slot,
     pub clients: Slot,
@@ -93,8 +93,9 @@ pub fn leaves(g: &Got, l: Lang, tab: &str, now: i64) -> Vec<(String, String)> {
     let known = st.is_some() && state != "unknown";
     vec![
         ("ch-status".into(), status(g, l)),
+        ("ch-mode".into(), mode(g, l, running)),
+        ("ch-configs".into(), configs(g, l)),
         ("ch-exit".into(), exit(g, l, running)),
-        ("ch-home".into(), home(g, l, known, now)),
         ("ch-region".into(), pick(g, l, running, "main")),
         ("ch-ai".into(), pick(g, l, running, "ai")),
         ("ch-profile".into(), profile(g, l, known)),
@@ -184,6 +185,14 @@ fn status(g: &Got, l: Lang) -> String {
         let said = stopped(l, "Status", "状态", slot.at);
         meta = if meta.is_empty() { said } else { format!("{meta} · {said}") };
     }
+    if let Some(v) = slot.v.as_ref() {
+        let active = g.configs.v.as_ref().and_then(|c| c["profiles"].as_array()).and_then(|a| a.iter().find(|p| p["active"].as_bool() == Some(true)));
+        let name = active.map_or("", |p| s(p, "name"));
+        let providers = active.and_then(|p| p["provider_count"].as_u64()).map_or("—".into(), |n| n.to_string());
+        let groups = active.and_then(|p| p["group_count"].as_u64()).map_or("—".into(), |n| n.to_string());
+        let extra = format!("{}: {} · {}: {providers} · {}: {groups} · IPv6: {}", l.pick("Configuration", "配置档案"), if name.is_empty() { "—" } else { name }, l.pick("Providers", "节点来源"), l.pick("Groups", "代理组"), if s(v, "ipv6_mode").is_empty() { "—" } else { s(v, "ipv6_mode") });
+        meta = if meta.is_empty() { extra } else { format!("{meta} · {extra}") };
+    }
     // "direct" because it was switched off (or paused) by hand is off: offer Start, not Stop
     let on = slot.v.as_ref().is_some_and(|v| match s(v, "state") {
         "running" => true,
@@ -213,8 +222,50 @@ fn status(g: &Got, l: Lang) -> String {
         stale_cls(tone == "stale"),
         mark(tone, &esc(&word)),
         if reason.is_empty() { String::new() } else { format!("<div class=\"nd-status__reason\"><span data-data>{}</span></div>", esc(&reason)) },
-        if meta.is_empty() { String::new() } else { format!("<div class=\"nd-status__meta\"><span class=\"nd-fresh\">{}</span></div>", esc(&meta)) },
+        if meta.is_empty() { String::new() } else { format!("<div class=\"nd-status__meta\"><span class=\"nd-fresh\" data-data>{}</span></div>", esc(&meta)) },
     )
+}
+
+fn mode(g: &Got, l: Lang, running: bool) -> String {
+    let Some(v) = g.status.v.as_ref().filter(|_| running) else {
+        return hidden("ch-mode");
+    };
+    let mut items = String::new();
+    for (value, label) in [
+        ("rule", l.pick("Rule", "规则")),
+        ("global", l.pick("Global", "全局")),
+        ("direct", l.pick("Direct", "直连")),
+    ] {
+        items += &format!(
+            "<label><input type=\"radio\" name=\"mode\" value=\"{value}\" required{}><span>{label}</span></label>",
+            if s(v, "mode") == value { " checked" } else { "" },
+        );
+    }
+    format!(
+        "<section id=\"ch-mode\" aria-labelledby=\"ch-mode-t\">{}<form class=\"nd-group p-4 ch-mode\" data-on:submit__prevent=\"@post(el.elements.mode.value === 'direct' ? '/services/chill/mode/ask' : '/services/chill/mode/set?v=' + el.elements.mode.value)\"><fieldset aria-labelledby=\"ch-mode-t\">{items}</fieldset><button type=\"submit\" class=\"nd-btn nd-btn--primary\">{}</button></form></section>",
+        title(l, "ch-mode-t", "Mode", "模式"),
+        l.pick("Apply", "应用"),
+    )
+}
+
+fn configs(g: &Got, l: Lang) -> String {
+    let slot = &g.configs;
+    let mut rows = String::new();
+    if let Some(profiles) = slot.v.as_ref().and_then(|v| v["profiles"].as_array()) {
+        if profiles.is_empty() { rows.push_str(&format!("<p class=\"nd-row\">{}</p>", l.pick("No configurations yet.", "还没有配置档案。"))); }
+        for (i, p) in profiles.iter().enumerate() {
+            let active = p["active"].as_bool() == Some(true);
+            let t = tag(s(p, "id"));
+            let mut actions = String::new();
+            for (action, label, disabled) in [("activate", l.pick("Switch", "切换"), active), ("refresh", l.pick("Refresh", "刷新"), false), ("delete", l.pick("Delete", "删除"), active)] {
+                actions += &format!("<button type=\"button\" id=\"ch-c-{action}-{i}\" class=\"nd-btn nd-btn--secondary nd-btn--sm\" aria-labelledby=\"ch-c-{action}-{i} ch-cn-{i}\"{} data-on:click=\"@post('/services/chill/config/ask?act={action}&amp;i={i}&amp;h={t}')\">{label}</button>", if disabled { " disabled" } else { "" });
+            }
+            let kind = match s(p, "kind") { "full_url" => l.pick("Full URL", "完整配置链接"), "node_url" => l.pick("Node URL", "节点订阅链接"), "local_yaml" => l.pick("Local YAML", "本地 YAML"), _ => l.pick("Unknown", "未知") };
+            let updated = p["updated_at"].as_i64().map(date).unwrap_or_else(|| "—".into());
+            rows += &format!("<div class=\"nd-row ch-config-row\"><div class=\"nd-row__text\"><span id=\"ch-cn-{i}\" class=\"nd-row__label\" data-data>{}</span><span class=\"nd-row__sub block\">{} · <span data-data>{}</span> · {} · {}: {} · {}: {}{}</span></div><div class=\"ch-config-actions\">{actions}</div></div>", esc(s(p, "name")), kind, esc(s(p, "source_host")), esc(&updated), l.pick("Providers", "节点来源"), p["provider_count"].as_u64().unwrap_or(0), l.pick("Groups", "代理组"), p["group_count"].as_u64().unwrap_or(0), if active { l.pick(" · Active", " · 使用中") } else { "" });
+        }
+    } else { rows.push_str(&format!("<p class=\"nd-row\">{}</p>", if slot.err.is_some() { l.pick("Couldn't load configurations.", "配置档案加载失败。") } else { l.pick("Loading…", "加载中…") })); }
+    format!("<section id=\"ch-configs\" aria-labelledby=\"ch-configs-t\">{}<div class=\"nd-group{}\">{rows}</div></section>", title(l, "ch-configs-t", "Configurations", "配置档案"), stale_cls(slot.stale()))
 }
 
 // ---- exit ----
@@ -251,71 +302,11 @@ fn exit(g: &Got, l: Lang, running: bool) -> String {
     )
 }
 
-// ---- home exit ----
-
 fn switch(label_id: &str, on: bool, disabled: bool, click: &str) -> String {
     format!(
         "<button type=\"button\" role=\"switch\" class=\"nd-switch t-switch\" aria-labelledby=\"{label_id}\" aria-checked=\"{on}\"{}{} data-on:click=\"{click}\"><span class=\"nd-switch__track\"><svg class=\"nd-switch__check\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path d=\"M2.5 6.2 5 8.6 9.5 3.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg><span class=\"nd-switch__thumb\"></span></span></button>",
         if on { " data-selected=\"true\"" } else { "" },
         if disabled { " disabled data-disabled=\"true\"" } else { "" },
-    )
-}
-
-fn line_html(x: &Line) -> String {
-    if x.tone == "neutral" {
-        format!("<span data-data>{}</span>", esc(&x.text))
-    } else {
-        mark(x.tone, &format!("<span data-data>{}</span>", esc(&x.text)))
-    }
-}
-
-fn home(g: &Got, l: Lang, known: bool, now: i64) -> String {
-    let Some(h) = g.home.v.as_ref().filter(|h| known && h["configured"].as_bool() == Some(true) && h["updating"].as_bool() != Some(true) && h["items"].is_object()) else {
-        return hidden("ch-home");
-    };
-    let busy = h["busy"].is_object();
-    let mut rows = String::new();
-    for item in HOME_ITEMS.iter().filter(|i| home_shown(h, i)) {
-        let on = h["items"][item]["on"].as_bool() == Some(true);
-        let grey = h["blocked"].is_string() && !on;
-        let no_sites = *item == "ip" && !on && h["items"]["ip"]["sites"].as_i64().unwrap_or(0) == 0;
-        let row = home_row(h, item, now, l);
-        let lid = format!("ch-hl-{item}");
-        rows += &format!(
-            "<div class=\"nd-row\"><span class=\"nd-row__text\"><span class=\"nd-row__label{}\" id=\"{lid}\">{}</span><span class=\"nd-row__sub block\" aria-live=\"polite\">{}</span></span>{}</div>",
-            if grey { " ch-grey" } else { "" },
-            esc(home_label(item, l)),
-            line_html(&row),
-            switch(&lid, on, busy || grey || no_sites, &format!("@post('/services/chill/home/ask?item={item}&on={}')", u8::from(!on))),
-        );
-    }
-    let foot = home_foot(h, now, l);
-    let foot_html = if foot.text.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "<p class=\"ch-foot px-1\" aria-live=\"polite\">{}{}</p>",
-            line_html(&foot),
-            if foot.extend {
-                format!(
-                    " <button type=\"button\" class=\"nd-btn nd-btn--secondary nd-btn--sm\" data-write=\"ch-ho\" data-on:click=\"{}\">{}</button>",
-                    post_once("/services/chill/home/extend"),
-                    l.pick("Extend 2h", "再开 2 小时")
-                )
-            } else {
-                String::new()
-            }
-        )
-    };
-    let reload = if h["busy"]["phase"].as_str() == Some("applying") {
-        aux(l.pick("Switching; this page may drop for a few seconds.", "正在切换，网页可能断几秒。"))
-    } else {
-        String::new()
-    };
-    format!(
-        "<section id=\"ch-home\" aria-labelledby=\"ch-home-t\">{}<div class=\"nd-group{}\">{rows}</div>{foot_html}{reload}</section>",
-        title(l, "ch-home-t", "Home exit", "家里出口"),
-        stale_cls(g.home.stale()),
     )
 }
 
@@ -676,4 +667,4 @@ pub fn area(id: &str, l: Lang, remote: Via, set: &str, phase: &crate::write::Pha
 }
 
 /// The ids of the write areas, in page order.
-pub const AREAS: [&str; 8] = ["ch-pw", "ch-ex", "ch-ho", "ch-rg", "ch-ax", "ch-pf", "ch-pv", "ch-bp"];
+pub const AREAS: [&str; 9] = ["ch-pw", "ch-ex", "ch-rg", "ch-ax", "ch-pf", "ch-pv", "ch-bp", "ch-md", "ch-cf"];

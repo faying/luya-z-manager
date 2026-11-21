@@ -1,8 +1,8 @@
 //! /router/wifi-guest's part of the mock u60d: the `guest` key of the `wifi` block (and `on` when
 //! nobody published it) and the `wifi.guest` transaction (`/mock/txn?end=` picks how it ends).
-//! `POST /mock/wguest` (JSON) takes `{"guest": {…}}` (merged into the guest part), `{"on": bool}`
-//! and `{"next": "busy503" | "refused" | "bad"}` (the next `wifi.guest` reply); no body puts the
-//! default guest part back.
+//! `POST /mock/wguest` takes `{"guest": {…}}` (merge), `{"on": bool}` (both switches),
+//! `{"module_on": bool|null}` (module only), and `{"next": "busy503" | "refused" | "bad"}`.
+//! No body restores the default guest settings and enables both switches.
 
 use std::sync::{Arc, Mutex};
 
@@ -77,6 +77,14 @@ fn words(p: &Map<String, Value>) -> (String, String) {
     (s.clone(), s)
 }
 
+fn matches_expect(old: &Value, expect: &Value) -> bool {
+    expect.as_object().is_some_and(|expect| {
+        expect.iter().all(|(path, value)| {
+            path.strip_prefix("guest.").and_then(|key| old.get(key)) == Some(value)
+        })
+    })
+}
+
 /// `/control` bodies this page's writes send; None = not this page's.
 pub(super) fn control(m: &Arc<Mock>, body: &Value, noreadback: bool) -> Option<Response> {
     if body["action"] != "wifi.guest" {
@@ -143,7 +151,7 @@ pub(super) fn control(m: &Arc<Mock>, body: &Value, noreadback: bool) -> Option<R
             Some(doing),
         );
     }
-    let Some(p) = body["params"].as_object().cloned() else {
+    let Some(mut p) = body["params"].as_object().cloned() else {
         return err(
             StatusCode::BAD_REQUEST,
             "invalid_parameter",
@@ -152,6 +160,16 @@ pub(super) fn control(m: &Arc<Mock>, body: &Value, noreadback: bool) -> Option<R
         );
     };
     let old = wifi(m)["guest"].clone();
+    if let Some(expect) = p.remove("expect")
+        && !matches_expect(&old, &expect)
+    {
+        return err(
+            StatusCode::CONFLICT,
+            "refused",
+            "Wi-Fi settings changed since the form was opened",
+            None,
+        );
+    }
     let mut new = old.clone();
     apply(&mut new, &p);
     // u60d diffs against the wireless config: a password is always a change (only its fingerprint shows)
@@ -195,6 +213,9 @@ pub(super) fn seed(m: &Arc<Mock>) {
     if !wifi(m)["on"].is_boolean() {
         set_field(m, "wifi", "on", json!(true));
     }
+    if wifi(m).get("module_on").is_none() {
+        set_field(m, "wifi", "module_on", json!(true));
+    }
 }
 
 async fn hook(State(m): State<Arc<Mock>>, body: Bytes) -> StatusCode {
@@ -203,6 +224,7 @@ async fn hook(State(m): State<Arc<Mock>>, body: Bytes) -> StatusCode {
         *next().lock().unwrap() = None;
         set_field(&m, "wifi", "guest", default_guest());
         set_field(&m, "wifi", "on", json!(true));
+        set_field(&m, "wifi", "module_on", json!(true));
         return StatusCode::NO_CONTENT;
     }
     if let Some(n) = v["next"].as_str() {
@@ -210,6 +232,10 @@ async fn hook(State(m): State<Arc<Mock>>, body: Bytes) -> StatusCode {
     }
     if let Some(on) = v["on"].as_bool() {
         set_field(&m, "wifi", "on", json!(on));
+        set_field(&m, "wifi", "module_on", json!(on));
+    }
+    if let Some(on) = v.get("module_on") {
+        set_field(&m, "wifi", "module_on", on.clone());
     }
     if let Some(g) = v["guest"].as_object() {
         let mut cur = wifi(&m)["guest"].clone();
@@ -227,4 +253,16 @@ async fn hook(State(m): State<Arc<Mock>>, body: Bytes) -> StatusCode {
 /// This page's `/mock/*` test hooks.
 pub(super) fn routes(r: Router<Arc<Mock>>) -> Router<Arc<Mock>> {
     r.route("/mock/wguest", post(hook))
+}
+
+#[cfg(test)]
+#[test]
+fn wifi_guest_mock_checks_only_expected_settings() {
+    let mut g = default_guest();
+    let expect = json!({"guest.ssid": "U60-Guest"});
+    g["isolate"] = json!(false);
+    assert!(matches_expect(&g, &expect));
+    g["ssid"] = json!("Changed elsewhere");
+    assert!(!matches_expect(&g, &expect));
+    assert!(!matches_expect(&g, &json!({"guest.key": null})));
 }

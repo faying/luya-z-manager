@@ -36,6 +36,20 @@ tar xzf onboard/dist/luyaz-kit-*.tar.gz -C /tmp && cd /tmp/luyaz-kit
   `HOST=<ssh 别名> GATEWAY=<设备地址> SSH_KEY=<密钥> onboard/test/sandbox.sh run`
   在真机沙盒里跑一遍完整装机流程（设备端写入都重定向到 `/data/local/tmp/kit-sb`；跑完核对设备文件和进程没变；沙盒里不跑触屏组件）。
 
+## 在 Windows 构建设备程序
+
+需要 x64 Windows、PowerShell 7、Git for Windows、rustup，以及装有 **使用 C++ 的桌面开发**工作负载的 Visual Studio Build Tools（x64 MSVC 工具和 Windows SDK）。在仓库根目录运行：
+
+```powershell
+pwsh -NoProfile -File .\scripts\build-device.ps1 -Setup
+pwsh -NoProfile -File .\scripts\build-device.ps1
+pwsh -NoProfile -File .\scripts\build-device.ps1 -Component sentinel
+```
+
+首次用 `-Setup` 通过 rustup 安装固定版本的 Rust 工具链和目标，并把 Zig 和 cargo-zigbuild 安装到 `%LOCALAPPDATA%\LuyaZ\build`。它不改 Rust 默认工具链或 PATH。默认构建 `all`；可选 `core`、`web`、`sentinel` 或 `touch` 单独构建。仅在构建包含 `touch` 时准备 LVGL 和 FreeType。
+
+脚本会打印 `target/aarch64-unknown-linux-musl/` 下的 Linux AArch64 musl 可执行文件路径：`release/luyaz-web` 和 `release-device/{luyaz-core,luyaz-sentinel,luyaz-ui}`。构建这四个程序不需要 WSL 或 Docker。完整装机包、eSIM helper、LANID `.cwasm`、字体和设备部署仍走原有流程。
+
 ## 手工更新单个程序（开发时）
 
 用装机包装好的设备只认 SSH 密钥。设备上没有 scp/sftp，用管道传。

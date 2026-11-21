@@ -180,8 +180,7 @@ good "面板：后台「服务 → CHILL」的按钮，经 http://<设备>:9090/
 good "出面板、把 /chill-api/ 转给本机 :9999，要先登录后台；:9999 可以只留在本机：CHILL_API_LAN=0）。"
 warn "关于 CHILL_API_LAN=1 的风险：开了之后局域网内能访问 :9999 的设备，"
 warn "可以切节点、关代理、并从 /connections 看到全屋实时访问的域名。"
-warn "不设 CHILL_SECRET 就只能靠来源白名单挡，所以把自己的设备绑静态租约"
-warn "或走 tailnet，别让客人/电视/Switch 够得着。设了 CHILL_SECRET 是在白名单"
-warn "之外再加一层，不是替代它——这里没有改成默认关闭 CHILL_API_LAN。"
+warn "只允许 br-lan 上列入白名单的 IPv4 来源。建议为这些设备绑定静态租约，"
+warn "并配合 CHILL_SECRET 使用。CHILL_API_LAN 默认关闭。"
 echo
 echo "回滚：ssh $HOST 'cp /data/luyaz/kit/rc.local.before-chill /etc/rc.local && /data/chill/chill.sh stop'"

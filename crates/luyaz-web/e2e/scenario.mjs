@@ -13,10 +13,17 @@
 import { chromium } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import fs from "node:fs";
+import os from "node:os";
 
 const WEB = process.env.WEB ?? "http://127.0.0.1:18594";
 const AGENT = process.env.AGENT ?? "http://127.0.0.1:19594";
 const OUT = process.env.OUT ?? "/tmp/lw-scene";
+// A real peer from off the LAN: this machine's own non-loopback IPv4. luyaz-web classifies a
+// connection by its peer address alone (topbar::via), never by the Host header, so the remote
+// checks come in through this address — the web under test must listen on it too (--bind /
+// LUYAZ_WEB_BIND, and the interface in LUYAZ_WEB_IFACES), or the checks fail with that message.
+const OFF_LAN = Object.values(os.networkInterfaces()).flat().find((a) => a?.family === "IPv4" && !a.internal)?.address ?? "";
+const RW = OFF_LAN ? WEB.replace(/127\.0\.0\.1|localhost/, OFF_LAN) : "";
 fs.mkdirSync(OUT, { recursive: true });
 let failed = 0;
 const ok = (c, m) => { console.log(`${c ? "ok  " : "FAIL"} ${m}`); if (!c) failed++; };
@@ -69,25 +76,25 @@ async function own(p) {
   await p.screenshot({ path: `${OUT}/scene-desk-zh.png`, fullPage: true });
   ok((await stored()).enabled === true, "engine starts on");
 
-  // ---- engine: Cancel leaves it; confirm turns it OFF (the old page turned it on) ----
-  await p.click("#sc-now button[role=switch]");
+  // ---- engine: Cancel leaves it; confirm turns it OFF while keeping device state ----
+  await p.click("#sc-pin button[role=radio]:has-text('关闭')");
   await ask("sc-eng");
-  ok(/关闭引擎/.test(await op("sc-eng")) || /不再切换情景/.test(await op("sc-eng")), `engine off: inline confirm: ${await op("sc-eng")}`);
+  ok(/关闭引擎/.test(await op("sc-eng")) && /保留当前 Wi-Fi/.test(await op("sc-eng")), `engine off: inline confirm: ${await op("sc-eng")}`);
   await cancel("sc-eng").click();
   await p.waitForFunction(() => !document.querySelector("#sc-eng-op .nd-confirm"), null, { timeout: 5000 });
   ok((await stored()).enabled === true, "Cancel: still on");
-  await p.click("#sc-now button[role=switch]");
+  await p.click("#sc-pin button[role=radio]:has-text('关闭')");
   await ask("sc-eng");
   await confirm("sc-eng").click();
   await done("sc-eng", /引擎已关闭|没有生效|设备已接受|连接中断/, 60000);
-  ok(await op("sc-eng") === "引擎已关闭" && (await stored()).enabled === false, `engine off, read back: ${await op("sc-eng")} / enabled=${(await stored()).enabled}`);
+  ok(await op("sc-eng") === "引擎已关闭" && (await stored()).enabled === false && (await stored()).pin === null, `engine off, read back: ${await op("sc-eng")} / enabled=${(await stored()).enabled} / pin=${(await stored()).pin}`);
   await until(p, "#sc-status", /引擎已关闭/, 15000);
-  ok(await p.locator("#sc-now button[role=switch]").getAttribute("aria-checked") === "false", "the switch follows");
-  await p.click("#sc-now button[role=switch]");
-  await ask("sc-eng");
-  await confirm("sc-eng").click();
-  await done("sc-eng", /引擎已开启|没有生效|设备已接受/, 30000);
-  ok(await op("sc-eng") === "引擎已开启" && (await stored()).enabled === true, `engine on again: ${await op("sc-eng")}`);
+  ok(await p.locator("#sc-pin button[role=radio]:has-text('关闭')").getAttribute("aria-checked") === "true", "the Off option follows");
+  await p.click("#sc-pin button[role=radio]:has-text('自动')");
+  await ask("sc-pin");
+  await confirm("sc-pin").click();
+  await done("sc-pin", /已取消固定|没有生效|设备已接受/, 30000);
+  ok(await op("sc-pin") === "已取消固定" && (await stored()).enabled === true, `engine on again: ${await op("sc-pin")}`);
 
   // ---- pin: "home" pins home (the old page always unpinned) ----
   await p.click("#sc-pin button[role=radio]:has-text('在家')");
@@ -262,7 +269,7 @@ async function own(p) {
   await scenario("down");
   await post("/router/scenario/refresh");
   await until(p, "#sc-status", /设置停在/, 20000);
-  ok(/设置停在 \d\d:\d\d/.test(await txt(p, "#sc-status")) && await p.locator("#sc-now button[role=switch]").isDisabled(), `stale: ${await txt(p, "#sc-status .nd-status__meta")}; controls off`);
+  ok(/设置停在 \d\d:\d\d/.test(await txt(p, "#sc-status")) && await p.locator("#sc-pin button[role=radio]").first().isDisabled(), `stale: ${await txt(p, "#sc-status .nd-status__meta")}; controls off`);
   await p.screenshot({ path: `${OUT}/scene-stale.png`, fullPage: true });
   await scenario("normal");
   await post("/router/scenario/refresh");
@@ -290,12 +297,14 @@ async function own(p) {
 }
 
 async function remote(browser) {
-  // over Tailscale (a single-label MagicDNS name): a scenario's Wi-Fi set to off is a tier-3 dialog
-  const port = new URL(WEB).port;
+  // from off the LAN (the machine's real non-loopback address): a scenario's Wi-Fi set to off is a tier-3 dialog
+  if (!RW) return ok(false, "remote: this machine has no non-loopback IPv4 — the remote checks need a real off-LAN peer");
+  if (!(await fetch(RW + "/login").then(() => true, () => false)))
+    return ok(false, `remote: ${RW} does not answer — the web must listen on a non-loopback address too (--bind, and the interface in LUYAZ_WEB_IFACES)`);
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await ctx.addCookies([{ name: "lw_sid", value: sid, url: `http://u60:${port}` }, { name: "u60_lang", value: "zh", url: `http://u60:${port}` }]);
+  await ctx.addCookies([{ name: "lw_sid", value: sid, url: RW }, { name: "u60_lang", value: "zh", url: RW }]);
   const p = await ctx.newPage();
-  await p.goto(`http://u60:${port}/router/scenario`, { waitUntil: "load" });
+  await p.goto(RW + "/router/scenario", { waitUntil: "load" });
   await ready(p);
   const sw = p.locator("#sc-does button[role=switch][aria-label='「在家」的 Wi-Fi']");
   const wifiNow = async () => (await stored()).config.scenarios.find((s) => s.id === "home").actions.find((a) => a.path === "/api/wifi/radio").body.ap_2g;
@@ -309,7 +318,7 @@ async function remote(browser) {
   await sw.click();
   await p.locator("#sc-does-op dialog[open]").waitFor({ timeout: 8000 }).catch(() => {});
   const d = await txt(p, "#sc-does-op dialog");
-  ok(/Tailscale/.test(d) && /断开多久/.test(d) && /怎么恢复/.test(d), `remote Wi-Fi off: dialog: ${d.slice(0, 160)}`);
+  ok(/按远程处理|你正在远程操作/.test(d) && /断开多久/.test(d) && /怎么恢复/.test(d), `remote Wi-Fi off: dialog: ${d.slice(0, 160)}`);
   const ax = await new AxeBuilder({ page: p }).analyze();
   ok(ax.violations.length === 0, `remote dialog axe: ${ax.violations.map((v) => v.id).join(", ") || "0"}`);
   await p.screenshot({ path: `${OUT}/scene-remote-dialog.png` });
@@ -323,7 +332,7 @@ async function remote(browser) {
   await ctx.close();
 }
 
-const browser = await chromium.launch({ channel: "chrome", args: ["--host-resolver-rules=MAP u60 127.0.0.1"] });
+const browser = await chromium.launch({ channel: "chrome" });
 for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "en", "dark"], [390, 844, "phone", "zh", "light"], [390, 844, "phone", "en", "dark"]]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });
   await ctx.addCookies([{ name: "lw_sid", value: sid, url: WEB }, { name: "u60_lang", value: lang, url: WEB }]);

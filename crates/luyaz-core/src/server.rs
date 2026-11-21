@@ -23,6 +23,8 @@ use tokio::{
 };
 use tower_http::limit::RequestBodyLimitLayer;
 
+pub(crate) const REQUEST_BODY_LIMIT: usize = 1024 * 1024;
+
 mod latency;
 mod recovery;
 mod write;
@@ -521,23 +523,21 @@ impl App {
             .route("/v2/timeline/today", get(timeline_today))
             .route("/v2/battery/history", get(battery_history))
             .route("/v2/versions/check", post(versions_check));
-        // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
-        // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
-        if let Some(ui) = ui {
-            router = router.nest_service("/v2", ui);
-        }
         if open_auth_routes {
             router = router
                 .route("/auth/login", post(auth_login))
                 .route("/auth/exchange", post(auth_exchange));
         }
+        router = router.layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT));
+        // The loopback Compat router applies its own route-specific body limits.
+        if let Some(ui) = ui {
+            router = router.nest_service("/v2", ui);
+        }
         router = router.layer(middleware::from_fn_with_state(self.clone(), starting_gate));
         if require_auth {
             router = router.layer(middleware::from_fn_with_state(self.clone(), authenticate));
         }
-        router
-            .layer(RequestBodyLimitLayer::new(1024 * 1024))
-            .with_state(self.clone())
+        router.with_state(self.clone())
     }
 }
 

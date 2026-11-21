@@ -113,7 +113,6 @@ pub struct Window {
     per_sec: Vec<u64>,
     gap: u32,
     cellular: Table,
-    inner: Table,
     unattributed: u32,
     mw_sum: i64,
     mw_n: u32,
@@ -133,7 +132,6 @@ impl Window {
             per_sec: Vec::new(),
             gap: 0,
             cellular: Table::default(),
-            inner: Table::default(),
             unattributed: 0,
             mw_sum: 0,
             mw_n: 0,
@@ -170,15 +168,12 @@ impl Window {
             self.screen_on += 1;
         }
         let mut active: BTreeMap<FlowKey, (u64, u64)> = BTreeMap::new();
-        let mut inner: BTreeMap<FlowKey, (u64, u64)> = BTreeMap::new();
         for (f, dp, db) in moved {
             let (class, key) = classify(f, s.ctx);
-            let table = match class {
-                Class::Cellular => &mut active,
-                Class::Tailnet => &mut inner,
-                _ => continue,
-            };
-            let e = table.entry(key).or_default();
+            if class != Class::Cellular {
+                continue;
+            }
+            let e = active.entry(key).or_default();
             e.0 += dp;
             e.1 += db;
         }
@@ -188,9 +183,6 @@ impl Window {
         }
         let ended_gap = self.gap >= 2;
         self.gap = 0;
-        if !inner.is_empty() {
-            self.inner.add(inner, ended_gap);
-        }
         if active.is_empty() {
             self.unattributed += 1;
             return;
@@ -203,7 +195,6 @@ impl Window {
         let n = self.per_sec.len() as u64;
         let total: u64 = self.per_sec.iter().sum();
         let (breakers, by_owner) = self.cellular.ranked();
-        let (inner, inner_by_owner) = self.inner.ranked();
         Diag {
             meta,
             secs: n as u32,
@@ -218,8 +209,8 @@ impl Window {
             screen_on_secs: self.screen_on,
             breakers,
             by_owner,
-            inner,
-            inner_by_owner,
+            inner: Vec::new(),
+            inner_by_owner: Vec::new(),
             unattributed_secs: self.unattributed,
             self_wakes: self.last_self.saturating_sub(self.first_self.unwrap_or(0)),
         }
@@ -337,22 +328,7 @@ mod tests {
                 ka += 1;
                 wanp += 3;
             }
-            let mut flows = vec![flow(1, 41641, ka), flow(2, 53, dns)];
-            // inside tailscale0: mihomo to the home exit, moving with every keepalive
-            let t = |a: &str, b: &str, sp, dp| Tuple {
-                src: a.parse().unwrap(),
-                dst: b.parse().unwrap(),
-                proto: 6,
-                sport: sp,
-                dport: dp,
-            };
-            flows.push(Flow {
-                id: 9,
-                orig: t("100.100.1.2", "100.64.0.9", 50000, 7890),
-                reply: t("100.64.0.9", "100.100.1.2", 7890, 50000),
-                pkts: ka,
-                bytes: ka,
-            });
+            let flows = vec![flow(1, 41641, ka), flow(2, 53, dns)];
             w.push(&Second {
                 wan_pkts: wanp,
                 flows: &flows,
@@ -380,14 +356,7 @@ mod tests {
         assert_eq!(r.mw, Some(600));
         assert_eq!(r.self_wakes, 20);
         assert_eq!(r.unattributed_secs, 0);
-        assert_eq!(r.inner.len(), 1);
-        assert_eq!(
-            (
-                r.inner[0].busy_secs,
-                r.inner[0].solo_secs,
-                r.inner[0].flow.port
-            ),
-            (5, 5, 7890)
-        );
+        assert!(r.inner.is_empty());
+        assert!(r.inner_by_owner.is_empty());
     }
 }

@@ -1,6 +1,7 @@
 //! Tests for wifi_reads.rs (8d-1b).
 
 use super::wifi_reads::*;
+use luyaz_wifi::psm::{from_hotplug, from_iw};
 use serde_json::json;
 
 const INFO: &str = "Interface wlan2\n\tifindex 7\n\ttype AP\n\tssid Home\n\tchannel 149 (5745 MHz), width: 80 MHz, center1: 5775 MHz\n\ttxpower 23.00 dBm\n";
@@ -48,16 +49,19 @@ fn status_has_exactly_the_six_fields_and_no_secret() {
 
 #[test]
 fn power_save_reads_iw_and_the_saved_script() {
-    assert_eq!(psm_from_iw("wlan0\tPower save: on\n"), Some(true));
-    assert_eq!(psm_from_iw("Power save: off"), Some(false));
-    assert_eq!(psm_from_iw("command failed"), None);
+    assert_eq!(from_iw("wlan0\tPower save: on\n"), Some(true));
+    assert_eq!(from_iw("Power save: off"), Some(false));
+    assert_eq!(from_iw("command failed"), None);
     let script = "#!/bin/sh\n[ \"$ACTION\" = ifup ] && {\n  iw dev wlan0 set power_save off 2>/dev/null\n}\n";
-    assert_eq!(psm_from_script(script), Some(false));
-    assert_eq!(psm_from_script(&script.replace("off", "on")), Some(true));
-    assert_eq!(psm_from_script(""), None);
+    assert_eq!(from_hotplug(script), Some(false));
+    assert_eq!(from_hotplug(&script.replace("off", "on")), Some(true));
+    assert_eq!(from_hotplug(""), None);
     assert_eq!(
         psm_data(None, Some(true)),
-        json!({"enabled": true, "live": null, "saved": true})
+        json!({"enabled": true, "preferred": true, "live": null, "saved": true})
     );
-    assert_eq!(psm_data(Some(false), Some(true))["enabled"], false);
+    assert_eq!(
+        psm_data(Some(false), Some(true)),
+        json!({"enabled": false, "preferred": true, "live": false, "saved": true})
+    );
 }

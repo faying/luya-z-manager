@@ -5,7 +5,7 @@
 //!  tier 1 (Direct)  button ─▶ POST set ───────────────────────────────┐
 //!  tier 2 (Inline)  button ─▶ POST ask ─▶ confirm in the page ─▶ set ─┤  "正在…" ─▶ /control
 //!  tier 3 (Dialog)  button ─▶ POST ask ─▶ <dialog> (what / how long /  │  (fresh op_id) ─▶ wait for
-//!                   how to recover, Tailscale warning, typed word) ─▶ ┘  the block readback ─▶ result
+//!                   how to recover, remote warning, typed word) ───▶ ┘  the block readback ─▶ result
 //! ```
 //! - The page owns the control (switch, button) and one area under it ([`Area`], `write.html`):
 //!   the confirm, the dialog, "正在…" and the result line. Only the write's own replies patch the
@@ -20,7 +20,7 @@
 //! - After a send: read back from the hub's blocks until the predicate holds or the timeout; no
 //!   readback → 「设备已接受，还没读回」, never "成功". No reply at all (timeout, dropped) → read
 //!   back anyway; still nothing → 「连接中断，还没确认是否生效」.
-//! - "Remote" for the Tailscale warning is `topbar::remote` (peer address or Host), the same test
+//! - "Remote" for the warning is `topbar::via` (peer address and known LAN), the same test
 //!   as the top bar's remote badge, so the dialog and the badge never disagree.
 //! - A send whose reply drops (the page lost the connection mid-write) is not retried, so the
 //!   area would stay on "正在…": the area listens for Datastar's `retries-failed` of its own send
@@ -69,7 +69,7 @@ pub struct Confirm {
     pub recovery: Option<String>,
     /// The confirm button ("确认：关掉数据漫游").
     pub action: String,
-    /// Can cut the connection this page came over: a remote browser gets the Tailscale warning.
+    /// Can cut the connection this page came over: a remote browser gets a warning.
     pub cuts_uplink: bool,
     /// The word to type before the confirm button works (factory reset: 「恢复出厂」); checked
     /// again on the server ([`Write::typed`]). No quotes or backslashes (it goes into a JS string).
@@ -193,7 +193,7 @@ pub enum Phase {
 pub struct Area<'a> {
     pub id: &'a str,
     pub l: Lang,
-    /// The browser came over Tailscale (`topbar::remote`).
+    /// The browser is remote or its origin is unknown (`topbar::via`).
     pub remote: Via,
     /// POST target of the confirm button (the send).
     pub set: &'a str,
@@ -686,11 +686,12 @@ mod tests {
         let idle = area(&Phase::Idle, Via::Local);
         assert!(idle.contains("id=\"x-y-op\"") && !idle.contains("<dialog"), "{idle}");
 
-        let inline = area(&ask(Tier::Inline, None), Via::Tailnet);
+        let inline = area(&ask(Tier::Inline, None), Via::Remote);
         assert!(inline.contains("id=\"x-y-confirm\"") && inline.contains("nd-confirm"));
         assert!(inline.contains("设备重启，所有连接断开。"));
-        assert!(!inline.contains("<dialog") && inline.contains("Tailscale") && inline.contains("role=\"alert\""));
-        assert!(!area(&ask(Tier::Inline, None), Via::Local).contains("Tailscale"));
+        assert!(!inline.contains("<dialog") && inline.contains("远程操作") && inline.contains("role=\"alert\""));
+        assert!(!area(&ask(Tier::Inline, None), Via::Local).contains("远程操作"));
+        assert!(area(&ask(Tier::Inline, None), Via::Unknown).contains("按远程处理"));
         assert_eq!(post_once("/x/go?id=3"), "@post('/x/go?id=3', {retryMaxCount: 0})");
         assert!(inline.contains("{retryMaxCount: 0}"), "a confirm is never retried");
         assert!(inline.contains("el.focus()"), "focus on Cancel");
@@ -703,8 +704,9 @@ mod tests {
         for s in ["会发生什么", "断开多久", "约 90 秒", "怎么恢复", "确认：重启"] {
             assert!(dlg.contains(s), "{s}: {dlg}");
         }
-        assert!(!dlg.contains("Tailscale"), "local browser: no remote warning");
-        assert!(area(&ask(Tier::Dialog, None), Via::Tailnet).contains("Tailscale"));
+        assert!(!dlg.contains("远程操作"), "local browser: no remote warning");
+        assert!(area(&ask(Tier::Dialog, None), Via::Remote).contains("远程操作"));
+        assert!(area(&ask(Tier::Dialog, None), Via::Unknown).contains("按远程处理"));
 
         let typed = area(&ask(Tier::Dialog, Some("恢复出厂")), Via::Local);
         assert!(typed.contains("输入「恢复出厂」确认"), "{typed}");

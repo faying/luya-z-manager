@@ -19,6 +19,19 @@ of other components.
 
 A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## Unreleased
+
+- core, lweb, touch, scripts: manage several Mihomo configurations and switch Rule, Global or Direct mode. CHILL keeps profile caches separate and restores the previous working profile if activation fails. The touchscreen home page opens CHILL from the Mihomo status card.
+- scripts: keep the bypass DNS process from holding the CHILL write job open on U60 Pro CN B11.
+- core, lweb, sentinel, touch: add a persistent Off scenario mode. Off retains the current Wi-Fi, CHILL and device state, stops scenario scanning and automatic actions, keeps configuration and manual controls available, and can be resumed from the same selector.
+- The admin web and touchscreen now share Core Wi-Fi transactions. The master switch preserves the saved bands and main AP settings. Confirmation waits for vendor readback, interface state, and hostapd. The channel display refreshes after the operation.
+- Wi-Fi configuration reloads check the intended settings and layout for 15 continuous seconds before confirming.
+- On compatible U60 Pro firmware, Core can finish the stock MAC-filter and transmit-power steps and stop a verified post-Wi-Fi loop when only one radio is enabled.
+- The web and touchscreen show the saved power-save choice. The web distinguishes guest configuration from availability, protects edited guest fields from concurrent changes, and waits for fresh NFC readback.
+
+- core, lweb, touch: retire Tailscale and the CHILL home exit that used it. Update Core, admin web, touch, sentinel and device scripts together. On devices with CHILL installed, update its launcher and template together as well.
+- core, MCP: band and cell locking require a person to act on the management web or touch screen. The MCP tool is retired with its reachability check.
+- scripts, sentinel: retire Tailscale deployment and watchdog probes. Restoring an older configuration backup skips the stored Tailscale identity.
 
 ## core 1.94.0 — 2026-11-08
 
@@ -155,6 +168,16 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - A CLCC line with an unknown stat or mode counts as a call. Only data and fax are skipped.
 
 ## Unreleased
+
+- core: On the verified CN B11 stock script, end a CPU-bound orphan after the Wi-Fi module, both radios and mesh are off and `iw dev` reports no interfaces. The existing anomaly report follows the process's exit.
+- sentinel: Release the old stock touchscreen process's sleep lock after Luya-Z takes over the screen and the old PID is gone.
+- touch: Show time, date, battery, connection and both traffic rates when the screen lights up. Swipe up from anywhere in the lower half. A progress bar fills as you swipe and prompts you to release to return to the previous page.
+- touch: Tell the stock sleep daemon whether the backlight is on when Luya-Z takes over the screen and whenever the panel turns off or wakes up. The firmware can then take the dark screen into account for standby.
+
+- core: the Wi-Fi master switch is now the stock switch itself (`wifi.set_module` → `zwrt_wlan set {zte_mbb:{wifi_onoff}}`, measured on CN B11 2026-11-18): off/on no longer rewrites the band or guest switches, so a 2.4 GHz the user switched off alone stays off across a master off/on cycle; off lands in ~2 s, on in ~14 s. The old "both main networks disabled" off-state (left by an older core or the scenario engine) is still undone by writing the four 0s. Confirmation (`Confirm::Wifi`, `settled`) knows the stock switch off = no AP running; a write that only moves the stock switch no longer fires an extra reload.
+- core: switching 2.4 GHz off alone is allowed: `radio2_disabled=1` (the page's band switch) is no longer refused by the AP-layout check — with the 2.4 radio off, reload and boot both keep 5 GHz beaconing on wlan2 (measured on CN B11). What is still refused is the 2.4 main-AP flag off with its radio still on (that layout takes all Wi-Fi down: QCMAP's single-AP mode lands on wlan0 and EnableWLAN fails); the message now says to use the radio switch.
+- lweb: the Wi-Fi page's 2.4 GHz band switch off (with 5 GHz on) is no longer stopped before the confirm dialog; the master-on wording now says bands switched off stay off.
+- touch: Wi-Fi switches show saved settings, not whether an interface happens to be up. While a master, band, or power-save change is pending, the screen shows a progress overlay and ignores touches. It unlocks on readback or reports that the change was not confirmed.
 
 - phone: a new call after a core restart is no longer dropped as a stale event of a forwarded call (the mark is forgotten when `boot` changes; an old core without `boot`: on an empty list). Older lists from the same start are ignored. The first `call.list` is asked again while the core says `not_ready`; a lease refused with `no_call` settles from the list. Requires: core 1.81.0 for `boot`.
 

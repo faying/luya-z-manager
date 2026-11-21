@@ -33,13 +33,6 @@ good	cellular	n41 100M
 good	cellular	Inactive
 good	cellular	ARFCN 504990 · PCI 120
 good	home	Scenarios
-good	home	Tailscale
-good	home	Connected
-good	home	100.64.0.7 · DERP hkg
-good	home	Online 3/5 · direct 1 · relay 1
-good	home	192.168.0.0/24
-good	exit	Tailscale
-good	exit	Connected · online 3/5
 good	home	CHILL
 good	exit	Running
 good	exit	Proxy 21 · Direct 16
@@ -240,29 +233,6 @@ good	esim	ICCID 8986 0000 0000 0000 0001
 good	esim	In use
 good	esim	Chunghwa Telecom
 good	esim	giffgaff
-good	tailscale	This device
-good	tailscale	Hostname
-good	tailscale	u60-pro
-good	tailscale	IP
-good	tailscale	100.64.0.7
-good	tailscale	DERP
-good	tailscale	hkg
-good	tailscale	Subnet routes
-good	tailscale	192.168.0.0/24
-good	tailscale	Peers (link to this device)
-good	tailscale	fd7a:115c:a1e0::7
-good	tailscale	me@example.com
-good	tailscale	1.102.4 · linux
-good	tailscale	2027-03-01
-good	tailscale	100.64.0.2 · macOS · ↓1.2GB ↑50MB
-good	tailscale	100.64.0.4 · linux · exit node
-good	tailscale	macbook-pro
-good	tailscale	100.64.0.2
-good	tailscale	Direct
-good	tailscale	Relay
-good	tailscale	Online
-good	tailscale	Offline
-good	tailscale	old-ipad
 *	perf	Render rate
 *	perf	Touch report rate
 *	exit-menu	Abroad · CHILL route
@@ -335,7 +305,6 @@ good	net-sc-pending	Switching…
 good	net-auto-already	Already on automatic selection
 good	esim-current	Already in use
 good	wifi	Great signal
-*	exit	Tailscale
 *	cellular	Cellular
 *	wifi	Wi-Fi
 *	exit	Route
@@ -503,25 +472,6 @@ journal	journal-cell	Last changed
 journal	journal-cell	10-03 14:32 · Web
 op-notice	home	Auto revert on: reverts a mode change
 op-notice	home	Got it
-# Home exit (E3, manager docs/designs/home-exit.md §10)
-home-exit,home-fallback,home-blocked	chill	Home exit
-home-exit,home-fallback,home-blocked	chill	CN media via home
-home-exit,home-fallback,home-blocked	chill	Home IP sites
-home-exit,home-fallback,home-blocked	chill	Rest via home · 2h
-home-exit,home-blocked	chill	3 sites
-home-exit	chill	1:32 left
-home-exit	chill	Via Tailscale · direct 38 ms
-home-exit	home	Home 1:32 left
-home-fallback	chill	Home down · via JP 日本 for now
-home-fallback	chill	Via relay · video may stutter
-home-fallback	home	Home down · usual exit for now
-home-blocked	chill	Not used in Global mode
-home-exit	chill-home-armed	Tap again
-home-exit	chill-home-armed	Drops ~5 s · uses roaming data
-home-fallback	chill	Trial 0:17
-home-fallback	chill	Didn't turn on: home Mac silent
-home-nocountry	chill	Can't tell the country; media and rest hidden
-home-nocountry	chill	No sites yet
 # USB attach mode
 *	system	When a phone is plugged in
 *	system	Ask every time

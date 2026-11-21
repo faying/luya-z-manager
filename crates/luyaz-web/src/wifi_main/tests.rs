@@ -10,7 +10,7 @@ fn blk(data: Value) -> Value {
 /// Synthetic values only.
 fn wifi_data() -> Value {
     json!({
-        "on": true, "wifi6": true, "country": "CN",
+        "on": true, "module_on": true, "wifi6": true, "country": "CN",
         "band_2g": {"ap_on": true, "radio_on": true, "ssid": "Home", "encryption": "psk2+ccmp", "has_password": true,
                     "hidden": false, "channel": "0", "txpower": "100", "htmode": "HT20"},
         "band_5g": {"ap_on": true, "radio_on": true, "ssid": "Home-5G", "encryption": "psk2+psk3+ccmp", "has_password": true,
@@ -47,8 +47,7 @@ fn seed() -> Fields {
 #[test]
 fn reads_the_block_and_seeds_the_form_normalised() {
     let w = cur();
-    assert!(w.on && w.wifi6 && w.country == "CN");
-    assert_eq!(w.guest, Some(Guest { ssid: "Guest".into(), on: true }));
+    assert!(w.on == Some(true) && w.wifi6 && w.country == "CN");
     let s = seed();
     assert_eq!(s.b[0].ch, "auto", "channel 0 = automatic");
     // the seed round-trips through the signals
@@ -79,10 +78,12 @@ fn only_changed_keys_are_sent_and_an_empty_password_never() {
     d.on = false;
     d.b[1].radio = false;
     d.b[1].hidden = true;
+    assert!(check(&s, &d, ["", ""], Some(&cur()), Lang::En).unwrap_err().text(Lang::En).contains("separately"));
+    d.b[1].radio = true;
     let c = check(&s, &d, ["", ""], Some(&cur()), Lang::En).unwrap();
     assert_eq!(
         Value::Object(c.params.clone()),
-        json!({"wifi_onoff": "0", "radio5_disabled": "1", "hidden_5g": "1"})
+        json!({"wifi_onoff": "0", "hidden_5g": "1", "expect": {"on": true, "module_on": true}})
     );
     assert!(c.master_off());
     // not read / not current: nothing is checked
@@ -149,7 +150,7 @@ fn wifi6_and_us_channel_13_are_refused_before_sending() {
 }
 
 #[test]
-fn tier_two_for_txpower_alone_three_for_a_reload_without_tailscale_warning() {
+fn tier_two_for_txpower_alone_three_for_a_reload_with_remote_warning() {
     let s = seed();
     let mut d = s.clone();
     d.b[0].tx = "50".into();
@@ -164,10 +165,10 @@ fn tier_two_for_txpower_alone_three_for_a_reload_without_tailscale_warning() {
     let c = check(&s, &d, ["", ""], Some(&cur()), Lang::En).unwrap();
     let cf = confirm(&c, Lang::En);
     assert_eq!(cf.tier, write::Tier::Dialog);
-    assert!(!cf.cuts_uplink, "Tailscale is not affected");
+    assert!(cf.cuts_uplink, "a remote path may depend on Wi-Fi");
     assert!(cf.downtime.unwrap().contains("10–60 seconds"));
     let r = cf.recovery.unwrap();
-    assert!(r.contains("reconnects by itself") && r.contains("Tailscale"), "{r}");
+    assert!(r.contains("reconnects by itself"), "{r}");
     // a new name: join again, named
     let mut d = s.clone();
     d.b[0].ssid = "Home".into();
@@ -206,12 +207,14 @@ fn refusals_say_what_holds_the_device() {
 }
 
 #[test]
-fn only_2g_off_with_5g_on_is_refused_before_the_dialog() {
+fn only_2g_off_with_5g_on_goes_to_the_dialog() {
+    // 2.4 GHz off alone is the radio switch — the layout the firmware supports (CN B11, measured
+    // 2026-11-18); it used to be refused before the dialog.
     let (s, c) = (seed(), cur());
     let mut d = s.clone();
     d.b[0].radio = false;
-    let e = check(&s, &d, ["", ""], Some(&c), Lang::Zh).unwrap_err().text(Lang::Zh);
-    assert!(e.contains("只关 2.4 GHz"), "{e}");
+    let ch = check(&s, &d, ["", ""], Some(&c), Lang::Zh).unwrap();
+    assert_eq!(ch.params["radio2_disabled"], json!("1"));
     // only 5 GHz off, or both: fine
     let mut d = s.clone();
     d.b[1].radio = false;
@@ -264,9 +267,10 @@ fn status_bands_and_the_last_change() {
     assert!(html.contains("NFC 碰一碰") && !html.contains("Wi-Fi 节能"), "power save only with the agent's answer");
     // on but no band up in iw: not broadcasting
     let dark = Live::default();
-    let v = h.read(|st| view(st, Some(&dark), Some(Psm { enabled: Some(true), live: None }), Lang::En));
+    let psm = Psm::of(&json!({"enabled": true, "preferred": true, "saved": true, "live": null}));
+    let v = h.read(|st| view(st, Some(&dark), Some(psm), Lang::En));
     assert_eq!((v.tone, v.state.as_str()), ("warn", "Wi-Fi not broadcasting"));
-    assert_eq!(v.psm_sub(), Some("Saved; applies when Wi-Fi is on"));
+    assert_eq!(v.psm_sub(), Some(psm_deferred(Lang::En)));
     // a running wifi.main transaction shows its progress; a guest one does not
     let h = hub_with(wifi_data(), json!({"active": {"op_id": "y", "item": "wifi.main", "say_zh": "正在确认", "say_en": "Checking"}}));
     let v = h.read(|st| view(st, None, None, Lang::Zh));
@@ -276,10 +280,91 @@ fn status_bands_and_the_last_change() {
     // master off
     let mut w = wifi_data();
     w["on"] = json!(false);
+    w["module_on"] = json!(false);
     let h = hub_with(w, json!({}));
-    let v = h.read(|st| view(st, None, None, Lang::Zh));
+    let v = h.read(|st| view(st, Some(&live), None, Lang::Zh));
     assert_eq!(v.state, "Wi-Fi 已关闭");
-    assert!(v.meta.is_empty());
+    assert!(v.meta.iter().all(|s| s.contains("广播状态未读取")));
+    assert!(!v.broadcasting, "the tab must not show the pre-change channel after module-off");
+}
+
+#[test]
+fn wifi_psm_selects_saved_value_and_requires_active_or_deferred_readback() {
+    let h = hub_with(wifi_data(), json!({}));
+    let show = |psm: Psm| h.read(|st| view(st, None, Some(psm), Lang::En));
+    let psm = Psm::of(&json!({"enabled": false, "preferred": true, "saved": true, "live": false}));
+    let v = show(psm);
+    assert_eq!(v.psm_sub(), Some("Saved, but not active"));
+    let html = Leaves { v: &v }.render().unwrap();
+    assert!(html.contains("aria-labelledby=\"wf-psm-l\" aria-checked=\"true\""));
+    assert!(html.contains("Saved, but not active"));
+    assert!(!psm.holds(true, true));
+
+    let active = Psm::of(&json!({"preferred": true, "saved": true, "live": true}));
+    assert!(active.holds(true, false));
+    assert_eq!(show(active).psm_sub(), None);
+    let live_only = Psm::of(&json!({"preferred": true, "saved": null, "live": true}));
+    assert!(!live_only.holds(true, false));
+    assert_eq!(show(live_only).psm_sub(), None);
+    let saved_only = Psm::of(&json!({"preferred": true, "saved": true, "live": null}));
+    assert!(!saved_only.holds(true, false));
+    assert!(saved_only.holds(true, true));
+    assert_eq!(show(saved_only).psm_sub(), Some(psm_deferred(Lang::En)));
+    let live = Live { ch: ["6".into(), "".into()], ..Live::default() };
+    assert_eq!(h.read(|st| view(st, Some(&live), Some(saved_only), Lang::En)).psm_sub(),
+        Some(psm_driver_unknown(Lang::En)));
+    assert_eq!(show(Psm::default()).psm_sub(), Some("Power-save setting unknown"));
+}
+
+#[test]
+fn wifi_nfc_only_sends_with_current_value_and_confirms_new_current_read() {
+    let h = Hub::new();
+    let snapshot = |epoch, revision, stale, switch: Value| h.apply(&Frame {
+        event: "snapshot".into(),
+        data: json!({"epoch": epoch, "blocks": {"nfc": {
+            "revision": revision, "stale": stale, "data": {"switch": switch}
+        }}}).to_string(),
+    });
+    assert!(matches!(h.read(|st| nfc_start(st, true, Lang::En)), Err(write::Outcome::NotYet(_))));
+    snapshot("e", 6, false, json!(0));
+    assert!(matches!(h.read(|st| nfc_start(st, false, Lang::En)), Err(write::Outcome::AcceptedSaid(_))));
+    let (epoch, rev) = h.read(|st| nfc_start(st, true, Lang::En)).unwrap();
+    let confirms = || h.read(|st| nfc_readback(st, &epoch, rev, true));
+
+    snapshot("e", 6, false, json!(1));
+    assert!(!confirms());
+    snapshot("e", 7, true, json!(1));
+    assert!(!confirms());
+    h.read(|st| {
+        assert!(matches!(nfc_start(st, true, Lang::En), Err(write::Outcome::NotYet(_))));
+        let v = view(st, None, None, Lang::En);
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("id=\"wf-nfc-unknown\" disabled>—"));
+        assert!(!html.contains("/router/wifi/nfc/set?on="));
+    });
+    snapshot("e", 8, false, Value::Null);
+    assert!(!confirms());
+    snapshot("e", 9, false, json!(2));
+    assert!(!confirms());
+    snapshot("e", 10, false, json!(1));
+    assert!(confirms());
+    h.set_link_for_test(Link::Down);
+    assert!(!confirms());
+    snapshot("new", 1, true, json!(1));
+    assert!(!confirms());
+    snapshot("new", 1, false, json!(1));
+    assert!(confirms());
+}
+
+#[test]
+fn wifi_main_guest_summary_labels_saved_and_blocked() {
+    let mut w = wifi_data();
+    w["band_5g"]["radio_on"] = json!(false);
+    let h = hub_with(w, json!({}));
+    let v = h.read(|st| view(st, None, None, Lang::En));
+    assert_eq!(v.guest.as_ref().unwrap().1, "Set to on · 5 GHz: radio off");
+    let html = Leaves { v: &v }.render().unwrap();
+    assert!(html.contains("Set to on · 5 GHz: radio off"));
 }
 
 #[test]
@@ -300,6 +385,150 @@ fn the_form_renders_seeded_and_never_with_a_password() {
 }
 
 #[test]
+fn wifi_split_switches_keep_saved_bands_and_report_live_channels() {
+    let mut w = wifi_data();
+    w["on"] = json!(false);
+    w["module_on"] = json!(true);
+    w["band_2g"]["radio_on"] = json!(false);
+    w["band_2g"]["ap_on"] = json!(false);
+    w["band_5g"]["ap_on"] = json!(false);
+    let h = hub_with(w.clone(), json!({}));
+    let live = Live { ch: [String::new(), "149".into()], ..Live::default() };
+    let v = h.read(|st| view(st, Some(&live), None, Lang::En));
+    assert_eq!(v.state, "Wi-Fi on");
+    assert!(v.meta.iter().any(|s| s.contains("Master switch set to off; module currently on")));
+    assert!(v.meta.iter().any(|s| s.contains("5 GHz: channel 149")));
+    assert_eq!(v.global[0].value, "Off");
+    assert_eq!(v.bands[0].rows[0].value, "Off");
+    assert_eq!(v.bands[1].rows[0].value, "On · Main network not enabled");
+    let seed = Fields::seed(&wifi_of(&w).unwrap());
+    assert!(!seed.on && !seed.b[0].radio && seed.b[1].radio);
+
+    w["on"] = json!(true);
+    w["module_on"] = json!(false);
+    let h = hub_with(w, json!({}));
+    let v = h.read(|st| view(st, None, None, Lang::Zh));
+    assert_eq!(v.state, "Wi-Fi 已关闭");
+    assert!(v.meta.iter().any(|s| s.contains("总开关设置为开，模块当前关闭")));
+    assert!(v.meta.iter().any(|s| s.contains("广播状态未读取")));
+}
+
+#[test]
+fn wifi_form_requires_fresh_known_master_and_radios() {
+    for path in ["on", "band_2g", "band_5g"] {
+        let mut w = wifi_data();
+        if path == "on" {
+            w["on"] = Value::Null;
+        } else {
+            w[path]["radio_on"] = Value::Null;
+        }
+        let h = hub_with(w, json!({}));
+        h.read(|st| {
+            assert!(editable(st).is_none());
+            assert!(!form(true, st, Lang::En).contains("data-bind=\"_fs2\""));
+            let mut d = seed();
+            d.on = false;
+            assert!(check(&seed(), &d, ["", ""], wifi(st).as_ref(), Lang::En).is_err());
+        });
+    }
+    let h = Hub::new();
+    h.apply(&Frame {
+        event: "snapshot".into(),
+        data: json!({"epoch": "e", "blocks": {"wifi": {"revision": 1, "observed_at": 1, "stale": true, "data": wifi_data()}}}).to_string(),
+    });
+    h.set_link_for_test(Link::Live);
+    h.read(|st| assert!(editable(st).is_none()));
+
+    let mut w = wifi_data();
+    w["module_on"] = Value::Null;
+    w["band_2g"]["ap_on"] = Value::Null;
+    let h = hub_with(w, json!({}));
+    h.read(|st| {
+        assert!(editable(st).is_some());
+        let v = view(st, None, None, Lang::En);
+        assert_eq!(v.state, "Wi-Fi module status unknown");
+        assert!(v.meta.iter().any(|s| s.contains("broadcast status not read")));
+    });
+}
+
+#[test]
+fn wifi_switch_conflicts_and_band_gates_use_seed_and_current_state() {
+    let s = seed();
+    let mut d = s.clone();
+    d.b[0].radio = false;
+    let c = check(&s, &d, ["", ""], Some(&cur()), Lang::En).unwrap();
+    assert_eq!(c.params["expect"], json!({"band_2g.radio_on": true}));
+    assert!(!c.txpower_only());
+    let mut now = cur();
+    now.bands[0].radio_on = Some(false);
+    let err = check(&s, &d, ["", ""], Some(&now), Lang::En).unwrap_err();
+    assert!(err.text(Lang::En).contains("changed since the form was opened"));
+    now.bands[0].radio_on = Some(true);
+    now.module_on = Some(false);
+    let err = check(&s, &d, ["", ""], Some(&now), Lang::En).unwrap_err();
+    assert!(err.text(Lang::En).contains("turn Wi-Fi on"));
+    d.on = false;
+    let err = check(&s, &d, ["", ""], Some(&cur()), Lang::En).unwrap_err();
+    assert!(err.text(Lang::En).contains("separately"));
+
+    let mut d = s.clone();
+    d.on = false;
+    now.on = Some(false);
+    let err = check(&s, &d, ["", ""], Some(&now), Lang::En).unwrap_err();
+    assert!(err.text(Lang::En).contains("changed since the form was opened"));
+    let mut split = cur();
+    split.on = Some(false);
+    let split_seed = Fields::seed(&split);
+    let mut split_draft = split_seed.clone();
+    split_draft.on = true;
+    let c = check(&split_seed, &split_draft, ["", ""], Some(&split), Lang::En).unwrap();
+    assert_eq!(c.params["expect"], json!({"on": false, "module_on": true}));
+    assert!(!holds(&c, &split));
+    split.on = Some(true);
+    assert!(holds(&c, &split));
+}
+
+#[test]
+fn wifi_form_gate_keeps_seed_and_disables_bands_until_master_is_on() {
+    let mut w = wifi_data();
+    w["module_on"] = json!(false);
+    let h = hub_with(w, json!({}));
+    let html = h.read(|st| form(true, st, Lang::En));
+    assert!(html.contains("data-attr:disabled=\"!$_gon || !$_gmodule || !$_fon\""));
+    assert!(html.contains("aria-labelledby=\"wf-fr2-l\" aria-checked=\"true\" data-selected=\"true\" disabled"));
+    assert!(html.contains("_gmodule&#34;:false"));
+}
+
+#[test]
+fn wifi_explicit_noop_requires_fresh_matching_state_and_ignores_expect() {
+    let mut d = seed();
+    d.b[0].radio = false;
+    let c = check(&seed(), &d, ["", ""], Some(&cur()), Lang::En).unwrap();
+    let mut w = wifi_data();
+    w["band_2g"]["radio_on"] = json!(false);
+    let h = hub_with(w.clone(), json!({}));
+    assert!(explicit_no_changes(&json!({"ok":true,"result":{"note":"no changes"}})));
+    assert!(!explicit_no_changes(&json!({"ok":true})));
+    assert!(!explicit_no_changes(&json!({"result":{"note":"no changes"},"op":{}})));
+    assert!(h.read(|st| fresh(st) && holds(&c, &wifi(st).unwrap())));
+    h.set_link_for_test(Link::Down);
+    assert!(!h.read(fresh));
+    let mut w = wifi_of(&w).unwrap();
+    w.bands[0].radio_on = Some(true);
+    assert!(!holds(&c, &w));
+}
+
+#[test]
+fn wifi_pending_or_stale_at_confirmation_blocks_send() {
+    let pending = hub_with(wifi_data(), json!({"active": {"item": "wifi.main", "op_id": "other", "say_en": "Working"}}));
+    assert!(pending.read(|st| write_gate(st, Lang::En).unwrap().text(Lang::En).contains("still in progress")));
+    let idle = hub_with(wifi_data(), json!({}));
+    assert!(idle.read(|st| write_gate(st, Lang::En).is_none()));
+    idle.set_link_for_test(Link::Down);
+    assert!(idle.read(|st| write_gate(st, Lang::En).unwrap().text(Lang::En).contains("not current")));
+}
+
+#[test]
 fn wifi_undo_from_the_change_log_is_tier_three_in_wifi_words() {
     for a in ["wifi.settings", "wifi.guest"] {
         assert!(crate::changes::UNDO_ACTIONS.contains(&a));
@@ -308,7 +537,7 @@ fn wifi_undo_from_the_change_log_is_tier_three_in_wifi_words() {
     let e = json!({"what_zh": "Wi-Fi 设置", "change_zh": "", "undo_view": {"ok": true, "label_zh": "撤销",
         "request": {"action": "wifi.settings", "undo": true, "params": {"restore": {}}}}});
     let c = crate::changes::confirm(&e, Lang::Zh);
-    assert!(!c.cuts_uplink && c.downtime.unwrap().contains("Wi-Fi 重新加载"));
+    assert!(c.cuts_uplink && c.downtime.unwrap().contains("Wi-Fi 重新加载"));
 }
 
 fn dfs_hub(d: Value) -> Arc<Hub> {

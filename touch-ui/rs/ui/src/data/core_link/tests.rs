@@ -158,6 +158,75 @@ fn mobile_data_switch_reads_like_core() {
 }
 
 #[test]
+fn wifi_master_readback_overrides_saved_ap_flag() {
+    let wlan = blk("wlan", L_WLAN);
+    let wifi = blk("wifi", r#"{"on":false}"#);
+    let snap = format!(r#"{{"epoch":"e7","seq":41,"blocks":{{{wlan},{wifi}}}}}"#);
+    let mut d = CoreLink::new(cfg(1));
+    assert_eq!(feed(&mut d, "snapshot", &snap), 1);
+    assert_eq!(d.fresh_snap.ap_on, 0);
+    assert_eq!(d.fresh_snap.ap_ssid, "U60");
+    assert_eq!(
+        feed(&mut d, "block", r#"{"epoch":"e7","seq":42,"name":"wifi","revision":2,"observed_at":2,"stale":false,"data":{"on":true}}"#),
+        1
+    );
+    assert_eq!(d.fresh_snap.ap_on, 1);
+    // the two vendor flags split, both directions: a known module bit wins over the
+    // saved switch (on), whichever way they disagree
+    assert_eq!(
+        feed(&mut d, "block", r#"{"epoch":"e7","seq":43,"name":"wifi","revision":3,"observed_at":3,"stale":false,"data":{"on":true,"module_on":false}}"#),
+        1
+    );
+    assert_eq!(d.fresh_snap.ap_on, 0);
+    assert_eq!(
+        feed(&mut d, "block", r#"{"epoch":"e7","seq":44,"name":"wifi","revision":4,"observed_at":4,"stale":false,"data":{"on":false,"module_on":true}}"#),
+        1
+    );
+    assert_eq!(d.fresh_snap.ap_on, 1);
+    // an explicit null module is unknown, not the saved switch: wlan's enabled=1 stands
+    assert_eq!(
+        feed(&mut d, "block", r#"{"epoch":"e7","seq":45,"name":"wifi","revision":5,"observed_at":5,"stale":false,"data":{"on":false,"module_on":null}}"#),
+        1
+    );
+    assert_eq!(d.fresh_snap.ap_on, 1);
+}
+
+/// The nfc block: only a real switch value is a state. A stale block, a missing or unusable
+/// value decodes to unknown (-1), never a silent "off" the core did not say.
+#[test]
+fn wifi_nfc_block_is_a_value_only_when_actually_read() {
+    let mut d = CoreLink::new(cfg(1));
+    let nfc = |seq: u64, stale: bool, data: &str| {
+        format!(r#"{{"epoch":"e7","seq":{seq},"name":"nfc","revision":{seq},"observed_at":{seq},"stale":{stale},"data":{data}}}"#)
+    };
+    let snap = |nfc_blk: &str| {
+        format!(
+            r#"{{"epoch":"e7","seq":41,"blocks":{{{bat},"nfc":{nfc_blk}}}}}"#,
+            bat = blk("battery", L_BAT)
+        )
+    };
+    assert_eq!(feed(&mut d, "snapshot", &snap(r#"{"revision":1,"observed_at":1,"stale":false,"data":{"switch":1}}"#)), 1);
+    assert_eq!(d.fresh_snap.nfc_on, 1);
+    assert_eq!(feed(&mut d, "block", &nfc(42, false, r#"{"switch":0}"#)), 1);
+    assert_eq!(d.fresh_snap.nfc_on, 0);
+    // a value the switch cannot be, the key null and the key missing: unknown, not "off"
+    assert_eq!(feed(&mut d, "block", &nfc(43, false, r#"{"switch":2}"#)), 1);
+    assert_eq!(d.fresh_snap.nfc_on, -1);
+    assert_eq!(feed(&mut d, "block", &nfc(44, false, r#"{"switch":null}"#)), 1);
+    assert_eq!(d.fresh_snap.nfc_on, -1);
+    assert_eq!(feed(&mut d, "block", &nfc(45, false, r#"{}"#)), 1);
+    assert_eq!(d.fresh_snap.nfc_on, -1);
+    // stale: the block is left out and the missing section is unknown again
+    assert_eq!(feed(&mut d, "block", &nfc(46, true, r#"{"switch":1}"#)), 1);
+    assert_eq!(d.fresh_snap.nfc_on, -1);
+    assert_eq!(feed(&mut d, "block", &nfc(47, false, r#"{"switch":1}"#)), 1);
+    assert_eq!(d.fresh_snap.nfc_on, 1);
+    // an older core with no nfc block at all
+    assert_eq!(feed(&mut d, "snapshot", &snap(r#"{"revision":2,"observed_at":2,"stale":true,"data":null}"#)), 1);
+    assert_eq!(d.fresh_snap.nfc_on, -1);
+}
+
+#[test]
 fn v2_matches_legacy() {
     let legacy = format!(
         r#"{{"net":{L_NET},"battery":{L_BAT},"power":{L_PWR},"system":{L_SYS},"traffic":{L_TRF},"sms":{{"unread":1,"list":{L_LIST}}},"sim":{L_SIM},"qos":{L_QOS},"clients":{L_CLI},"wlan":{L_WLAN},"dhcp":{L_DHCP},"interfaces":{L_IF},"typec":{L_TYPEC},"powerbank":{{"state":0}},"ts":1}}"#
@@ -359,6 +428,96 @@ fn control_waits_for_the_answer() {
     drop(l);
     let mut d = CoreLink::new(cfg(port));
     assert!(!d.control_fb("band.reset", "{}", "band.reset", None));
+}
+
+#[test]
+fn wifi_settings_replies_belong_to_the_sent_operation() {
+    use WifiReply::{CoreDone, Failed};
+
+    let (l, port) = listener();
+    let mut d = CoreLink::new(cfg(port));
+    for (status, body, expected) in [
+        (200, r#"{"op":{"op_id":"$ID","phase":"verifying"}}"#, None),
+        (200, r#"{"padding":"$PAD","op":{"op_id":"$ID","phase":"confirmed","steps":[{}, {"key":"registered","done":true}]}}"#, Some(CoreDone)),
+        (502, r#"{"op":{"op_id":"$ID","phase":"applying"},"error":{"code":"device_call_failed"}}"#, None),
+        (502, r#"{"op":{"op_id":"$ID","phase":"unverified"},"error":{"code":"device_call_failed"}}"#, Some(Failed)),
+        (409, r#"{"op":{"op_id":"another-change","phase":"confirmed"},"error":{"code":"op_busy"}}"#, Some(Failed)),
+        (409, r#"{"error":{"code":"op_busy","op":{"op_id":"another-change","phase":"verifying"}}}"#, Some(Failed)),
+        (503, r#"{"error":{"code":"busy"}}"#, Some(Failed)),
+        (200, r#"{"result":{"status":"ok"}}"#, None),
+        (200, r#"{"result":{"status":"ok","note":"no changes"}}"#, Some(CoreDone)),
+    ] {
+        assert!(d.control_fb("wifi.settings", r#"{"wifi_onoff":"1"}"#, "wifi.master", Some("enabled=1")));
+        let id = d.wifi_op_id().unwrap().to_owned();
+        assert!(d.wifi_reply().is_none(), "the next submission must reset the previous result");
+        let (mut c, _) = l.accept().unwrap();
+        let req = crate::data::testsrv::read_req(&mut c);
+        assert!(req.contains(&format!(r#""source":"screen","op_id":"{id}""#)), "{req}");
+        assert!(req.ends_with(r#""params":{"wifi_onoff":"1"}}"#), "{req}");
+        let body = body.replace("$ID", &id).replace("$PAD", &"x".repeat(3000));
+        let response = crate::data::testsrv::resp(status, &body);
+        c.write_all(response.as_bytes()).unwrap();
+        c.shutdown(std::net::Shutdown::Write).unwrap();
+        assert!(wait(d.ctl[0].fd.as_raw_fd(), false, 800) > 0);
+        d.control_reap(mono_ms32());
+        assert_eq!(d.parked(), 0, "{status}: {body}");
+        assert_eq!(d.wifi_reply(), expected, "{status}: {body}");
+        assert_eq!(d.wifi_op_id(), Some(id.as_str()));
+        assert!(d.wifi_fallback.is_none());
+    }
+    l.set_nonblocking(true).unwrap();
+    assert_eq!(l.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+}
+
+#[test]
+fn wifi_settings_keeps_tracking_after_lost_or_late_http_reply() {
+    let (l, port) = listener();
+    let mut d = CoreLink::new(cfg(port));
+    let send = |d: &mut CoreLink| {
+        assert!(d.control_fb("wifi.settings", r#"{"wifi_onoff":"1"}"#, "wifi.master", Some("enabled=1")));
+        let (mut c, _) = l.accept().unwrap();
+        let id = d.wifi_op_id().unwrap().to_owned();
+        assert!(crate::data::testsrv::read_req(&mut c).contains(&id));
+        (c, id)
+    };
+    let (old, first_id) = send(&mut d);
+    let (mut newer, id) = send(&mut d); // the first may already have ended on /v2/screen
+    assert_ne!(id, first_id);
+    newer.write_all(b"HTTP/1.1 200 OK\r\n\r\n{\"result\":{\"note\":\"no changes\"}}").unwrap();
+    newer.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(wait(d.ctl[1].fd.as_raw_fd(), false, 800) > 0);
+    d.control_reap(mono_ms32());
+    assert_eq!(d.wifi_reply(), Some(WifiReply::CoreDone));
+    let mut old = old;
+    old.write_all(b"HTTP/1.1 503 Unavailable\r\n\r\n{}").unwrap();
+    old.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(wait(d.ctl[0].fd.as_raw_fd(), false, 800) > 0);
+    d.control_reap(mono_ms32());
+    assert_eq!(d.wifi_reply(), Some(WifiReply::CoreDone));
+    assert_eq!(d.wifi_op_id(), Some(id.as_str()));
+    assert_eq!(d.parked(), 0);
+
+    let (silent, id) = send(&mut d);
+    let sent_at = d.ctl[0].t;
+    d.control_reap(sent_at.wrapping_add(44_999));
+    assert_eq!(d.parked(), 1);
+    d.control_reap(sent_at.wrapping_add(45_000));
+    assert_eq!(d.parked(), 0);
+    assert_eq!(d.wifi_op_id(), Some(id.as_str()));
+    assert_eq!(d.wifi_reply(), None);
+    assert!(d.wifi_fallback.is_none());
+    drop(silent);
+
+    let (closed, id) = send(&mut d);
+    closed.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(wait(d.ctl[0].fd.as_raw_fd(), false, 800) > 0);
+    d.control_reap(mono_ms32());
+    assert_eq!(d.parked(), 0);
+    assert_eq!(d.wifi_op_id(), Some(id.as_str()));
+    assert_eq!(d.wifi_reply(), None);
+    assert!(d.wifi_fallback.is_none());
+    l.set_nonblocking(true).unwrap();
+    assert_eq!(l.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
 }
 
 #[test]

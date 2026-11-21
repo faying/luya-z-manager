@@ -157,7 +157,7 @@ To update a single component on a device that is already set up, see [DEPLOY.md]
 crates/        luyaz-core (core), luyaz-web (admin web), luyaz-sentinel (screen owner + watchdog), luyaz-* libraries
 touch-ui/      touch UI: rs/ (Rust + LVGL), scripts/ (device scripts), docs/
 onboard/       install kit: build-kit.sh (build), install.sh (install), device/ (on-device scripts), test/ (sandbox tests)
-scripts/       esim/ (lpac toolkit), tailscale/ (boot start for Tailscale, see its README)
+scripts/       esim/ (lpac toolkit), chill/, and other device helper scripts
 docs/          GETTING-STARTED.md, SCREENSHOTS.md, ARCHITECTURE.md, DESIGN.md (UI design spec), RELIABILITY.md (reliability contract)
 ```
 

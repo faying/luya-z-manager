@@ -14,7 +14,7 @@
 //!
 //! "In use" = a connection through 🚀 from a LAN client sent more bytes since
 //! the last look (the design said "cellular tx rising"; that also counts our own
-//! probes and Tailscale keepalives, so it would never go quiet). Idle ⇒ no probes.
+//! probes and unrelated background traffic). Idle ⇒ no probes.
 //!
 //! The state file (`/data/chill/manual-first.json` on the device) is written here, on switch /
 //! return / clear, and is what the other side reads once it no longer runs the loop:

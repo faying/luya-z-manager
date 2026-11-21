@@ -13,6 +13,8 @@ pub struct Dev {
     /// What the next scans return, in order (then the last one, again and again).
     pub scans: VecDeque<Result<Vec<Network>, String>>,
     pub last_scan: Option<Result<Vec<Network>, String>>,
+    /// A test can hold a scan in flight without locking the rest of the fake device.
+    pub scan_gate: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
     pub mcc: Option<String>,
     pub uci: BTreeMap<String, String>,
     /// Wi-Fi switch calls and other writes, in order.
@@ -92,6 +94,9 @@ impl Fake {
 }
 
 impl luyaz_wifi::Host for Fake {
+    fn wireless(&self) -> Option<luyaz_wifi::layout::Uci> {
+        Some(self.d().uci.clone())
+    }
     fn uci_get(&self, key: &str) -> Option<String> {
         self.d().uci.get(key).cloned()
     }
@@ -139,6 +144,12 @@ impl Io for Fake {
         let mut d = self.d();
         let next = d.scans.pop_front().or_else(|| d.last_scan.clone()).unwrap_or(Ok(Vec::new()));
         d.calls.push("scan".into());
+        let gate = d.scan_gate.take();
+        drop(d);
+        if let Some((entered, release)) = gate {
+            let _ = entered.send(());
+            release.recv_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+        }
         next
     }
     fn wifi(&self) -> &dyn luyaz_wifi::Host {

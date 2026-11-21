@@ -62,12 +62,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -138,12 +133,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -214,12 +204,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -290,12 +275,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -321,7 +301,7 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-warn	standby	待机	tailscaled唤醒/秒 90（基线 30）
+warn	standby	待机	mihomo唤醒/秒 90（基线 5）
 ok	manifest	清单	还没有清单
 --- --tsv2 rc=0
 #tsv2
@@ -341,7 +321,7 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-warn	standby	待机	tailscaled唤醒/秒 90（基线 30）	Standby	tailscaled wakeups/s 90 (baseline 30)
+warn	standby	待机	mihomo唤醒/秒 90（基线 5）	Standby	mihomo wakeups/s 90 (baseline 5)
 ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- text rc=0
   ● 清单：还没有清单
@@ -361,17 +341,12 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ▲ 待机：tailscaled唤醒/秒 90（基线 30）
+  ▲ 待机：mihomo唤醒/秒 90（基线 5）
 
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -397,7 +372,7 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-warn	standby	待机	tailscaled唤醒/秒 90（基线 30）
+warn	standby	待机	mihomo唤醒/秒 90（基线 5）
 ok	manifest	清单	还没有清单
 --- --tsv2 rc=0
 #tsv2
@@ -417,7 +392,7 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-warn	standby	待机	tailscaled唤醒/秒 90（基线 30）	Standby	tailscaled wakeups/s 90 (baseline 30)
+warn	standby	待机	mihomo唤醒/秒 90（基线 5）	Standby	mihomo wakeups/s 90 (baseline 5)
 ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- text rc=0
   ● 清单：还没有清单
@@ -437,17 +412,12 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ▲ 待机：tailscaled唤醒/秒 90（基线 30）
+  ▲ 待机：mihomo唤醒/秒 90（基线 5）
 
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -455,7 +425,7 @@ unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
 unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	ok	还没有清单
 === scenario
-cal; { rows 4 300 70; echo "600 70 20 - - - -"; rows 5 660 70; } >"$T/sb"
+cal; { rows 4 300 70; echo "600 70 0 - - - -"; rows 5 660 70; } >"$T/sb"
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
 ok	fota	ZTE 自动升级	已关闭
@@ -518,12 +488,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -531,7 +496,7 @@ unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
 unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	ok	还没有清单
 === scenario
-cal; : >"$T/sb"; i=1; while [ $i -le 10 ]; do echo "$((i * 9)) 500 20 30.0$MCOL 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done
+cal; : >"$T/sb"; i=1; while [ $i -le 10 ]; do echo "$((i * 9)) 500 0 - 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
 ok	fota	ZTE 自动升级	已关闭
@@ -594,12 +559,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -670,12 +630,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -683,7 +638,7 @@ unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
 unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	ok	还没有清单
 === scenario
-echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env"; cal; rows 10 300 70 90.0 >"$T/sb"; sed -i 's/^tailscaled 501 aaaaaaaa/tailscaled 601 ffffffff/' "$T/fp"
+cal; rows 10 300 70 >"$T/sb"; sed -i 's/^mihomo 502 bbbbbbbb/mihomo 602 ffffffff/' "$T/fp"
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
 ok	fota	ZTE 自动升级	已关闭
@@ -701,7 +656,7 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒 基线过期，不判
+ok	standby	待机	正常（蜂窝每分钟 70 个包）；mihomo唤醒/秒 基线过期，不判
 ok	manifest	清单	还没有清单
 --- --tsv2 rc=0
 #tsv2
@@ -721,7 +676,7 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒 基线过期，不判	Standby	Normal (cell 70 pkts/min); baseline out of date for Tailscale tunnel pkts/min, tailscaled wakeups/s, not judged
+ok	standby	待机	正常（蜂窝每分钟 70 个包）；mihomo唤醒/秒 基线过期，不判	Standby	Normal (cell 70 pkts/min); baseline out of date for mihomo wakeups/s, not judged
 ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- text rc=0
   ● 清单：还没有清单
@@ -741,93 +696,12 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒 基线过期，不判
+  ● 待机：正常（蜂窝每分钟 70 个包）；mihomo唤醒/秒 基线过期，不判
 
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	f2907ceaa48b79fd08a5d92f49a769b2
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
-unrecorded	record:rc.local	$T/rc	-	<rc0>
-unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
-unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
-unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
-unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
-state	ok	还没有清单
-=== scenario
-echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env"; cal; rows 10 300 70 90.0 >"$T/sb"; echo "TS_DEBUG_FIREWALL_MODE=auto" >>"$T/tuning.env"
---- --tsv rc=0
-ok	boot-sync	开机同步	sync success
-ok	fota	ZTE 自动升级	已关闭
-ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
-ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
-ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
-ok	web-http	管理网页 :9090	能访问
-ok	core-http	数据服务 :9460	能访问
-ok	heartbeat	后台心跳	5 秒前
-ok	wifi	Wi-Fi	在广播
-ok	screen	触屏界面	运行中
-ok	alerts	告警	没有未读
-ok	sms	短信告警	已配置
-ok	crashes	崩溃记录	最近 24 小时没有
-ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒 基线过期，不判
-ok	manifest	清单	还没有清单
---- --tsv2 rc=0
-#tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
-ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
-ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
-ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
-ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
-ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
-ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
-ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
-ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
-ok	screen	触屏界面	运行中	Screen UI	Running
-ok	alerts	告警	没有未读	Alerts	None unread
-ok	sms	短信告警	已配置	Alert SMS	Set up
-ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
-ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒 基线过期，不判	Standby	Normal (cell 70 pkts/min); baseline out of date for Tailscale tunnel pkts/min, tailscaled wakeups/s, not judged
-ok	manifest	清单	还没有清单	Manifest	No manifest yet
---- text rc=0
-  ● 清单：还没有清单
-  ● 开机同步：sync success
-  ● ZTE 自动升级：已关闭
-  ● 开机链接：开机同步名单里的服务没有被屏蔽
-  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
-  ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
-  ● 管理网页 :9090：能访问
-  ● 数据服务 :9460：能访问
-  ● 后台心跳：5 秒前
-  ● Wi-Fi：在广播
-  ● 触屏界面：运行中
-  ● 告警：没有未读
-  ● 短信告警：已配置
-  ● 崩溃记录：最近 24 小时没有
-  ● /data 空间：剩 1171 MB
-  ● 待机：正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒 基线过期，不判
-
---- --manifest
-unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
-unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	ab25847de6397ce8150ca364c2bd0a4e
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
-unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -898,12 +772,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -929,7 +798,7 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒、mihomo唤醒/秒、触屏唤醒/秒、数据服务唤醒/秒 基线过期，不判
+ok	standby	待机	正常（蜂窝每分钟 70 个包）；mihomo唤醒/秒、触屏唤醒/秒、数据服务唤醒/秒 基线过期，不判
 ok	manifest	清单	还没有清单
 --- --tsv2 rc=0
 #tsv2
@@ -949,7 +818,7 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒、mihomo唤醒/秒、触屏唤醒/秒、数据服务唤醒/秒 基线过期，不判	Standby	Normal (cell 70 pkts/min); baseline out of date for Tailscale tunnel pkts/min, tailscaled wakeups/s, mihomo wakeups/s, Screen UI wakeups/s, Data service wakeups/s, not judged
+ok	standby	待机	正常（蜂窝每分钟 70 个包）；mihomo唤醒/秒、触屏唤醒/秒、数据服务唤醒/秒 基线过期，不判	Standby	Normal (cell 70 pkts/min); baseline out of date for mihomo wakeups/s, Screen UI wakeups/s, Data service wakeups/s, not judged
 ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- text rc=0
   ● 清单：还没有清单
@@ -969,17 +838,12 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：正常（蜂窝每分钟 70 个包）；Tailscale隧道包/分、tailscaled唤醒/秒、mihomo唤醒/秒、触屏唤醒/秒、数据服务唤醒/秒 基线过期，不判
+  ● 待机：正常（蜂窝每分钟 70 个包）；mihomo唤醒/秒、触屏唤醒/秒、数据服务唤醒/秒 基线过期，不判
 
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1050,12 +914,78 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+cal; { i=0; while [ $i -lt 10 ]; do echo "$((300 + i * 60)) 70 20 30.0 5.0 2.0 1.0"; i=$((i + 1)); done; } >"$T/sb"; printf 'v2\n2 69.5 10.0\n3 20.0 0.0\n4 30.0 0.0\n5 5.0 0.0\n6 2.0 0.0\n7 1.0 0.0\nfp 5 bbbbbbbb+none+none\nfp 6 cccccccc\nfp 7 dddddddd\n' >"$T/sb.base"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	正常（蜂窝每分钟 70 个包）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	正常（蜂窝每分钟 70 个包）	Standby	Normal (cell 70 pkts/min)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：正常（蜂窝每分钟 70 个包）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1126,12 +1056,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1202,12 +1127,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-

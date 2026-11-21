@@ -5,12 +5,13 @@
 //!   用请求参数里的交接号（[`LOCK_TOKEN`]，不落盘）交给这次写；退回、撤销以外没有交接的写（自动退回、
 //!   重启后续跑）自己拿，最多等 150 秒（在阻塞线程里等，不占执行者）。顺序是先 Wi-Fi 锁、后写锁
 //!   （和 guard、agent 经 `/control` 写一样，`wifi_lock.rs` 说明了为什么不会死锁）。
-//! - **写**：一个执行者任务里拿写锁，要开原厂总开关就先开（`wifi.set_module`），再 `wifi.apply
-//!   {set, reload:false}`（访客 best_effort）。只改了发射功率：iw 热改、不重载。别的：锁交给一个系统线程做
-//!   `luyaz_wifi::reload_and_verify`（重载走执行者、轮询 hostapd 在线程里，执行者不被占几十秒），做完放锁。
+//! - **写**：一个执行者任务里拿写锁，要动原厂总开关就先动（`wifi.set_module`：`Some(true)` 先开、
+//!   `Some(false)` 就是总开关关本身），再 `wifi.apply {set, reload:false}`（访客 best_effort）。
+//!   只动原厂总开关、没有 uci 要写时不 reload——开关自己已生效（B11 实测约 2 秒关 / 十几秒开），
+//!   确认在线程里等原厂开关、保存频段和运行布局一致。只改了发射功率：iw 热改、不重载。模块目标开且有冷写时，
+//!   锁交给系统线程重载和轮询，做完放锁。
 //! - **确认**（`Confirm::Wifi`）：读回对上目标，且 `Reading::registered` = AP 已按 uci 起来/关掉：
-//!   最近一次重载的确认结果（重载中为否；结果是「没法判断」时看重载报没报错）；没有在跟的重载（u60d 重启过、
-//!   或上一次没确认上）时当场看一眼（`luyaz_wifi::settled`）。不看蜂窝、不探测 DNS，SIM 记空（换卡不影响 Wi-Fi）。
+//!   跟踪中的写以后台验证结果为准，只有未跟踪的写才当场核对布局。不看蜂窝或 DNS，SIM 记空（换卡不影响 Wi-Fi）。
 
 use super::{
     apn::Vault,
@@ -21,7 +22,7 @@ use super::{
 };
 use crate::control::Outcome;
 use crate::executor::Executor;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::{
     path::PathBuf,
     sync::{
@@ -59,23 +60,12 @@ fn guard<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn uci_get(key: &str) -> Option<String> {
-    let out = luyaz_wifi::output_within(
-        std::process::Command::new(crate::state::uci_bin()).args(["-q", "get", key]),
-        Duration::from_secs(5),
-    )
-    .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// 只读 uci（当场看一眼用）。
+/// 无需重载的验证线程。
 struct UciHost;
 
 impl luyaz_wifi::Host for UciHost {
-    fn uci_get(&self, key: &str) -> Option<String> {
-        uci_get(key)
+    fn wireless(&self) -> Option<wifi::Uci> {
+        crate::state::wifi_map_sync()
     }
     fn write_aps(&self, _: bool, _: bool) -> Result<Option<String>, String> {
         Err("not used here".into())
@@ -95,8 +85,8 @@ struct ReloadHost {
 }
 
 impl luyaz_wifi::Host for ReloadHost {
-    fn uci_get(&self, key: &str) -> Option<String> {
-        uci_get(key)
+    fn wireless(&self) -> Option<wifi::Uci> {
+        crate::state::wifi_map_sync()
     }
     fn write_aps(&self, _: bool, _: bool) -> Result<Option<String>, String> {
         Err("not used here".into())
@@ -125,6 +115,53 @@ fn fail(message: impl Into<String>) -> WriteError {
         message: message.into(),
         timed_out: false,
     }
+}
+
+fn check_expect(params: &Value, current: &Value) -> Result<(), String> {
+    if let Some(expect) = params.get("expect")
+        && !txn::matches(expect, current)
+    {
+        return Err(if params.get("restore").is_some() {
+            "Wi-Fi settings changed since; not undoing"
+        } else {
+            "Wi-Fi settings changed since the form was opened"
+        }
+        .into());
+    }
+    Ok(())
+}
+
+async fn write_settings<F>(
+    set: Value,
+    vendor: Option<bool>,
+    guest: bool,
+    mut execute: impl FnMut(&'static str, Value) -> F,
+) -> Result<Value, String>
+where
+    F: Future<Output = Outcome>,
+{
+    let mut out = json!({"status": "ok"});
+    if let Some(on) = vendor {
+        match execute("wifi.set_module", json!({"enabled": on as i32})).await {
+            Outcome::Ok(_) => out["vendor_switch"] = json!(if on { "turned_on" } else { "turned_off" }),
+            Outcome::Failed(e) | Outcome::Invalid(e) => return Err(e),
+            Outcome::CapabilityDenied(e) => return Err(e.to_string()),
+            Outcome::NotHandled => return Err("wifi.set_module not handled".into()),
+        }
+    }
+    if set.as_object().is_some_and(|s| !s.is_empty()) {
+        let params = json!({"set": set, "reload": false, "best_effort": guest});
+        match execute("wifi.apply", params).await {
+            Outcome::Ok(v) => {
+                out["committed"] = v["committed"].clone();
+                out["skipped"] = v["skipped"].clone();
+            }
+            Outcome::Failed(e) | Outcome::Invalid(e) => return Err(e),
+            Outcome::CapabilityDenied(e) => return Err(e.to_string()),
+            Outcome::NotHandled => return Err("wifi.apply not handled".into()),
+        }
+    }
+    Ok(out)
 }
 
 impl WifiDev {
@@ -182,31 +219,37 @@ impl WifiDev {
             .map(str::to_owned)
     }
 
-    async fn now(&self, kind: Kind) -> Result<(wifi::Uci, Map<String, Value>), String> {
-        let m = crate::state::uci_show("wireless").await;
+    async fn now(&self, kind: Kind) -> Result<(wifi::Uci, Value), String> {
+        let m = crate::state::blocking(crate::state::wifi_map_sync)
+            .await
+            .ok_or("cannot read Wi-Fi settings")?;
         let v = wifi::value(kind, &m, &self.vault).ok_or("cannot read Wi-Fi settings")?;
-        Ok((m, v))
+        Ok((m, Value::Object(v)))
     }
 
     /// AP 是不是已经按 uci 起来/关掉（见模块说明）。
-    async fn aps_ready(&self) -> bool {
+    async fn aps_ready(&self, cfg: Option<wifi::Uci>) -> bool {
+        let Some(cfg) = cfg else { return false };
         let v = *guard(&self.verify);
         match v {
             Verify::Running => false,
-            Verify::Done(true) => true,
-            Verify::Idle | Verify::Done(false) => {
-                crate::state::blocking(|| luyaz_wifi::settled(&UciHost).unwrap_or(true)).await
+            Verify::Done(ok) => ok,
+            Verify::Idle => {
+                crate::state::blocking(move || luyaz_wifi::settled_layout(&cfg) == Some(true)).await
             }
         }
     }
 
     pub async fn read(&self, kind: Kind) -> Result<Reading, String> {
-        let m = crate::state::uci_show("wireless").await;
-        let value = wifi::value(kind, &m, &self.vault).map(Value::Object);
+        let m = crate::state::blocking(crate::state::wifi_map_sync).await;
+        let value = m
+            .as_ref()
+            .and_then(|m| wifi::value(kind, m, &self.vault))
+            .map(Value::Object);
         Ok(Reading {
             value,
             // Wi-Fi 项：AP 已经按 uci 起来/关掉（不是蜂窝注册）
-            registered: self.aps_ready().await,
+            registered: self.aps_ready(m).await,
             sim: SimId {
                 iccid: String::new(),
                 slot: 0,
@@ -224,17 +267,19 @@ impl WifiDev {
         target: Value,
         params: &Value,
     ) -> Result<Option<Value>, String> {
-        let (m, cur) = self.now(kind).await?;
+        let (m, current) = self.now(kind).await?;
+        // The HTTP route hands this request the Wi-Fi lock before resolve.
+        check_expect(params, &current)?;
+        let cur = current.as_object().expect("flattened Wi-Fi settings");
         for k in wifi::current_keys(kind, &m) {
             self.keep(k);
         }
-        if let Some(expect) = params.get("expect")
-            && !txn::matches(expect, &Value::Object(cur.clone()))
-        {
-            return Err("Wi-Fi settings changed since; not undoing".into());
-        }
-        let want = if params.get("restore").is_some() {
-            target.as_object().cloned().unwrap_or_default()
+        let restore = params.get("restore").is_some();
+        let (want, plan) = if restore {
+            let want = target.as_object().cloned().unwrap_or_default();
+            // Include both saved switch values when interpreting a historical split.
+            let plan = wifi::plan_for(kind, &want, &m, cur, |fp| self.lookup(fp))?;
+            (want, plan)
         } else {
             let mut body = params.as_object().cloned().unwrap_or_default();
             body.remove(LOCK_TOKEN);
@@ -245,15 +290,32 @@ impl WifiDev {
             for k in wifi::new_keys(&plan) {
                 self.keep(k);
             }
-            wifi::value(kind, &wifi::simulate(&m, &plan), &self.vault)
-                .ok_or("cannot read Wi-Fi settings")?
+            let want = wifi::value(kind, &wifi::simulate(&m, &plan), &self.vault)
+                .ok_or("cannot read Wi-Fi settings")?;
+            (want, plan)
         };
-        let t = wifi::changed(&cur, &want);
+        let mut t = wifi::changed(cur, &want);
+        if restore {
+            t.retain(|_, value| !value.is_null());
+        }
+        if let Some(on) = plan.vendor {
+            t.insert("on".into(), json!(on));
+            t.insert("module_on".into(), json!(on));
+            for key in ["band_2g.radio_on", "band_5g.radio_on"] {
+                if let Some(saved) = cur.get(key).and_then(Value::as_bool) {
+                    t.insert(key.into(), json!(saved));
+                } else {
+                    t.remove(key);
+                }
+            }
+        }
         if t.is_empty() {
             return Ok(None);
         }
         // 写得出来（退回、撤销要的旧密码还在）、写完的 AP 布局固件跑得起来才接
-        let plan = wifi::plan_for(kind, &t, &m, &cur, |fp| self.lookup(fp))?;
+        let plan = if restore { plan } else {
+            wifi::plan_for(kind, &t, &m, cur, |fp| self.lookup(fp))?
+        };
         if let Some(why) = luyaz_wifi::layout::refusal(&m, &wifi::simulate(&m, &plan)) {
             return Err(why.into());
         }
@@ -273,49 +335,35 @@ impl WifiDev {
         *guard(&self.verify) = Verify::Idle;
         let (m, now) = self.now(kind).await.map_err(fail)?;
         let want = value.as_object().cloned().unwrap_or_default();
-        let plan = wifi::plan_for(kind, &want, &m, &now, |fp| self.lookup(fp)).map_err(fail)?;
+        let now = now.as_object().expect("flattened Wi-Fi settings");
+        let plan = wifi::plan_for(kind, &want, &m, now, |fp| self.lookup(fp)).map_err(fail)?;
         if plan.is_empty() {
             // 已经是这样：不重载，确认时当场看一眼
             *guard(&self.verify) = Verify::Idle;
             return Ok(json!({"status": "ok", "note": "no changes"}));
         }
-        let hot = plan.hot_txpower();
-        let (set, vendor_on, guest) = (plan.set_json(), plan.vendor_on, kind == Kind::Guest);
+        let switches = luyaz_wifi::switches::read(|k| m.get(k).map(String::as_str));
+        let module_on = plan.vendor.or(switches.module) == Some(true);
+        let hot = module_on.then(|| plan.hot_txpower()).flatten();
+        let reload = module_on && hot.is_none() && !plan.set.is_empty();
+        let expected = reload.then(|| wifi::simulate(&m, &plan));
+        let (set, vendor, guest) = (plan.set_json(), plan.vendor, kind == Kind::Guest);
         // D7：拿不到写锁就什么都不写（Wi-Fi 锁已经拿着，lk 随返回放掉）
         let r = write_lock::run(exec, async move {
-            let mut out = json!({"status": "ok"});
-            if vendor_on {
-                match crate::control::execute("wifi.set_module", &json!({"enabled": 1})).await {
-                    Outcome::Ok(_) => out["vendor_switch"] = json!("turned_on"),
-                    Outcome::Failed(e) | Outcome::Invalid(e) => {
-                        eprintln!("ops: vendor Wi-Fi switch: {e}; writing the APs anyway");
-                        out["vendor_switch"] = json!("failed");
-                        out["vendor_switch_error"] = json!(e);
-                    }
-                    Outcome::CapabilityDenied(e) => return Err(e.to_string()),
-                    Outcome::NotHandled => {}
-                }
-            }
-            if set.as_object().is_some_and(|s| !s.is_empty()) {
-                let params = json!({"set": set, "reload": false, "best_effort": guest});
-                match crate::control::execute("wifi.apply", &params).await {
-                    Outcome::Ok(v) => {
-                        out["committed"] = v["committed"].clone();
-                        out["skipped"] = v["skipped"].clone();
-                    }
-                    Outcome::Failed(e) | Outcome::Invalid(e) => return Err(e),
-                    Outcome::CapabilityDenied(e) => return Err(e.to_string()),
-                    Outcome::NotHandled => return Err("wifi.apply not handled".into()),
-                }
-            }
-            Ok(out)
+            write_settings(set, vendor, guest, |action, params| async move {
+                crate::control::execute(action, &params).await
+            })
+            .await
         })
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
         crate::state::invalidate_cache();
         exec.mark_immediate(None);
-        let mut out = r.map_err(fail)?;
+        let mut out = r.map_err(|e| {
+            *guard(&self.verify) = Verify::Done(false);
+            fail(e)
+        })?;
         if let Some(tx) = hot {
             // agent：只改发射功率时 iw 热改（limit = 百分比 × 30），不重载
             for (iface, pct) in tx {
@@ -325,9 +373,7 @@ impl WifiDev {
                     eprintln!("ops: iw txpower on {iface}: {e}");
                 }
             }
-            *guard(&self.verify) = Verify::Done(true);
             out["hot"] = json!(true);
-            return Ok(out);
         }
         *guard(&self.verify) = Verify::Running;
         let verify = self.verify.clone();
@@ -340,14 +386,23 @@ impl WifiDev {
                     handle: handle.clone(),
                     exec: exec.clone(),
                 };
-                let data = luyaz_wifi::reload_and_verify(&host, &lk);
-                // 没法判断（只有访客网络开着）时看重载报没报错
-                let ok = data["verified"]
-                    .as_bool()
-                    .unwrap_or_else(|| data["reload_error"].is_null());
+                let data = if let Some(expected) = &expected {
+                    let error = luyaz_wifi::reload(&host, &lk).err();
+                    let mut data = luyaz_wifi::verify_written(&UciHost, expected);
+                    if let Some(e) = error {
+                        data["reload_error"] = json!(e);
+                    }
+                    data
+                } else if let Some(wanted) = vendor {
+                    luyaz_wifi::verify_master(&UciHost, wanted, switches.radios)
+                } else {
+                    luyaz_wifi::verify_no_reload(&UciHost)
+                };
+                let ok = data["verified"].as_bool() == Some(true);
                 eprintln!("ops: Wi-Fi change: reload finished {data}");
                 *guard(&verify) = Verify::Done(ok);
                 drop(lk);
+                crate::engines::wifi_dfs::layout_changed();
                 handle.spawn(async move {
                     crate::state::invalidate_cache();
                     exec.mark_immediate(None);
@@ -355,8 +410,47 @@ impl WifiDev {
             });
         if let Err(e) = spawned {
             eprintln!("ops: Wi-Fi change: could not start the reload thread: {e}");
-            *guard(&self.verify) = Verify::Idle;
+            *guard(&self.verify) = Verify::Done(false);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wifi_save_conflict_is_scoped_to_edited_fields() {
+        let current = json!({"guest.ssid": "Guest", "guest.isolate": true});
+        let mut params = json!({"guest_ssid": "New name", "expect": {"guest.ssid": "Guest"}});
+        assert_eq!(check_expect(&params, &current), Ok(()));
+        params["expect"]["guest.ssid"] = json!("Another name");
+        assert_eq!(
+            check_expect(&params, &current).unwrap_err(),
+            "Wi-Fi settings changed since the form was opened"
+        );
+        params["restore"] = json!({"guest.ssid": "New name"});
+        assert_eq!(
+            check_expect(&params, &current).unwrap_err(),
+            "Wi-Fi settings changed since; not undoing"
+        );
+    }
+
+    #[tokio::test]
+    async fn wifi_vendor_failure_stops_the_following_uci_write() {
+        let mut calls = Vec::new();
+        let result = write_settings(
+            json!({"wireless.main_5g.ssid": "Renamed"}),
+            Some(true),
+            false,
+            |action, _| {
+                calls.push(action.to_owned());
+                std::future::ready(Outcome::Failed("vendor refused".into()))
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "vendor refused");
+        assert_eq!(calls, ["wifi.set_module"]);
     }
 }

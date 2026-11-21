@@ -165,7 +165,7 @@ fn clear_cookie() -> HeaderValue {
 }
 
 /// W10: a non-GET request must name this site as its origin. `Origin`, else `Referer`; compared as
-/// host:port against `Host`, so it works on the LAN IP, the Tailscale name and any port.
+/// host:port against `Host`, so it works with the requested host and port.
 pub fn same_origin(method: &Method, h: &HeaderMap) -> bool {
     if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
         return true;

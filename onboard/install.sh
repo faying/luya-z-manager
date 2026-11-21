@@ -13,9 +13,10 @@
 #   ./install.sh undo [--ssh]            退回到第一次装机之前（设备上 /data/luyaz/kit/snap 的快照；只换文件、不停不起服务，重启后完全生效）。
 #                                        默认保留 SSH；--ssh 连 SSH 一起退（之后就进不来了）。不自动跑：装到一半断了默认还是续装
 #   ./install.sh reboot                  重启设备，等它回来再看各组件是不是自己起来了（要 SSH 已通）
-#   ./install.sh backup [--with-tailscale]   配置备份到这台电脑（目录 BACKUP_DIR，默认 ./backups）
+#   ./install.sh backup                     配置备份到这台电脑（目录 BACKUP_DIR，默认 ./backups）
 #   ./install.sh restore <备份.tgz>          先比对旁存的 <备份.tgz>.sha256，再列出会动哪些文件，输入 yes 才写（没终端时设 RESTORE_YES=1）
 #                                            没有 .sha256 的旧备份要 LUYAZ_RESTORE_NO_SHA256=1；摘要不符一律不恢复
+#                                            旧备份里的 Tailscale 身份已退役：跳过不写回（会逐条说明），其余照常恢复
 
 # 前提：这台电脑已经能用 SSH 登录设备（root@GATEWAY，端口 2222，密钥 SSH_KEY）。
 # 本包只走这条已有的 SSH，不会自己去开任何进入方式；SSH 怎么来的不在本项目范围内。
@@ -86,14 +87,16 @@ HAVE_TTY=false
 TTY=$HAVE_TTY
 
 # ── 命令行 ───────────────────────────────────────────────────────────────────
-WITH_TS=""          # backup 的 --with-tailscale
 RESTORE_FILE=""
 UNDO_SSH=0          # undo 的 --ssh
 if [ "${1:-}" = undo ]; then
   [ "${2:-}" != --ssh ] || UNDO_SSH=1
   set -- undo
 elif [ "${1:-}" = backup ]; then
-  [ "${2:-}" != --with-tailscale ] || WITH_TS=--with-tailscale
+  if [ -n "${2:-}" ]; then   # backup 不带参数；退役的 --with-tailscale 明说，别让它被悄悄当普通备份
+    [ "$2" != --with-tailscale ] || fail "$(tx 'Tailscale 已退役：备份不再包含它的身份，--with-tailscale 已取消。' 'Tailscale is retired: backups no longer hold its identity; --with-tailscale is gone.')"
+    fail "$(tx "backup 不带参数（不认识: $2）" "backup takes no options (unrecognized: $2)")"
+  fi
   set -- backup
 elif [ "${1:-}" = restore ]; then
   RESTORE_FILE="${2:-}"
@@ -212,7 +215,7 @@ check_device() {
   model=$(printf '%s' "$iv" | sed -n 's/.*\(MU[0-9][0-9][0-9][0-9]\)V.*/\1/p')
   case "$iv" in
     *_ZTE_MU*) region=${iv%%_*} ;;                                                     # CN_ZTE_MU5250V…
-    *) region=$(printf '%s' "$iv" | sed -n 's/^[A-Z]*_\([A-Z]*\)MU[0-9].*/\1/p') ;;  # BD_CNMU5250V… → CN
+    *) region=$(printf '%s' "$iv" | sed -n 's/^[A-Z]*_\([A-Z]*\)_\{0,1\}MU[0-9].*/\1/p') ;;  # BD_CNMU5250V… → CN；FLY_CN_MU5250V… → CN（实测 B11 出现过这种写法）
   esac
   build=$(printf '%s' "$iv" | sed -n 's/.*V[0-9.]*\(B[0-9][0-9]*\)$/\1/p')
   [ -n "$model" ] && [ -n "$build" ] || fail "$(tx "认不出固件版本「${iv:-空}」，不装（不是 U60 Pro，或固件太新/太旧）" "Unknown firmware version \"${iv:-empty}\". Not installing (not a U60 Pro, or firmware too new/old)")"
@@ -270,7 +273,7 @@ do_backup() {
   mkdir -p "$dir" && chmod 700 "$dir"
   out="$dir/config-$(date +%Y%m%d-%H%M%S).tgz"
   push_file "$KIT/payload/scripts/config-backup.sh" /tmp/u60-cb.sh || fail "$(tx '推送备份脚本失败' 'Could not send the backup script')"
-  ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "sh /tmp/u60-cb.sh export $WITH_TS" < /dev/null > "$out"
+  ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "sh /tmp/u60-cb.sh export" < /dev/null > "$out"
   chmod 600 "$out"
   [ -s "$out" ] || { rm -f "$out"; fail "$(tx '备份是空的' 'The backup is empty')"; }
   # 取回之后再送回去校验：证明电脑上这份能完整解开、每个文件都能解析
@@ -295,7 +298,6 @@ do_backup() {
   else
     rm -f "$sys"; warn "$(tx 'rc.local、init 脚本、SSH host key 没存下来' 'Could not save rc.local, init scripts, SSH host key')"
   fi
-  [ -n "$WITH_TS" ] && warn "$(tx '这份备份含 Tailscale 身份：恢复到另一台设备前，先让这台下线，否则两台会抢同一个节点。' 'This backup holds the Tailscale identity: before restoring it to another device, take this one offline, or the two will fight over the same node.')"
   info "$(tx '含后台密码、短信号码、订阅地址等：只放在这台电脑上，别发给别人。' 'It contains the admin web password, SMS numbers, subscription URLs and more: keep it on this computer and do not share it.')"
 }
 
@@ -324,7 +326,7 @@ do_restore() {
   push_file "$KIT/payload/scripts/config-backup.sh" /tmp/u60-cb.sh || fail "$(tx '推送脚本失败' 'Could not send the script')"
   push_file "$RESTORE_FILE" /tmp/u60-cb-restore.tgz || fail "$(tx '推送备份失败' 'Could not send the backup')"
   dev_run "CB_EXPECT_SHA256=$RESTORE_SHA sh /tmp/u60-cb.sh verify /tmp/u60-cb-restore.tgz" | tr -d '\r' || fail "$(tx '这份备份校验没过，不恢复' 'This backup failed its check; not restoring')"
-  echo; info "$(tx '恢复会做这些（same = 一样不动；overwrite 会先把原文件留成 .pre-restore）：' 'Restore will do this (same = left alone; overwrite keeps the old file as .pre-restore first):')"
+  echo; info "$(tx '恢复会做这些（same = 一样不动；overwrite 会先把原文件留成 .pre-restore；skip = 已退役的 Tailscale 身份，不写回）：' 'Restore will do this (same = left alone; overwrite keeps the old file as .pre-restore first; skip = the retired Tailscale identity, not written back):')"
   dev_run "CB_EXPECT_SHA256=$RESTORE_SHA sh /tmp/u60-cb.sh plan /tmp/u60-cb-restore.tgz /" | tr -d '\r'
   if $TTY; then
     printf '%s%s%s ' "$C_CYN" "$(tx '确认恢复请输入 yes:' 'Type yes to restore:')" "$C_0"; read -r ans

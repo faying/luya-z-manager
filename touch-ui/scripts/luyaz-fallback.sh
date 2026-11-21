@@ -19,8 +19,9 @@
 #   apn.enable               profile_id=WORD
 #   netselect.auto           (AT+COPS=0: back to automatic network selection)
 #   modem.online             (AT+CFUN=1: radio on)
-#   wifi.radio               ap_2g=0|1 ap_5g=0|1     (both AP interfaces, guests off; always written and
-#                                                    reloaded; ap_2g=0 ap_5g=1 refused)
+#   wifi.radio               ap_2g=0|1 ap_5g=0|1     (the two radios, wifi0/wifi1 disabled; always written
+#                                                    and reloaded; 2.4 off with 5G on is fine this way)
+#   wifi.master              enabled=0|1             (the stock master switch, zwrt_wlan set; bands stay)
 #   cellular.redial          [type=1|2]              (dial the data call again; both without type)
 #   nfc.set                  enabled=0|1 [flag=N]
 #   power.direct_supply.set  enabled=0|1|true|false
@@ -204,6 +205,7 @@ case $ACTION in
     netselect.auto | modem.online) KEYS="" ;;
     cellular.redial) KEYS="type" ;;
     wifi.radio) KEYS="ap_2g ap_5g" ;;
+    wifi.master) KEYS="enabled" ;;
     nfc.set) KEYS="enabled flag" ;;
     power.direct_supply.set) KEYS="enabled" ;;
     *) invalid "unknown action" ;;
@@ -276,10 +278,12 @@ case $ACTION in
     wifi.radio)
         is01 "${P_ap_2g:-}" || invalid "ap_2g must be 0 or 1"
         is01 "${P_ap_5g:-}" || invalid "ap_5g must be 0 or 1"
-        # QCMAP's single-AP mode only starts wlan0 (2.4 GHz): 5 GHz alone = no Wi-Fi at all
-        [ "$P_ap_2g$P_ap_5g" = 01 ] && invalid "2.4 GHz off with 5 GHz on stops all Wi-Fi on this device"
         add ap_2g "$P_ap_2g"
         add ap_5g "$P_ap_5g"
+        ;;
+    wifi.master)
+        is01 "${P_enabled:-}" || invalid "enabled must be 0 or 1"
+        add enabled "$P_enabled"
         ;;
     cellular.redial)
         if [ -n "${P_type+x}" ]; then
@@ -425,17 +429,25 @@ case $ACTION in
         at_write "AT+CFUN=1"
         ;;
     wifi.radio)
-        # disabled = not on; the caller verifies by watching hostapd
-        "$UCI" set "wireless.main_2g.disabled=$((1 - P_ap_2g))" 9>&- 8>&- || failed "uci set"
-        "$UCI" set "wireless.main_5g.disabled=$((1 - P_ap_5g))" 9>&- 8>&- || failed "uci set"
-        # guests off: one band's guest beside the mains makes exactly three APs, or a guest without
-        # its main network — both leave Wi-Fi down (luyaz_wifi::layout). Missing sections are skipped.
-        for g in guest_2g guest_5g; do
-            "$UCI" -q get "wireless.$g" >/dev/null 9>&- 8>&- &&
-                { "$UCI" set "wireless.$g.disabled=1" 9>&- 8>&- || failed "uci set"; }
-        done
+        # the radios, not the main-AP flags: with the 2.4 radio off the firmware keeps 5 GHz on
+        # wlan2 (CN B11, measured 2026-11-18); the AP-flag form is the layout that kills all Wi-Fi.
+        # Guests are not touched — a radio's guests cannot run without it. The caller verifies by
+        # watching hostapd.
+        "$UCI" set "wireless.wifi0.disabled=$((1 - P_ap_2g))" 9>&- 8>&- || failed "uci set"
+        "$UCI" set "wireless.wifi1.disabled=$((1 - P_ap_5g))" 9>&- 8>&- || failed "uci set"
         "$UCI" commit wireless 9>&- 8>&- || failed "uci commit"
         write zwrt_wlan reload '{}'
+        ;;
+    wifi.master)
+        # the stock master switch: leaves every band and guest switch as it is, so a band the
+        # user switched off alone stays off across an off/on cycle. lbd goes along when enabling,
+        # as the firmware's own call does (CN B11 measured: off ~2 s, on ~14 s).
+        mbb='{"zte_mbb":{"wifi_onoff":"'$P_enabled'"'
+        if [ "$P_enabled" = 1 ]; then
+            lbd=$("$UCI" -q get wireless.zte_mbb.lbd 9>&- 8>&-) || lbd=
+            case $lbd in 0|1) mbb="$mbb,\"lbd\":\"$lbd\"" ;; esac
+        fi
+        write zwrt_wlan set "$mbb}}"
         ;;
     cellular.redial)
         for ty in ${P_type:-1 2}; do

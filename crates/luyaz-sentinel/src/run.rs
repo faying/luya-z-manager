@@ -458,6 +458,7 @@ struct Rt {
     launches_base: u32,
     last_hb_ms: i64,
     last_hb: String,
+    stock_ui_lock_checked: Option<(i32, i64)>,
     seen: Dedup,
     attempts_set: u32,
 }
@@ -566,7 +567,11 @@ impl Rt {
 
     fn heartbeat(&mut self, s: &Screen, worker: i64, force: bool) {
         let now = sys::mono_ms();
-        let state = s.on_screen().word();
+        let owner = s.on_screen();
+        let state = owner.word();
+        if owner != screen::OnScreen::Ours {
+            self.stock_ui_lock_checked = None;
+        }
         if !force && state == self.last_hb && now - self.last_hb_ms < screen::HEARTBEAT_MS {
             return;
         }
@@ -582,6 +587,18 @@ impl Rt {
             }
         } else if let Err(e) = sys::write_atomic(HEARTBEAT, &line) {
             eprintln!("luyaz-sentinel: heartbeat: {e}");
+        } else if owner == screen::OnScreen::Ours
+            && let Some(ui) = s.cur
+            && now - ui.since_ms >= screen::COEXIST_MS
+            && self.stock_ui_lock_checked != Some((ui.pid, ui.since_ms))
+            && sys::pid_is_ui(ui.pid)
+        {
+            self.stock_ui_lock_checked = Some((ui.pid, ui.since_ms));
+            match sys::release_stale_devui_sleep_lock() {
+                Ok(true) => self.log("released stale stock UI sleep lock"),
+                Ok(false) => {}
+                Err(e) => self.log(&format!("stock UI sleep lock not cleared: {e}")),
+            }
         }
         self.last_hb = state.to_string();
         self.last_hb_ms = now;
@@ -637,6 +654,7 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
         launches_base,
         last_hb_ms: 0,
         last_hb: String::new(),
+        stock_ui_lock_checked: None,
         seen: Dedup::default(),
         attempts_set: 0,
     };

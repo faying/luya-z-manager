@@ -57,8 +57,6 @@ fn temps_throttle_exits_and_cpu() {
         bt: Some(310),
         zt: Some(45_000),
         thr: Some(false),
-        ts_on: true,
-        ts_ok: Some(true),
         chill_on: true,
         chill_ok: false,
         cpu: Some((100, 5, 1_000)),
@@ -68,7 +66,6 @@ fn temps_throttle_exits_and_cpu() {
     a.add(&r, None, 60, 60, false, 60);
     r.thr = Some(true);
     r.zt = Some(50_000);
-    r.ts_ok = None; // not checked this time
     r.cpu = Some((100, 5, 1_360));
     r.cap = Some(78);
     a.add(&r, None, 60, 60, false, 3660);
@@ -81,9 +78,8 @@ fn temps_throttle_exits_and_cpu() {
         (json!(80), json!(78))
     );
     let q = a.proc_();
-    assert_eq!(q["ts_on_s"], 120);
-    assert_eq!(q["ts_chk_s"], 60);
-    assert_eq!(q["ts_ok_s"], 60);
+    assert!(q.get("ts_on_s").is_none());
+    assert!(q.get("rss_ts").is_none());
     assert_eq!(q["chill_on_s"], 120);
     assert_eq!(q["chill_ok_s"], 0);
     // 360 ticks in 3600 s = 1 per mille
@@ -113,21 +109,11 @@ fn temps_throttle_exits_and_cpu() {
 }
 
 #[test]
-fn zone_types_and_ts_answer() {
+fn zone_types() {
     assert!(
         app_zone("cpuss-0") && app_zone("pm7550_tz") && app_zone("battery") && app_zone("xo-therm")
     );
     assert!(!app_zone("sdr0") && !app_zone("mdmss-0") && !app_zone("pm_x"));
-    assert_eq!(
-        ts_healthy(&json!({"BackendState": "Running", "Self": {"Online": true}})),
-        Some(true)
-    );
-    assert_eq!(
-        ts_healthy(&json!({"BackendState": "Running", "Self": {"Online": false}})),
-        Some(false)
-    );
-    assert_eq!(ts_healthy(&json!({"BackendState": "Stopped"})), Some(false));
-    assert_eq!(ts_healthy(&json!({})), None);
 }
 
 /// A device under a temp root.
@@ -155,7 +141,6 @@ fn root(tag: &str) -> (PathBuf, Paths) {
         "route",
         "Iface\tDestination\tGateway\tFlags\nrmnet_data0\t00000000\t00000000\t0001\n",
     );
-    w("rc.local", "sh /data/tailscale/start.sh &\nexit 0\n");
     w(
         "proc/100/stat",
         &format!(
@@ -172,8 +157,6 @@ fn root(tag: &str) -> (PathBuf, Paths) {
         thermal: r.join("thermal"),
         cpufreq: r.join("cpufreq"),
         route: r.join("route"),
-        rc_local: r.join("rc.local"),
-        ts_sock: r.join("ts.sock"),
         chill_dir: r.join("chill"),
         chill_state: r.join("chill.state"),
         thermal_eco: r.join("thermal-eco"),
@@ -206,11 +189,6 @@ fn reads_the_device_files_as_the_guard() {
     assert_eq!(x.screen_known, Some(false));
     assert_eq!(x.zt, Some(41_000), "the modem-side zone is not read");
     assert_eq!(x.thr, Some(false));
-    assert!(
-        x.ts_on,
-        "default route by the cellular link and rc.local starts it"
-    );
-    assert_eq!(x.ts_ok, Some(false), "no socket: down");
     assert_eq!(x.rss.get("core"), Some(&3456));
     assert!(x.free_mb.is_some());
     assert_eq!(x.dump_mb, Some(0));
@@ -228,43 +206,6 @@ fn reads_the_device_files_as_the_guard() {
     let unknown = st.read(&p, &BTreeMap::new(), 0);
     assert_eq!(unknown.charging_known, None);
     assert_eq!(unknown.screen_known, None);
-    let _ = std::fs::remove_dir_all(&r);
-}
-
-/// The LocalAPI check over a real unix socket.
-#[test]
-fn ts_check_over_a_real_socket() {
-    use std::io::{Read as _, Write as _};
-    let (r, p) = root("ts");
-    let l = std::os::unix::net::UnixListener::bind(&p.ts_sock).unwrap();
-    let srv = std::thread::spawn(move || {
-        for body in [
-            r#"{"BackendState":"Running","Self":{"Online":true}}"#,
-            r#"{"BackendState":"NeedsLogin","Self":{"Online":false}}"#,
-        ] {
-            let (mut c, _) = l.accept().unwrap();
-            let mut req = [0u8; 512];
-            let n = c.read(&mut req).unwrap();
-            assert!(
-                String::from_utf8_lossy(&req[..n])
-                    .starts_with("GET /localapi/v0/status HTTP/1.0\r\nHost: local-tailscaled.sock")
-            );
-            let _ = c.write_all(
-                format!("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{body}")
-                    .as_bytes(),
-            );
-        }
-        let (mut c, _) = l.accept().unwrap();
-        let _ = c.write_all(b"HTTP/1.0 403 Forbidden\r\n\r\n");
-    });
-    assert_eq!(ts_check(&p.ts_sock), Some(true));
-    assert_eq!(ts_check(&p.ts_sock), Some(false));
-    assert_eq!(
-        ts_check(&p.ts_sock),
-        None,
-        "an answer that says nothing: not checked"
-    );
-    srv.join().unwrap();
     let _ = std::fs::remove_dir_all(&r);
 }
 
@@ -411,4 +352,20 @@ fn an_hour_saved_before_the_radio_fields_still_loads() {
     }
     let a: Acc = serde_json::from_value(v).unwrap();
     assert_eq!(a.power()["off_home_cli_s"], 0);
+}
+
+#[test]
+fn saved_hour_with_retired_tailnet_fields_still_loads() {
+    let mut v = serde_json::to_value(Acc::default()).unwrap();
+    let obj = v.as_object_mut().unwrap();
+    obj.insert("ts_on_s".into(), json!(3600));
+    obj.insert("ts_chk_s".into(), json!(3000));
+    obj.insert("ts_ok_s".into(), json!(0));
+    obj.insert("chill_on_s".into(), json!(3600));
+    obj.insert("chill_ok_s".into(), json!(3500));
+    let a: Acc = serde_json::from_value(v).unwrap();
+    let proc = a.proc_();
+    assert_eq!(proc["chill_on_s"], 3600);
+    assert_eq!(proc["chill_ok_s"], 3500);
+    assert!(proc.get("ts_on_s").is_none());
 }

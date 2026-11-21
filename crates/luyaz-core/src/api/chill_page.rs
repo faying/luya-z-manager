@@ -6,6 +6,8 @@
 use axum::{body::Bytes, extract::State, response::Response};
 use luyaz_api::chill as ch;
 use serde_json::{Value, json};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 use std::time::Duration;
 
 use super::{Compat, reply};
@@ -49,23 +51,45 @@ pub async fn status(State(c): State<Compat>) -> Response {
         .and_then(|v| v.get("state"))
         .and_then(Value::as_str)
         == Some("running");
-    let (mut version, mut proxies, mut mode) = (None, None, None);
+    let (mut version, mut proxies, mut mode, mut providers) = (None, None, None, None);
     if running && let Some((client, secret)) = mihomo(&c, 3) {
         let api = &c.src.mihomo;
-        version = get_json(&client, &secret, &format!("{api}/version")).await;
-        proxies = get_json(&client, &secret, &format!("{api}/proxies")).await;
-        mode = get_json(&client, &secret, &format!("{api}/configs"))
-            .await
-            .and_then(|v| v.get("mode").and_then(Value::as_str).map(str::to_string));
+        let version_url = format!("{api}/version");
+        let proxies_url = format!("{api}/proxies");
+        let configs_url = format!("{api}/configs");
+        let providers_url = format!("{api}/providers/proxies");
+        let configs;
+        (version, proxies, configs, providers) = tokio::join!(
+            get_json(&client, &secret, &version_url),
+            get_json(&client, &secret, &proxies_url),
+            get_json(&client, &secret, &configs_url),
+            get_json(&client, &secret, &providers_url),
+        );
+        mode = configs.and_then(|v| v["mode"].as_str().map(str::to_owned));
     }
-    let data = ch::status_data(
+    let mut data = ch::status_data(
         st,
         version.as_ref(),
         proxies.as_ref(),
         mode,
         super::status::manual_first_summary(&c),
-        super::status::home_exit_summary(&c),
     );
+    let configs = crate::state::blocking(move || super::chill_profiles::summary(&c)).await;
+    data["active_profile"] = configs["profiles"]
+        .as_array()
+        .and_then(|all| all.iter().find(|p| p["active"] == true))
+        .cloned()
+        .unwrap_or(Value::Null);
+    data["configs"] = configs;
+    let ipv6_mode = match data["ipv6_mode"].as_str() {
+        Some(mode @ ("blocked" | "tun")) => mode,
+        _ => "unavailable",
+    };
+    data["ipv6_mode"] = json!(ipv6_mode);
+    let mut stats = providers_data(providers.as_ref());
+    data["provider_count"] = json!(stats["providers"].as_array().map_or(0, Vec::len));
+    data["group_count"] = json!(data["groups"].as_array().map_or(0, Vec::len));
+    data["providers"] = stats["providers"].take();
     reply(200, json!({"ok": true, "data": data}))
 }
 
@@ -88,6 +112,9 @@ pub async fn regions(State(c): State<Compat>, body: Bytes) -> Response {
     let (group, member) = match ch::region_wanted(&body) {
         Ok(w) => w,
         Err((s, b)) => return reply(s, b),
+    };
+    let Some(_slot) = super::chill_jobs::reserve(&c) else {
+        return super::chill_jobs::busy();
     };
     let Some((client, secret)) = mihomo(&c, 3) else {
         return reply(500, json!({"ok": false, "error": "internal"}));
@@ -146,95 +173,88 @@ pub async fn bypass_get(State(c): State<Compat>) -> Response {
     )
 }
 
-/// `sh -c` with a deadline; (ok, stdout + stderr).
-fn sh(cmd: &str) -> (bool, String) {
-    luyaz_wifi::output_within(
-        std::process::Command::new("sh").arg("-c").arg(cmd),
-        Duration::from_secs(5),
-    )
-    .map_or_else(
-        |e| (false, format!("exec failed: {e}")),
-        |o| {
-            let both = [o.stdout.as_slice(), o.stderr.as_slice()].map(String::from_utf8_lossy);
-            (o.status.success(), both.concat())
-        },
-    )
-}
-
-/// PUT /api/services/chill/bypass `{ips: [...]}` (the full list): only `ip rule` entries at
-/// chill.sh's priority — no reload, no config touched — then the list into chill.env, so the
-/// next core start (chill.sh's `apply_bypass`) makes the same rules.
+/// PUT /api/services/chill/bypass `{ips: [...]}`. CHILL commits the DNS and route
+/// changes together, then persists the list so it can replay it at startup.
 pub async fn bypass_set(State(c): State<Compat>, body: Bytes) -> Response {
     let ips = match ch::bypass_wanted(&body) {
         Ok(ips) => ips,
         Err((s, b)) => return reply(s, b),
     };
-    let rules = ips.clone();
-    let added = crate::state::blocking(move || -> Result<(), String> {
-        // one at a time: this `ip rule del pref N` removes one entry per call
-        for _ in 0..ch::MAX_BYPASS_IPS + 8 {
-            let (_, out) = sh(&format!(
-                "ip rule show | awk -F: '$1+0=={} {{print $1; exit}}'",
-                ch::BYPASS_PRIO
-            ));
-            let pref = out.trim().to_string();
-            if pref.is_empty() {
-                break;
-            }
-            let _ = sh(&format!("ip rule del pref {pref}"));
-        }
-        for ip in &rules {
-            let (ok, out) = sh(&format!(
-                "ip rule add from {ip} priority {} lookup main",
-                ch::BYPASS_PRIO
-            ));
-            if !ok {
-                return Err(format!(
-                    "failed to add rule for {ip}: {}",
-                    ch::tail(&out, 3)
-                ));
-            }
-        }
-        Ok(())
-    })
-    .await;
-    if let Err(e) = added {
-        return reply(500, json!({"ok": false, "error": e}));
+    let script = c.path("/data/chill/chill.sh");
+    if !script.is_file() {
+        return reply(409, json!({"ok": false, "error": "chill_not_installed"}));
     }
-    let p = c.path(ch::CHILL_ENV);
-    let out = match ch::env_with(
-        &std::fs::read_to_string(&p).unwrap_or_default(),
-        &[("CHILL_BYPASS_IP", &ips.join(" "))],
-    ) {
-        Ok(o) => o,
-        Err(e) => return reply(500, json!({"ok": false, "error": e})),
+    let Some(slot) = super::chill_jobs::reserve(&c) else {
+        return super::chill_jobs::busy();
     };
-    // chill.env holds the subscription and mihomo's secret: keep its mode
-    let mode = std::fs::metadata(&p).ok().map(|m| m.permissions());
-    if let Err(e) = super::ops::atomic_write(&p, out.as_bytes()) {
-        return reply(
-            500,
-            json!({"ok": false, "error": format!("cannot write chill.env: {e}")}),
+    // The detached worker owns the slot until the script finishes even if
+    // the HTTP request is cancelled during the network update.
+    tokio::spawn(async move {
+        let _release = slot;
+        // `bypass_wanted` canonicalizes each entry to an IPv4 address.
+        let command = format!(
+            "sh {} bypass-set {}",
+            super::chill_jobs::shell_quote(&script.to_string_lossy()),
+            ips.join(" ")
         );
-    }
-    if let Some(m) = mode {
-        let _ = std::fs::set_permissions(&p, m);
-    }
-    reply(200, json!({"ok": true, "data": {"ips": ips}}))
+        match crate::ops::chill::sh_within(&command, Duration::from_secs(12)).await {
+            Ok((true, _)) => reply(200, json!({"ok": true, "data": {"ips": ips}})),
+            Ok((false, _)) => reply(409, json!({"ok": false, "error": "bypass_dns_unavailable"})),
+            Err(_) => reply(500, json!({"ok": false, "error": "bypass_update_failed"})),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| reply(500, json!({"ok": false, "error": "bypass_update_failed"})))
 }
 
 // ---- the page's other reads, and the subscription refresh (8d-1b, batch 5b) ----
 
 const CHILL_LOG: &str = "/tmp/chill.log";
+const LOG_TAIL_BYTES: u64 = 512 * 1024;
 /// A refresh can fetch the subscription.
 const REFRESH_SECS: u64 = 15;
+
+fn log_limit(query: &str) -> usize {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter(|(key, _)| matches!(*key, "lines" | "n"))
+        .find_map(|(_, value)| value.parse::<usize>().ok())
+        .map_or(200, |n| n.clamp(1, 2000))
+}
+
+fn tail_log(path: &Path, limit: usize) -> std::io::Result<Vec<String>> {
+    let mut file = std::fs::File::open(path)?;
+    let start = file.metadata()?.len().saturating_sub(LOG_TAIL_BYTES);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start))?;
+    }
+    let mut buf = Vec::new();
+    file.take(LOG_TAIL_BYTES).read_to_end(&mut buf)?;
+    let text = String::from_utf8_lossy(&buf);
+    let text = if start > 0 {
+        text.split_once('\n').map_or("", |(_, rest)| rest)
+    } else {
+        text.as_ref()
+    };
+    let mut lines: Vec<_> = text.lines().rev().take(limit).map(str::to_owned).collect();
+    lines.reverse();
+    Ok(lines)
+}
 
 /// GET /api/services/chill/log?lines=N
 pub async fn log(
     State(c): State<Compat>,
     axum::extract::RawQuery(q): axum::extract::RawQuery,
 ) -> Response {
-    super::ts_reads::log_reply(&c, CHILL_LOG, q).await
+    let limit = log_limit(q.as_deref().unwrap_or_default());
+    let path = c.path(CHILL_LOG);
+    let read = tokio::task::spawn_blocking(move || tail_log(&path, limit));
+    let lines = match tokio::time::timeout(Duration::from_secs(8), read).await {
+        Ok(Ok(Ok(lines))) => lines,
+        _ => Vec::new(),
+    };
+    reply(200, json!({"ok": true, "data": {"path": CHILL_LOG, "lines": lines, "limit": limit}}))
 }
 
 /// The agent's `providers_list` from mihomo's `/providers/proxies`: the real subscriptions (not

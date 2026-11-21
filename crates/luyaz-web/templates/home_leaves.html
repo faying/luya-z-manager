@@ -78,6 +78,8 @@
 <span id="hw-2" class="nd-row__sub" data-data>{{ v.wifi_2 }}</span>
 <!--leaf-->
 <span id="hw-5" class="nd-row__sub" data-data>{{ v.wifi_5 }}</span>
+<!--leaf-->
+<div id="hw-guest"{% if v.wifi_guest.is_none() %} hidden{% endif %}>{% if let Some((ssid, state)) = v.wifi_guest %}<a class="nd-row nd-row--two" href="/router/wifi-guest"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Guest Wi-Fi", "访客 Wi-Fi") }}</span>{% if !ssid.is_empty() %}<span class="nd-row__sub block nd-mono" data-data>{{ ssid }}</span>{% endif %}<span class="nd-row__sub block">{{ state }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>{% endif %}</div>
 {% if v.ca_full %}<!--leaf-->
 <div id="hm-ca" class="nd-group{% if v.ca_stale %} nd-stale{% endif %}">{% call ca_rows(v) %}{% endcall %}</div>
 {% endif %}{% for c in v.ca_rows %}<!--leaf-->
@@ -89,5 +91,3 @@
 {% endif %}
 <!--leaf-->
 <a id="hm-scene" class="nd-module nd-module--cream hm-o8" href="/router/scenario"><span class="nd-module__head">{{ v.l.pick("Scenarios", "情景") }}{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{% match v.scene %}{% when Scene::Loading %}<span class="nd-skel" style="width:10ch"></span>{% when Scene::None %}<p class="nd-body text-nd-t2">{{ v.l.pick("No scenarios yet. Set up ›", "还没有情景，去设置 ›") }}</p>{% when Scene::On(s) %}<p class="nd-body"><span data-data>{{ s.name }}</span>{% if s.pinned %}<span class="nd-aux">{{ v.l.pick(", pinned", "，已固定") }}</span>{% endif %}{% if s.engine_off %}<span class="nd-aux">{{ v.l.pick(", engine off", "，引擎已关") }}</span>{% endif %}</p>{% if let Some(t) = s.last %}<p class="nd-aux">{% match v.l %}{% when Lang::En %}Switched {{ t }}{% when Lang::Zh %}{{ t }} 切换{% endmatch %}</p>{% endif %}{% endmatch %}</a>
-<!--leaf-->
-<a id="hm-ts" class="nd-module nd-module--navy hm-o9{% if v.ts_stale %} hm-dim{% endif %}" href="/services/tailscale"><span class="nd-module__head">Tailscale{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{{ v.ts|safe }}</a>

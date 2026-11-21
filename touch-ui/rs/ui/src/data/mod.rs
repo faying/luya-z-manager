@@ -14,13 +14,13 @@ pub mod esim;
 pub mod http;
 pub mod landing;
 pub mod latency;
+mod lcd;
 pub mod live;
 pub mod netinfo;
 pub mod scenario;
 pub mod screen_feed;
 pub mod ladder;
 pub mod speedtest;
-pub mod tailscale;
 pub mod today;
 pub mod usage;
 #[cfg(test)]

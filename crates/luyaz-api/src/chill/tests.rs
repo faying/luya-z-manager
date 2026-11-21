@@ -1,88 +1,16 @@
 use super::*;
 
-// ── home exit and the public status block ──
-
+/// The public CHILL fields the screen reads.
 #[test]
-fn home_exit_value() {
-    assert_eq!(
-        parse_home_exit("192.0.2.10:1080"),
-        Some((Ipv4Addr::new(192, 0, 2, 10), 1080))
-    );
-    for bad in [
-        "",
-        "10.0.0.1",
-        "10.0.0.1:",
-        ":1080",
-        "1.2.3.4:70000",
-        "1.2.3.4:0",
-        "1.2.3.256:80",
-        "1.2.3:80",
-        "a.b.c.d:1",
-        "1.2.3.4:80:1",
-        "1.2.3.4:1080'",
-        "01.2.3.4:+5",
-    ] {
-        assert_eq!(parse_home_exit(bad), None, "{bad}");
-    }
-}
-
-#[test]
-fn sites_in_the_list() {
-    assert_eq!(count_sites("\n# note\n+.a.cn\n  \nb.com\n"), 2);
-}
-
-#[test]
-fn tailscale_path() {
-    let ip = Ipv4Addr::new(192, 168, 50, 88);
-    let st = |online: bool, cur: &str| {
-        json!({"Peer": {
-            "a": {"Online": true, "CurAddr": "1.1.1.1:41641", "PrimaryRoutes": ["192.168.9.0/24"]},
-            "b": {"Online": online, "CurAddr": cur, "PrimaryRoutes": ["192.168.50.0/24"]},
-        }})
-    };
-    assert_eq!(ts_path(&st(true, "203.0.113.5:41641"), ip), Some("direct"));
-    assert_eq!(ts_path(&st(true, ""), ip), Some("relay"));
-    assert_eq!(ts_path(&st(false, ""), ip), Some("offline"));
-    assert_eq!(ts_path(&st(true, ""), Ipv4Addr::new(192, 168, 51, 1)), None);
-    assert_eq!(ts_path(&json!({}), ip), None);
-}
-
-#[test]
-fn chill_modes() {
-    let run = json!({"state": "running"});
-    assert_eq!(chill_mode(Some(&run), "rule\n"), ChillMode::Rule);
-    assert_eq!(chill_mode(Some(&run), ""), ChillMode::Rule);
-    assert_eq!(chill_mode(Some(&run), "global"), ChillMode::Global);
-    assert_eq!(chill_mode(Some(&run), "direct"), ChillMode::Direct);
-    assert_eq!(
-        chill_mode(
-            Some(&json!({"state": "direct", "reason": "overheat"})),
-            "rule"
-        ),
-        ChillMode::Hot
-    );
-    assert_eq!(
-        chill_mode(
-            Some(&json!({"state": "direct", "reason": "disabled"})),
-            "rule"
-        ),
-        ChillMode::Off
-    );
-    assert_eq!(chill_mode(None, "rule"), ChillMode::Off);
-}
-
-/// D7③: old screens read these four; the rest may only ever be added.
-#[test]
-fn chill_shape_only_grows() {
+fn public_chill_shape() {
     let mf = json!({"on_backup": true, "notice": "手选的 JP 03 不通，已临时换到 🇯🇵 日本（自动）",
         "notice_en": "JP 03 is down; using 🇯🇵 日本 for now (auto)", "notice_at": 1_790_942_400u64, "notice_kind": "backup"});
-    let v = public("running", None, true, &mf, Value::Null);
+    let v = public("running", None, true, &mf);
     let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
     keys.sort_unstable();
     assert_eq!(
         keys,
         [
-            "home_exit",
             "notice",
             "notice_at",
             "notice_en",
@@ -104,7 +32,6 @@ fn chill_shape_only_grows() {
         Some("user"),
         false,
         &json!({"on_backup": false}),
-        Value::Null,
     );
     for k in ["notice", "notice_en", "notice_at", "notice_kind"] {
         assert!(v[k].is_null(), "{k}");
@@ -116,11 +43,11 @@ fn chill_shape_only_grows() {
 
 #[test]
 fn env_values_as_chill_sh_writes_them() {
-    let env = "CHILL_HOME_EXIT='192.0.2.10:1080'\nCHILL_HOME_IP=1\nCHILL_HOME_MEDIA=\"0\"\n";
-    assert_eq!(env_var(env, "CHILL_HOME_EXIT"), "192.0.2.10:1080");
-    assert_eq!(env_var(env, "CHILL_HOME_IP"), "1");
-    assert_eq!(env_var(env, "CHILL_HOME_MEDIA"), "0");
-    assert_eq!(env_var(env, "CHILL_HOME"), "");
+    let env = "SUB_URL='https://example.test/sub'\nCHILL_API_LAN=1\nCHILL_REGIONS=\"JP\"\n";
+    assert_eq!(env_var(env, "SUB_URL"), "https://example.test/sub");
+    assert_eq!(env_var(env, "CHILL_API_LAN"), "1");
+    assert_eq!(env_var(env, "CHILL_REGIONS"), "JP");
+    assert_eq!(env_var(env, "CHILL_API"), "");
     assert_eq!(state_and_reason(None), ("unknown".into(), None));
     let st = json!({"state": "direct", "reason": "overheat"});
     assert_eq!(
@@ -174,156 +101,6 @@ fn manual_first_notice_keeps_ten_minutes_unless_on_backup() {
     };
     let v = manual_first_summary(&old, 1001);
     assert!(v["notice_en"].is_null() && v["notice_kind"].is_null() && v["notice"] == "恢复手选");
-}
-
-fn home() -> Home {
-    Home {
-        ready: true,
-        ..Default::default()
-    }
-}
-
-#[test]
-fn home_line_only_when_something_is_on() {
-    assert!(home_summary(&home()).is_null());
-    assert!(
-        home_summary(&Home {
-            ready: false,
-            ip: true,
-            ..home()
-        })
-        .is_null()
-    );
-    let busy = Home {
-        busy: json!({"item": "rest", "on": true, "phase": "trial", "until": 9}),
-        ..home()
-    };
-    assert_eq!(
-        home_summary(&busy),
-        json!({"media": false, "ip": false, "rest": false, "rest_until": null, "fallback": false})
-    );
-    let rest = Home {
-        rest: true,
-        rest_until: 7200,
-        home_ok: Some(false),
-        ..home()
-    };
-    assert_eq!(
-        home_summary(&rest),
-        json!({"media": false, "ip": false, "rest": true, "rest_until": 7200, "fallback": true})
-    );
-    assert!(wants_fallback(&rest, ChillMode::Rule) && !wants_fallback(&rest, ChillMode::Global));
-    assert!(!wants_fallback(
-        &Home {
-            media: true,
-            home_ok: Some(false),
-            ..home()
-        },
-        ChillMode::Rule
-    ));
-}
-
-#[test]
-fn home_get_as_the_screens_read_it() {
-    assert_eq!(
-        home_get(&Home::default(), &Around::default()),
-        json!({"configured": true, "updating": true})
-    );
-    let notice = json!({"kind": "failed", "item": "ip", "text": "家里不通", "text_en": "Home down", "at": 5000, "code": "home_no_answer", "detail": ""});
-    let m = Home {
-        ip: true,
-        rest: true,
-        rest_until: 6000,
-        home_ok: Some(true),
-        home_ms: Some(42),
-        probed_at: 4990,
-        notice: notice.clone(),
-        busy: Value::Null,
-        ..home()
-    };
-    let a = Around {
-        serving_mcc: Some(460),
-        home_mcc: Some(460),
-        true_roaming: Some(false),
-        sites: 3,
-        tailscale: Some("direct"),
-        now: 5500,
-        ..Default::default()
-    };
-    let v = home_get(&m, &a);
-    assert_eq!(
-        v["where"],
-        json!({"serving_mcc": 460, "true_roaming": false, "in_china": true})
-    );
-    assert_eq!(v["items"]["ip"], json!({"on": true, "sites": 3}));
-    assert_eq!(
-        v["items"]["rest"],
-        json!({"on": true, "until": 6000, "can_extend": true})
-    );
-    assert_eq!(v["home"], json!({"ok": true, "ms": 42, "checked_at": 4990}));
-    assert_eq!(
-        (
-            v["tailscale"].as_str(),
-            v["blocked"].clone(),
-            v["busy"].clone()
-        ),
-        (Some("direct"), Value::Null, Value::Null)
-    );
-    assert_eq!(v["notice"], notice);
-    // the notice goes after ten minutes; rest can't be extended with more than ten left or after its end
-    let later = Around {
-        now: 5000 + NOTICE_KEEP,
-        ..a.clone()
-    };
-    assert!(home_get(&m, &later)["notice"].is_null());
-    assert_eq!(
-        home_get(
-            &m,
-            &Around {
-                now: 6000 - EXTEND_WINDOW - 1,
-                ..a.clone()
-            }
-        )["items"]["rest"]["can_extend"],
-        false
-    );
-    assert_eq!(
-        home_get(&m, &Around { now: 6000, ..a })["items"]["rest"]["can_extend"],
-        false
-    );
-}
-
-/// luyaz-ui reads GET's `data` into 3072 bytes and `services.chill.home_exit` into 256:
-/// the fullest replies must fit.
-#[test]
-fn the_fullest_replies_fit_the_screen_buffers() {
-    let long = "很".repeat(60);
-    let notice = json!({"kind": "failed", "item": "rest", "text": long, "text_en": "E".repeat(180), "at": 5000, "code": "home_no_answer", "detail": "D".repeat(200)});
-    let m = Home {
-        media: true,
-        ip: true,
-        rest: true,
-        rest_until: 1_790_000_000,
-        home_ok: Some(false),
-        home_ms: Some(65535),
-        probed_at: 1_790_000_000,
-        busy: json!({"item": "media", "on": true, "phase": "checking", "until": 1_790_000_000u64}),
-        notice,
-        ..home()
-    };
-    let a = Around {
-        serving_mcc: Some(440),
-        home_mcc: Some(460),
-        true_roaming: Some(true),
-        blocked: Some("mode_global"),
-        sites: 9999,
-        fallback_to: Some("🇯🇵 日本 自动选择 很长的名字".into()),
-        tailscale: Some("offline"),
-        now: 5001,
-    };
-    let get = home_get(&m, &a).to_string();
-    assert!(get.len() < 3072 - 64, "GET data {} bytes", get.len());
-    let line = home_summary(&m).to_string();
-    assert!(line.len() < 256, "home_exit {} bytes", line.len());
 }
 
 #[test]

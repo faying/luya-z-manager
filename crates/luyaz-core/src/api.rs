@@ -11,8 +11,8 @@
 //! duties (`resume`) started only when that port bound. Both are gone.
 //!
 //! Step 8a/8b/8c: the reads (`/api/screen`, `/api/alerts`, `/api/public/status`, `/api/health`,
-//! GET `/api/services/chill/home`, `/api/netinfo`) rendered by u60-api from u60d's blocks, its
-//! shadow replays and the agent's files (`status.rs`, `home.rs`, `netinfo.rs`).
+//! `/api/netinfo`) rendered by u60-api from u60d's blocks, its shadow replays and the agent's
+//! files (`status.rs`, `netinfo.rs`).
 //! Step 8d: the writes (`ops.rs`) through u60d's own `/control` (`control.rs`). Everything else
 //! answers 404 `not_in_compat_yet`.
 
@@ -27,6 +27,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tower_http::limit::RequestBodyLimitLayer;
 #[cfg(test)]
 use tokio::net::TcpListener;
 use luyaz_api::alerts::Alerts;
@@ -40,6 +41,7 @@ mod charge;
 mod health;
 mod chill_jobs;
 mod chill_page;
+mod chill_profiles;
 pub(crate) mod control;
 mod device_admin;
 mod esim;
@@ -49,7 +51,6 @@ pub(crate) mod finding;
 pub(crate) mod approve;
 pub(crate) mod propose;
 pub(crate) mod home;
-pub(crate) mod home_exit;
 mod neighbors;
 mod net_reads;
 mod netinfo;
@@ -61,7 +62,6 @@ mod speed;
 mod ladder;
 mod status;
 mod sys_reads;
-mod ts_reads;
 pub(crate) mod underlay;
 pub(crate) mod watch;
 mod wifi_reads;
@@ -81,10 +81,8 @@ pub fn start(c: Compat) {
 pub struct Sources {
     /// u60d's blocks (the signal block's roaming fields)
     pub hub: Option<Arc<crate::block::Hub>>,
-    /// mihomo's API (the home exit's fallback group)
+    /// mihomo's control API
     pub mihomo: String,
-    /// `tailscale status --json` (blocking; run off the async threads)
-    pub tailscale: Arc<dyn Fn() -> Option<Value> + Send + Sync>,
     /// one ubus read (`state::ubus`, through the collector)
     pub ubus: Arc<dyn Fn(&'static str, &'static str, Value) -> UbusReply + Send + Sync>,
     /// the Wi-Fi stations on every AP interface (`iw`; blocking)
@@ -133,13 +131,12 @@ impl luyaz_esim::Host for NoCard {
 }
 
 impl Sources {
-    /// No blocks, no mihomo, no Tailscale (tests).
+    /// No blocks or mihomo (tests).
     #[cfg(test)]
     pub fn none() -> Self {
         Sources {
             hub: None,
             mihomo: "http://127.0.0.1:1".into(),
-            tailscale: Arc::new(|| None),
             ubus: Arc::new(|_, _, _| Box::pin(async { Err("no ubus".to_string()) })),
             stations: Arc::new(Vec::new),
             control: Arc::new(control::Client::new(
@@ -163,7 +160,6 @@ impl Sources {
             hub,
             mihomo: std::env::var("LUYAZ_MIHOMO_API")
                 .unwrap_or_else(|_| "http://127.0.0.1:9999".into()),
-            tailscale: Arc::new(home::tailscale_status),
             // get_sim_info 走 `state::sim_info`：读到的给采集下一轮用
             ubus: Arc::new(|s, m, a| {
                 Box::pin(async move {
@@ -187,7 +183,6 @@ pub struct Compat {
     /// prefix for every device path (`LUYAZ_HOST_ROOT` on the device, a temp dir in tests)
     pub(crate) root: Arc<String>,
     pub(crate) src: Arc<Sources>,
-    ts: Arc<home::TsCache>,
     net: Arc<netinfo::NetCache>,
     pub(crate) clock: Arc<ops::Clock>,
     /// deep diagnosis' gate (D10), shared by the speed test, search/register and the diagnosis
@@ -215,8 +210,6 @@ pub struct Compat {
     chill: Arc<chill_jobs::ChillJobs>,
     /// manual-first's engine (9g)
     pub(crate) manual_first: Arc<crate::engines::manual_first::Running>,
-    /// the home exit, when u60d runs it (`LUYAZ_HOME_EXIT=1`)
-    home_exit: Option<Arc<luyaz_home_exit::HomeExit>>,
     /// the writes and the background duties (on the device: [`Compat::from_host`]; tests without
     /// them look at the reads alone)
     pub(crate) writes: bool,
@@ -256,7 +249,6 @@ impl Compat {
             ladder: Arc::default(),
             esim,
             src: Arc::new(src),
-            ts: Arc::default(),
             net,
             clock: Arc::default(),
             gate,
@@ -269,7 +261,6 @@ impl Compat {
             exits: false,
             chill: Arc::default(),
             manual_first: Arc::default(),
-            home_exit: None,
             writes: false,
             admin: device_admin::Host::default(),
         }
@@ -288,31 +279,9 @@ impl Compat {
         self
     }
 
-    /// u60d runs the home exit: its own machine, loop and switches.
-    pub fn with_home_exit(mut self, on: bool) -> Self {
-        self.home_exit = on.then(|| {
-            Arc::new(luyaz_home_exit::HomeExit::new(Arc::new(crate::engines::home_exit::U60dHost {
-                root: self.root.to_string(),
-                hub: self.src.hub.clone(),
-                mihomo: self.src.mihomo.clone(),
-                tailscale: self.src.tailscale.clone(),
-            })))
-        });
-        if let Some(e) = &self.home_exit {
-            crate::engines::home_exit::register(e);
-        }
-        self
-    }
-
-    /// Tests: a home exit engine built by the test (fake mihomo, fast clock).
-    #[cfg(test)]
-    pub fn with_home_exit_engine(mut self, e: Arc<luyaz_home_exit::HomeExit>) -> Self {
-        self.home_exit = Some(e);
-        self
-    }
-
     /// The scenario engine reaches the device this way.
     pub fn with_scenario_io(mut self, make: crate::engines::scenario::MakeIo) -> Self {
+        self.scenario.initialize(&self, &make);
         self.scenario_io = Some(make);
         self
     }
@@ -338,9 +307,6 @@ impl Compat {
 
     /// At start, with writes on: finish what u60d's guard marker says was in flight.
     pub async fn resume(&self) {
-        if let Some(e) = &self.home_exit {
-            e.start();
-        }
         if self.writes {
             tokio::spawn(watch::sample(self.clone()));
             tokio::spawn(watch::apn_watch(self.clone()));
@@ -357,9 +323,7 @@ impl Compat {
             tokio::spawn(crate::engines::sms_forward::run(self.clone()));
             tokio::spawn(crate::engines::guard_duties::run(self.clone()));
             tokio::spawn(crate::engines::sentinel_watch::run(self.clone()));
-            if let Some(make) = self.scenario_io.clone() {
-                tokio::spawn(crate::engines::scenario::run(self.clone(), make));
-            }
+            self.resume_scenario().await;
             if let Some(io) = self.scheduler_io.clone() {
                 crate::engines::scheduler::spawn(self.clone(), io);
             }
@@ -374,6 +338,30 @@ impl Compat {
             let esim = self.esim.clone();
             std::thread::spawn(move || esim.run_receipts());
             ops::resume(self.clone()).await;
+        }
+    }
+
+    async fn resume_scenario(&self) {
+        use luyaz_scenario::DisabledState;
+
+        let Some(make) = &self.scenario_io else { return };
+        self.scenario.initialize(self, make);
+        let Some(engine) = self.scenario.engine() else { return };
+        let disabled = engine.disabled_state();
+        // The previous release used an empty file for Off. Migrate it as an
+        // interrupted shutdown so startup never applies a scenario over it.
+        let legacy_off = disabled == DisabledState::Invalid
+            && std::fs::read(self.path(luyaz_scenario::DISABLED_FLAG)).is_ok_and(|bytes| bytes.is_empty());
+        let result = match disabled {
+            DisabledState::Active => self.scenario.start_worker(self, make),
+            DisabledState::Stopping | DisabledState::Invalid if legacy_off || disabled == DisabledState::Stopping => {
+                let c = self.clone();
+                crate::state::blocking(move || c.scenario.stop_worker(&c)).await
+            }
+            _ => return,
+        };
+        if let Err(e) = result {
+            eprintln!("[compat] scenario: startup lifecycle: {e}");
         }
     }
 
@@ -408,7 +396,6 @@ impl Compat {
         .with_scenario_io(crate::engines::scenario::device_io(v2.clone()))
         .with_scheduler_io(Arc::new(crate::engines::scheduler::Http { base: v2, token }))
         .with_exits(true)
-        .with_home_exit(crate::engines::home_exit::enabled())
         .with_chill_slot(crate::ops::chill::slot())
     }
 
@@ -452,7 +439,6 @@ impl Compat {
             .route("/api/health/crashlog", get(health::crashlog))
             .route("/api/screen", get(screen))
             .route("/api/alerts", get(alerts_get))
-            .route("/api/poller", get(poller_get))
             .route("/api/netinfo/neighbors/scan", get(neighbors::scan).post(neighbors::scan))
             .route("/api/netinfo", get(netinfo::get))
             // 8d-1b: the agent's last reads luyaz-web used (agent path and reply shape)
@@ -472,24 +458,14 @@ impl Compat {
                 "/api/cell/signal-detect/progress",
                 get(cell_detect::progress),
             )
-            .route("/api/cell/signal-detect/results", get(cell_detect::results))
-            // batch 5b: Tailscale's page (agent paths and reply shapes)
-            .route("/api/services/tailscale", get(ts_reads::status))
-            .route("/api/services/tailscale/log", get(ts_reads::log));
+            .route("/api/cell/signal-detect/results", get(cell_detect::results));
         // batch 5c: the device-admin reads (its writes and the AT port with the writes, below)
         r = device_admin::reads(r);
         // batch 5b: CHILL's page reads (the subscription list's PUT is a write, below)
         r = r
             .route("/api/services/chill/log", get(chill_page::log))
-            .route("/api/services/chill/providers", get(chill_page::providers_list));
-        r = r.route(
-            "/api/services/chill/home",
-            if self.home_exit.is_some() {
-                get(home_exit::get).put(home_exit::put)
-            } else {
-                get(home::get)
-            },
-        );
+            .route("/api/services/chill/providers", get(chill_page::providers_list))
+            .route("/api/services/chill/configs", get(chill_profiles::list));
         if self.writes {
             // netwatch, deep diagnosis and the APN monitor (9b)
             let group = Router::new()
@@ -569,24 +545,22 @@ impl Compat {
                 .route("/api/sms/forward/log", get(sms_forward::log_get))
                 .route("/api/sms/forward/log/clear", post(sms_forward::log_clear))
                 .route("/api/sms/forward/retry", post(sms_forward::retry));
-            // the scenario engine (9h): its routes and the actions only it needs
-            #[allow(unused_mut)]
-            let mut scen = Router::new()
+            // The scenario configuration stays available with the worker stopped.
+            let scen = Router::new()
                 .route("/api/scenario", get(scenario::get).put(scenario::put))
                 .route("/api/scenario/template", get(scenario::template))
                 .route("/api/scenario/enabled", axum::routing::put(scenario::enabled))
                 .route("/api/scenario/scan", get(scenario::scan))
-                .route("/api/scenario/log", get(scenario::log))
+                .route("/api/scenario/log", get(scenario::log));
+            let device_actions = Router::new()
                 .route("/api/wifi/guest", axum::routing::put(scenario::guest))
-                .route("/api/device/power-save", axum::routing::put(scenario::power_save));
-            scen = scen
+                .route("/api/device/power-save", axum::routing::put(scenario::power_save))
                 .route("/api/services/chill", get(chill_page::status))
                 .route("/api/services/chill/regions", axum::routing::put(chill_page::regions))
                 .route(
                     "/api/services/chill/bypass",
                     get(chill_page::bypass_get).put(chill_page::bypass_set),
                 );
-            let scen = scen.route_layer(middleware::from_fn_with_state(self.clone(), scenario::owned));
             // scheduled jobs (8d-1d)
             let sched = Router::new()
                 .route(
@@ -602,6 +576,7 @@ impl Compat {
                 .merge(charge)
                 .merge(sms)
                 .merge(scen)
+                .merge(device_actions)
                 .merge(sched)
                 .merge(device_admin::writes())
                 .route("/api/device/reboot", post(device_reboot))
@@ -632,7 +607,19 @@ impl Compat {
                 .route(
                     "/api/services/chill/providers/refresh",
                     post(chill_page::providers_refresh),
-                );
+                )
+                .route("/api/services/chill/configs/refresh", post(chill_profiles::refresh))
+                .route("/api/services/chill/configs/activate", post(chill_profiles::activate))
+                .route("/api/services/chill/configs/delete", post(chill_profiles::delete))
+                .route("/api/services/chill/mode", axum::routing::put(chill_profiles::mode));
+        }
+        r = r.layer(RequestBodyLimitLayer::new(crate::server::REQUEST_BODY_LIMIT));
+        if self.writes {
+            let profile_import = Router::new()
+                .route("/api/services/chill/configs/import", post(chill_profiles::import))
+                .layer(axum::extract::DefaultBodyLimit::disable())
+                .layer(RequestBodyLimitLayer::new(chill_profiles::IMPORT_BODY_LIMIT));
+            r = r.merge(profile_import);
         }
         r
     }
@@ -747,14 +734,6 @@ fn cursor_query(q: Option<&str>) -> Option<(u64, usize)> {
         }
     }
     Some((since?, limit))
-}
-
-/// GET /api/poller: `power.tailnet_poller` events and the allow list (poller.rs).
-async fn poller_get() -> Response {
-    let v = tokio::task::spawn_blocking(crate::poller::view)
-        .await
-        .unwrap_or(Value::Null);
-    reply(200, json!({"ok": true, "data": v}))
 }
 
 /// GET /api/alerts (the agent's `alerts::alerts_get`). With `?since=<seq>[&limit=]` the cursor
@@ -935,8 +914,6 @@ mod tests_net_reads;
 mod tests_wifi_reads;
 #[cfg(test)]
 mod tests_cell_detect;
-#[cfg(test)]
-mod tests_ts_reads;
 #[cfg(test)]
 mod tests_device_admin;
 #[cfg(test)]

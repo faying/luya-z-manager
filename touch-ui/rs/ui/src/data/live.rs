@@ -7,11 +7,12 @@ use super::background::{Cached, Task};
 use super::alerts::Alerts;
 use super::battery::BatteryEst;
 use super::landing::Landing;
+use super::lcd::LcdStatus;
 use super::usage::Usage;
 use super::latency::DirectLat;
 use super::today::Today;
 use super::versions::Versions;
-use super::chill::Chill;
+use super::chill::{Chill, ConfigProfile};
 use super::core_link::{Cfg, CoreLink};
 use super::diagnose::Diagnose;
 use super::esim::Esim;
@@ -21,10 +22,9 @@ use super::scenario::Scenario;
 use super::screen_feed::{ScreenFeed, SfCfg};
 use super::ladder::Ladder;
 use super::speedtest::Speedtest;
-use super::tailscale::Tailscale;
 use super::util;
 use crate::logic::Launch;
-use crate::source::{Activity, NiAct, Polled, Source};
+use crate::source::{Activity, NiAct, Polled, Source, WifiRead, WifiReply};
 use ui_model::Model;
 use plat::backlight::Backlight;
 use plat::key::Key;
@@ -45,7 +45,6 @@ pub struct Live {
     esim: Cached<Esim>,
     speed: Cached<Speedtest>,
     ladder: Cached<Ladder>,
-    ts: Cached<Tailscale>,
     diag: Cached<Diagnose>,
     bat: Cached<BatteryEst>,
     vers: Cached<Versions>,
@@ -54,14 +53,16 @@ pub struct Live {
     today: Cached<Today>,
     usage: Cached<Usage>,
     chill: Cached<Chill>,
-    aux: Option<Task<(i32, i32, i32)>>,
+    chill_config: Cached<ConfigProfile>,
+    wifi: Option<Task<WifiRead>>,
+    lcd_status: Option<LcdStatus>,
     pub bl: Backlight,
     pub key: Key,
 }
 
 impl Live {
-    /// The data side and the device's backlight and power key (key: None = offscreen).
-    pub fn new(key: Key) -> Live {
+    /// Offscreen runs may read a simulated backlight but never publish device events.
+    pub fn new(key: Key, physical_panel: bool) -> Live {
         Live {
             agent: CoreApi::default(),
             core: CoreLink::background(Cfg::default()),
@@ -72,7 +73,6 @@ impl Live {
             esim: Cached::new(Esim::default()),
             speed: Cached::new(Speedtest::default()),
             ladder: Cached::new(Ladder::default()),
-            ts: Cached::new(Tailscale::default()),
             diag: Cached::new(Diagnose::default()),
             bat: Cached::new(BatteryEst::default()),
             vers: Cached::new(Versions::default()),
@@ -81,7 +81,9 @@ impl Live {
             today: Cached::new(Today::default()),
             usage: Cached::new(Usage::default()),
             chill: Cached::new(Chill::default()),
-            aux: None,
+            chill_config: Cached::new(ConfigProfile::default()),
+            wifi: None,
+            lcd_status: physical_panel.then(LcdStatus::default),
             bl: Backlight::init(),
             key,
         }
@@ -96,6 +98,11 @@ impl Live {
 
     /// The view model from the getters.
     pub fn build(&mut self) -> Model {
+        let panel = self.bl.observed_lit();
+        if let Some(status) = &mut self.lcd_status {
+            status.observe(panel);
+        }
+        let panel_lit = panel.unwrap_or(false) as i32;
         let (data_ok, data) = self.core.refresh();
         let (live_ok, live) = self.core.refresh_live();
         let notice = self.core.notice(NOTICE_MS);
@@ -129,6 +136,9 @@ impl Live {
             chill_traffic: Some(self.chill.traffic().into()),
             chill_speed: Some(self.chill.speed().into()),
             chill_chain: Some(self.chill.chain().into()),
+            chill_profile: self.chill_config.name.clone(),
+            chill_profile_kind: self.chill_config.kind.clone(),
+            chill_ipv6: self.chill.ipv6(),
             chill_pin: self.chill.exit_pin(),
             chill_conns: Some(self.chill.conns().into()),
             chill_online: self.chill.online() as i32,
@@ -141,11 +151,8 @@ impl Live {
             chill_profile_effective_raw: Some(self.chill.profile_effective_raw().into()),
             chill_thermal_eco: self.chill.thermal_eco() as i32,
             chill_delay_pending: self.chill.delay_pending() as i32,
-            chill_home: Some(self.chill.home().clone()),
             chill_pins: self.chill.pins(),
             chill_main_ms: self.chill.main_ms(),
-            tailscale: self.ts.status(),
-            tailscale_peers: self.ts.peers().to_vec(),
 
             esim_current: Some(self.esim.current().into()),
             esim_state: Some(self.esim.state()),
@@ -205,9 +212,9 @@ impl Live {
             today: self.today.get().cloned(),
             usage_days: self.usage.get().to_vec(),
 
-            bl_panel_lit: self.bl.panel_lit() as i32,
+            bl_panel_lit: panel_lit,
             bl_is_on: self.bl.is_on() as i32,
-            bl_is_lit: self.bl.panel_lit() as i32,
+            bl_is_lit: panel_lit,
             bl_get: self.bl.get(),
             bl_max: self.bl.max(),
             frames: crate::device::frames(),
@@ -230,11 +237,6 @@ impl Live {
 /// system(3): through /bin/sh, waited for; true when it exited 0.
 fn system(cmd: &str) -> bool {
     std::process::Command::new("/bin/sh").arg("-c").arg(cmd).status().is_ok_and(|s| s.success())
-}
-
-/// /sys/class/net/<if>/operstate starts with "up".
-fn oper_up(ifname: &str) -> i32 {
-    std::fs::read_to_string(format!("/sys/class/net/{ifname}/operstate")).is_ok_and(|s| s.starts_with("up")) as i32
 }
 
 impl Source for Live {
@@ -264,19 +266,15 @@ impl Source for Live {
         if a.lit && !self.core.silent() {
             p.screen = self.sf.poll(move |s| s.poll(version) as u32) != 0;
         }
-        let active = a.tailscale;
-        p.tailscale = self.ts.poll(move |s| s.poll(active) as u32) != 0;
         // Only this thread owns the delay-test socket; reads are already nonblocking.
         if self.chill.delay_pending() { self.chill.delay_poll(); }
-        let mut ag = self.agent.clone();
-        let fast = self.chill.home().busy != 0 || a.hx_sending;
-        // Home's Tailscale column says how the home exit goes (direct / relay): read there too
-        let (page, active, home) = (a.chill_page || (a.home && a.lit), a.chill, a.home && a.lit);
+        let (active, home) = (a.chill, a.home && a.lit);
         let ch = self.chill.poll(move |s| {
-            s.home_poll(&mut ag, page, fast) as u32 | ((s.poll(active) as u32) << 1) | ((s.pins_poll(home) as u32) << 1)
+            (s.poll(active) as u32) | ((s.pins_poll(home) as u32) << 1)
         });
-        p.chill_home = ch & 1 != 0;
-        p.chill = ch & 2 != 0;
+        let mut ag = self.agent.clone();
+        let profiles = self.chill_config.poll(move |s| s.poll(&mut ag, active) as u32);
+        p.chill = ch != 0 || profiles != 0;
         let mut ag = self.agent.clone();
         let (active, prefetch) = (a.esim, a.esim_prefetch);
         let key = self.core.sim_key();
@@ -460,6 +458,9 @@ impl Source for Live {
     fn scenario_kick(&mut self) {
         self.scenario.kick();
     }
+    fn scenario_enable(&mut self, on: bool) {
+        self.netinfo.scenario_enable(&mut self.agent, on);
+    }
     fn netinfo_act(&mut self, a: NiAct) {
         let ag = &mut self.agent;
         match a {
@@ -510,16 +511,6 @@ impl Source for Live {
     }
     fn chill_test_delay(&mut self) -> i32 {
         self.chill.test_delay()
-    }
-    fn chill_home_set(&mut self, item: usize, on: bool) -> (i32, String) {
-        self.chill.home_set(&mut self.agent, item, on)
-    }
-    fn chill_home_extend(&mut self, _m: &Model) -> Option<i64> {
-        self.chill.home_extend(&mut self.agent)
-    }
-    fn chill_home_read(&mut self) {
-        let mut ag = self.agent.clone();
-        self.chill.poll(move |s| s.home_poll(&mut ag, true, true) as u32);
     }
 
     fn exec(&mut self, l: &Launch) -> i32 {
@@ -594,33 +585,63 @@ impl Source for Live {
             eprintln!("ui: could not record the ui-theme-paused alert");
         }
     }
-    /// The radios from /sys, Wi-Fi power save from iw (nl80211, not ubus).
-    fn aux_read(&mut self) -> Option<(i32, i32, i32)> {
-        if let Some(task) = &self.aux {
+    fn wifi_read(&mut self, fresh: bool) -> Option<WifiRead> {
+        if fresh {
+            self.wifi = None;
+        }
+        if let Some(task) = &self.wifi {
             match task.take() {
-                Ok(result) => { self.aux = None; return Some(result); }
+                Ok(result) => { self.wifi = None; return Some(result); }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return None,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.aux = None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.wifi = None,
             }
         }
-        self.aux = Task::start_notify(read_aux, |_| true);
+        self.wifi = Task::start_notify(read_wifi, |_| true);
         None
+    }
+
+    fn wifi_reply(&self) -> Option<WifiReply> {
+        self.core.wifi_reply()
+    }
+
+    fn wifi_op_id(&self) -> Option<&str> {
+        self.core.wifi_op_id()
     }
 }
 
-fn read_aux() -> (i32, i32, i32) {
-    let (w24, w5) = (oper_up("wlan0"), oper_up("wlan2"));
-    let out = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(
-            "ps=$(iw dev wlan0 get power_save 2>/dev/null | grep -o 'o[nf]*' | tail -1);\
-             [ -z \"$ps\" ] && ps=$(iw dev wlan2 get power_save 2>/dev/null | grep -o 'o[nf]*' | tail -1);\
-             echo PSM=$([ \"$ps\" = on ] && echo 1 || echo 0)",
-        )
-        .output()
-        .ok();
-    let psm = out
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().find_map(|l| l.strip_prefix("PSM=").map(|v| crate::json::atol(v.as_bytes()) as i32)))
-        .unwrap_or(-1);
-    (w24, w5, psm)
+fn read_wifi() -> WifiRead {
+    use std::process::Command;
+
+    let mut read = WifiRead::default();
+    if let Ok(out) = Command::new("uci").args(["-q", "show", "wireless"]).output()
+        && out.status.success()
+    {
+        // the one parser the core shares: the vendor module bit and the saved band
+        // preferences, which a master-off temporarily rewrites in the raw UCI
+        let sw = luyaz_wifi::switches::read_show(&String::from_utf8_lossy(&out.stdout));
+        read.master = sw.master;
+        read.module = sw.module;
+        read.radios = sw.radios;
+        read.main = sw.main;
+    }
+    read.up = luyaz_wifi::psm::main_up();
+    // An ifdown removes the interfaces, not the owner's saved choice. The parse the core
+    // shares: preferred is the saved script first, the live driver only without one — and
+    // the driver is only asked on an interface that is up (a down one still answers iw).
+    let saved = std::fs::read_to_string(format!("/etc/hotplug.d/iface/{}", luyaz_wifi::psm::HOTPLUG_FILE))
+        .ok()
+        .and_then(|s| luyaz_wifi::psm::from_hotplug(&s));
+    let live = saved.is_none().then(|| psm_live(read.up)).flatten();
+    read.power_save = luyaz_wifi::psm::preferred(saved, live);
+    read
+}
+
+/// The driver's setting from the first interface that is up (a down wlan still answers).
+fn psm_live(up: [bool; 2]) -> Option<bool> {
+    use std::process::Command;
+    luyaz_wifi::psm::MAIN_IFACES.into_iter().zip(up).filter(|(_, up)| *up).find_map(|(iface, _)| {
+        let out = Command::new("iw").args(["dev", iface, "get", "power_save"]).output().ok()?;
+        if !out.status.success() { return None; }
+        luyaz_wifi::psm::from_iw(&String::from_utf8_lossy(&out.stdout))
+    })
 }

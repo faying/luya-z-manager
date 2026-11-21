@@ -315,8 +315,22 @@ pub(crate) fn uci_parsed(package: &str) -> Option<crate::uci::Package> {
     crate::uci::load(package, &uci_config_dir(), &uci_save_dir())
 }
 
+/// One fresh wireless snapshot for the Wi-Fi executor and convergence checks.
+pub(crate) fn wifi_map_sync() -> Option<BTreeMap<String, String>> {
+    const PACKAGE: &str = "wireless";
+    if let Some(pkg) = uci_parsed(PACKAGE) {
+        return Some(uci_show_map(&crate::uci::render_show(PACKAGE, &pkg)));
+    }
+    let out = luyaz_wifi::output_within(
+        std::process::Command::new(uci_bin()).args(["-q", "show", PACKAGE]),
+        Duration::from_secs(5),
+    )
+    .ok()?;
+    out.status.success().then(|| uci_show_map(&out.stdout))
+}
+
 /// `uci show` 文本 → `路径 → 值`（值去掉最外层单引号）。解析路径和子进程路径共用。
-fn uci_show_map(raw: &[u8]) -> BTreeMap<String, String> {
+pub(crate) fn uci_show_map(raw: &[u8]) -> BTreeMap<String, String> {
     let text = String::from_utf8_lossy(raw);
     let mut out = BTreeMap::new();
     for entry in text.lines() {
@@ -327,7 +341,13 @@ fn uci_show_map(raw: &[u8]) -> BTreeMap<String, String> {
             n if n >= 2 && rest.starts_with('\'') && rest.ends_with('\'') => &rest[1..n - 1],
             _ => rest,
         };
-        out.insert(path.to_string(), unquoted.to_string());
+        // Both native UCI and render_show escape an apostrophe inside a quoted value.
+        let value = if unquoted.len() != rest.len() && unquoted.contains("'\\''") {
+            unquoted.replace("'\\''", "'")
+        } else {
+            unquoted.to_owned()
+        };
+        out.insert(path.to_owned(), value);
     }
     out
 }

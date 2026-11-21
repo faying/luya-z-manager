@@ -60,7 +60,7 @@ fn ipv6_only_and_per_family_identity_are_discovered_without_guessing() {
     assert_eq!(paths[0].interface, "rmnet_data2");
     assert_eq!(paths[0].dns, ["2001:db8::53".parse::<IpAddr>().unwrap()]);
     let mut bad = v.clone();
-    bad["interfaces"]["wan6"]["device"] = "tailscale0".into();
+    bad["interfaces"]["wan6"]["device"] = "wg0".into();
     assert!(super::paths(&bad).is_empty());
     bad["interfaces"]["wan6"]["device"] = "rmnet_data2".into();
     bad["interfaces"]["cellular"]["ipv6_address"] = "".into();

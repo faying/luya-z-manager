@@ -100,8 +100,6 @@ const ON_U60D: &[&str] = &[
     "/api/speedtest/",
     // the load ladder's result (u60d api/ladder.rs); started only from the screen
     "/api/ladder/result",
-    // power.tailnet_poller events and allow list (u60d poller.rs)
-    "/api/poller",
     "/api/diagnose",
     "/api/diagnose/",
     "/api/cpu",
@@ -131,13 +129,9 @@ const ON_U60D: &[&str] = &[
     "/api/sms/forward/",
     "/api/scheduler/",
     "/api/esim/",
-    // 5b: u60d serves these (public status and the battery estimate always; CHILL and the
-    // scenarios once handed over, else "not mine" sends them to the agent; Tailscale and the
-    // CHILL extras once u60d has them)
+    // 5b: public status, CHILL and scenarios.
     "/api/public/status",
     "/api/screen",
-    "/api/services/tailscale",
-    "/api/services/tailscale/log",
     "/api/services/chill",
     "/api/services/chill/",
     "/api/scenario",

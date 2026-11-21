@@ -18,10 +18,10 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let t = text(&["scheduler", "home_exit"]);
-        assert_eq!(t, "scheduler\nhome_exit\n");
-        assert!(names(&t, "home_exit"));
+        let t = text(&["scheduler", "scenario"]);
+        assert_eq!(t, "scheduler\nscenario\n");
+        assert!(names(&t, "scenario"));
         assert!(!names(&t, "home"));
-        assert!(!names("", "home_exit"));
+        assert!(!names("", "scenario"));
     }
 }

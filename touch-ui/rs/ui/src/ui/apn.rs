@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::network::{
-    net_armed, net_busy, net_confirm, net_exit_sub, net_oper_text, net_rat_name, net_scene_name, NetFlash, NET_SCENE_ROWS,
-    NI_MAX_CELLS, NI_MAX_OPS,
+    net_armed, net_busy, net_confirm, net_exit_sub, net_oper_text, net_rat_name, net_scene_name, scene_readback, scene_selected,
+    NetFlash, NET_SCENE_ROWS, NI_MAX_CELLS, NI_MAX_OPS, SCENE_OFF_ROW,
 };
 use super::{Sub, Ui, SUB_VIEW};
 use crate::cf;
@@ -476,13 +476,11 @@ impl Ui {
         // 情景切换: has it really gone over
         if self.net.sc_pend >= 0 {
             let net = &mut self.net;
-            let done = if net.sc_pend == 0 {
-                n.scene_pin.is_empty()
-            } else {
-                n.scene_pin == net.sc_pend_id && n.scene_current == net.sc_pend_id
-            };
+            let done = scene_readback(n, net.sc_pend as usize, &net.sc_pend_id);
             if done {
-                if net.sc_pend == 0 {
+                if net.sc_pend as usize == SCENE_OFF_ROW {
+                    net.sc_flash.set(th.ok_t, 6000, tr("情景模式已关闭，当前状态保持不变").into());
+                } else if net.sc_pend == 0 {
                     let cur = if n.scene_current.is_empty() { tr("判定中") } else { net_scene_name(n, &n.scene_current) };
                     net.sc_flash.set(th.ok_t, 6000, cf!(tr("已恢复自动判断 · 现在是「%s」"), cur));
                 } else {
@@ -491,12 +489,7 @@ impl Ui {
                 }
                 net.sc_pend = -1;
             } else if lv::tick_get().wrapping_sub(net.sc_pend_at) > super::network::SC_PEND_MS {
-                if net.sc_pend != 0 && n.scene_pin == net.sc_pend_id {
-                    let t = cf!(tr("已固定「%s」，但设备还没切过去；Wi-Fi 看门狗可能正在接管，过一会再看"), &net.sc_pend_name);
-                    net.sc_flash.set(th.warn_t, 10000, t);
-                } else {
-                    net.sc_flash.set(th.warn_t, 10000, tr("设备没确认这次切换，再试一次").into());
-                }
+                net.sc_flash.set(th.warn_t, 10000, tr("设备没确认这次切换，再试一次").into());
                 net.sc_pend = -1;
             }
         }
@@ -521,14 +514,14 @@ impl Ui {
         // 情景: 自动 + each scene (can be pinned)
         let mut scene_px = 0;
         {
-            let (mut cur_name, mut cur_abroad) = ("", false);
+            let mut cur_name = "";
             for s in n.scenes.iter().take(nscenes) {
                 if s.id == n.scene_current {
                     cur_name = &s.name;
-                    cur_abroad = s.abroad != 0;
                 }
             }
-            let usable = n.scene_known != 0 && n.scene_enabled != 0 && nscenes > 0;
+            let known = n.scene_known != 0;
+            let enabled = known && n.scene_enabled != 0;
             for i in 0..NET_SCENE_ROWS {
                 let mut show = false;
                 let (mut name, mut tag, mut when, mut does): (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) = (vec![], vec![], vec![], vec![]);
@@ -536,43 +529,45 @@ impl Ui {
                 if i == 0 {
                     show = true;
                     name = tr("自动").into();
-                    if usable {
+                    if known {
                         when = tr("按下面每个情景的条件自己切换").into();
                         does = tr("条件变了，1–2 分钟内跟着换").into();
                     }
-                    if !usable {
+                    if !known {
                         tag = "—".into();
-                    } else if n.scene_pin.is_empty() {
+                    } else if enabled && n.scene_pin.is_empty() {
                         tag = cf!(tr("现在：%s"), if cur_name.is_empty() { tr("判定中") } else { cur_name });
                         tag.truncate(47);
                         tag_col = th.acc_t;
                     }
-                } else if i <= nscenes && usable {
+                } else if i <= nscenes && known {
                     let sc = scene(i - 1);
                     show = true;
                     name = if sc.name.is_empty() { sc.id.clone() } else { sc.name.clone() }.into();
                     when = sc.when.clone().into();
                     does = sc.does.clone().into();
-                    if n.scene_pin == sc.id {
+                    if enabled && n.scene_pin == sc.id {
                         tag = tr("已固定").into();
                         tag_col = th.acc_t;
-                    } else if n.scene_current == sc.id {
+                    } else if enabled && n.scene_current == sc.id {
                         tag = tr("现在").into();
                         tag_col = th.acc_t;
                     } else if sc.wifi_off != 0 && does.is_empty() {
                         tag = tr("会关 Wi-Fi").into();
                     }
                 }
-                else if i == NET_SCENE_ROWS - 1 && usable && cur_abroad {
+                else if i == SCENE_OFF_ROW && known {
+                    show = true;
+                    name = tr("关闭").into();
+                    when = tr("保留当前状态，不扫描，不自动控制 Wi-Fi 和 CHILL").into();
+                } else if i == NET_SCENE_ROWS - 1 {
                     show = true;
                     name = tr("CHILL 出口").into();
                     tag = cf!("%s ›", m.chill_mode.as_deref().unwrap_or(""));
                     tag.truncate(47);
                 }
                 let is_exit = i == NET_SCENE_ROWS - 1;
-                let sel = usable
-                    && !is_exit
-                    && if i == 0 { n.scene_pin.is_empty() } else { i <= nscenes && n.scene_pin == scene(i - 1).id };
+                let sel = !is_exit && scene_selected(n, i);
                 if self.net.sc_pend == i as i32 {
                     tag = tr("切换中…").into();
                     tag_col = th.acc_t;
@@ -591,11 +586,11 @@ impl Ui {
                 kit::bg(row, th.wash_w);
                 row.set_style_bg_opa(if arm == 200 + i as i32 { lv::OPA_COVER } else { lv::OPA_TRANSP }, 0);
                 // radio mark: filled = the one in effect (自动 when nothing is pinned)
-                kit::show(mark, usable && !is_exit);
+                kit::show(mark, known && !is_exit);
                 kit::bg(mark, th.fill_blue);
                 mark.set_style_bg_opa(if sel { lv::OPA_COVER } else { lv::OPA_TRANSP }, 0);
                 mark.set_style_border_color(if sel { th.fill_blue } else { th.t3 }, 0);
-                nm.set_x(if usable && !is_exit { PAD + 26 } else { PAD });
+                nm.set_x(if known && !is_exit { PAD + 26 } else { PAD });
                 // rows with words are three lines, the mark on the first; without, one line.
                 // A long condition wraps to two lines, then ends in "…"
                 let lh = f.cj12.line_height();
@@ -629,10 +624,9 @@ impl Ui {
             let mut note_col = th.t3;
             let buf: Vec<u8> = if n.scene_known == 0 {
                 if n.err.is_empty() { tr("读取中…") } else { tr("读不到情景") }.into()
-            } else if n.scene_enabled == 0 {
-                tr("情景引擎已停用，在管理网页的「情景」页打开").into()
-            } else if nscenes == 0 {
-                tr("还没配置情景，在管理网页的「情景」页设置").into()
+            } else if net.sc_pend as usize == SCENE_OFF_ROW {
+                note_col = th.acc_t;
+                tr("正在关闭情景模式，保留当前状态…").into()
             } else if net.sc_pend > 0 {
                 note_col = th.acc_t;
                 cf!(
@@ -646,6 +640,13 @@ impl Ui {
             } else if net.sc_flash.on() {
                 note_col = net.sc_flash.col;
                 net.sc_flash.txt.clone()
+            } else if arm == 200 + SCENE_OFF_ROW as i32 {
+                note_col = th.warn_t;
+                tr("关闭后保留当前状态，不扫描，不自动控制 Wi-Fi 和 CHILL").into()
+            } else if n.scene_enabled == 0 && arm != 200 && arm < 201 {
+                tr("情景模式已关闭，点「自动」或具体情景可重新启用").into()
+            } else if nscenes == 0 && arm != 200 {
+                tr("还没配置情景，在管理网页的「情景」页设置").into()
             } else if n.scene_takeover != 0 && !n.scene_pin.is_empty() {
                 note_col = th.warn_t;
                 tr("Wi-Fi 看门狗接管中，固定暂时不生效，先按「外出」").into()

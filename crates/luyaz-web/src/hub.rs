@@ -82,7 +82,7 @@ pub struct Side {
     pub public: Option<Value>,
     /// u60d `/v2/api/alerts` data: the alert list.
     pub alerts: Option<Value>,
-    /// The status Tailscale is read from: u60d's public status since 8d-2 (was the agent's).
+    /// The public status read from u60d.
     pub agent: Option<Value>,
 }
 

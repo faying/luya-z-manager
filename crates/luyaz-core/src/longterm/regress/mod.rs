@@ -129,14 +129,14 @@ pub struct Pending {
 pub struct Incident {
     pub id: String,
     pub kind: String,
-    /// The exit (`chill`, `tailscale`) or the blind class (`cellular`, `egress`, `power`).
+    /// The exit (`chill`) or the blind class (`cellular`, `egress`, `power`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub: Option<String>,
     pub from: At,
     #[serde(default)]
     pub to: Option<At>,
     /// `recovered` (a signal said it is over), `quiet` (a point incident's window passed),
-    /// `reboot` (an interval incident cut by a reboot, which `regress-reboot` reports).
+    /// `reboot` (an interval incident cut by a reboot), or `retired` (its check was removed).
     #[serde(default)]
     pub end: Option<String>,
     /// Point incidents: how many; interval ones: 1.
@@ -365,6 +365,29 @@ impl Regress {
             dirty: fresh,
             ..Default::default()
         };
+        // Retire old active tailnet incidents without claiming the exit recovered.
+        let mut kept = Vec::new();
+        for mut i in std::mem::take(&mut f.open) {
+            if i.kind == "regress-egress" && i.sub.as_deref() == Some("tailscale") {
+                i.to = Some(now.clone());
+                i.end = Some("retired".into());
+                i.pending.clear();
+                f.closed.push(i);
+                r.dirty = true;
+            } else {
+                kept.push(i);
+            }
+        }
+        f.open = kept;
+        for i in &mut f.closed {
+            if i.kind == "regress-egress"
+                && i.sub.as_deref() == Some("tailscale")
+                && !i.pending.is_empty()
+            {
+                i.pending.clear();
+                r.dirty = true;
+            }
+        }
         r.prev_build = f.last_build.clone();
         if f.last_build != build {
             f.last_build = build.into();

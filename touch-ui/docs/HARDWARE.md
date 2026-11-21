@@ -34,9 +34,10 @@ the sysfs LED `/sys/class/leds/led:lcd` (`brightness`, `max_brightness`).
 
 ## Where device data comes from
 
-The UI never reads ubus or uci itself. luyaz-core collects modem, Wi-Fi,
-battery and SMS state and serves it as `/v2/state` and `/v2/events`; the UI
-only consumes that.
+luyaz-core collects modem, Wi-Fi, battery and SMS state and serves it as
+`/v2/state` and `/v2/events`. The Wi-Fi controls also read wireless UCI and
+the saved power-save choice locally, so a radio going down doesn't change
+the displayed settings. Post-write readback checks interface state separately.
 
 ## What is not in this repository
 

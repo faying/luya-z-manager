@@ -86,7 +86,7 @@ macro_rules! copies {
     })+};
 }
 copies!(super::scenario::Scenario, super::netinfo::Netinfo, super::alerts::Alerts,
-    super::esim::Esim, super::speedtest::Speedtest, super::ladder::Ladder, super::tailscale::Tailscale,
+    super::esim::Esim, super::speedtest::Speedtest, super::ladder::Ladder,
     super::diagnose::Diagnose, super::battery::BatteryEst, super::versions::Versions,
     super::landing::Landing, super::latency::DirectLat, super::today::Today, super::usage::Usage,
     super::screen_feed::ScreenFeed);

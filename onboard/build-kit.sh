@@ -235,9 +235,9 @@ if [ ! -f "$TOUCH_BIN" ]; then
   fi || die "触屏界面构建失败（单独跑 ${TOUCH_REPO}/rs/build.sh device 看原因）"
 fi
 
-# 触屏二进制要同时有 pages+chrome built 和 ui/src/ 两个标记
+# 触屏二进制要同时有 pages+chrome built 和 ui/src/ 两个标记（兼容 Windows 路径分隔符）
 grep -a -q 'pages+chrome built' "$TOUCH_BIN" || die "$(basename "$TOUCH_BIN") 不是触屏界面"
-grep -a -q 'ui/src/' "$TOUCH_BIN" || die "$(basename "$TOUCH_BIN") 不是 Rust 版触屏（用 touch-ui/rs/build.sh device 编）"
+grep -a -q -E 'ui[/\\]src[/\\]' "$TOUCH_BIN" || die "$(basename "$TOUCH_BIN") 不是 Rust 版触屏（用 touch-ui/rs/build.sh device 编）"
 cp "$TOUCH_BIN" "$PL/ui/luyaz-ui"  # Phase 10 R5: installed as /data/luyaz/ui/luyaz-ui
 
 # 触屏字体：Nunito（数字）+ 中文兜底（设备自带 ZTE 字体缺失时用），都是 OFL。

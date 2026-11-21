@@ -197,6 +197,8 @@ fn a_pin_switches_and_retries_restores_without_scanning() {
     let f = Fake::new("pin");
     f.write_config(&config());
     let e = Engine::new(f.clone());
+    assert_eq!(e.http_pin(br#"{}"#).0, 400);
+    assert_eq!(e.http_pin(br#"{"id":true}"#).0, 400);
     let (status, _) = e.http_pin(br#"{"id":"nowhere"}"#);
     assert_eq!(status, 400);
     assert_eq!(e.http_pin(br#"{"id":"home"}"#).0, 200);
@@ -212,7 +214,7 @@ fn a_pin_switches_and_retries_restores_without_scanning() {
 }
 
 #[test]
-fn disabling_restores_away_and_puts_everything_back() {
+fn disabling_preserves_device_state_and_stops_automatic_actions() {
     let f = Fake::new("disable");
     f.write_config(&config());
     f.d().gets.insert(sc::CHILL_STATUS.into(), json!({"ok": true, "data": {"region": {"active": "JP"}}}));
@@ -221,22 +223,70 @@ fn disabling_restores_away_and_puts_everything_back() {
     tick_after(&f, &e, 60);
     tick_after(&f, &e, 60);
     assert_eq!(e.run_state().current, "abroad");
-    // Wi-Fi was turned off by hand meanwhile: bootsafe has to repair it
-    f.d().uci.insert(luyaz_wifi::AP_2G.into(), "1".into());
-    f.d().uci.insert(luyaz_wifi::AP_5G.into(), "1".into());
     f.calls();
     let (status, body) = e.http_enabled(br#"{"enabled":false}"#);
     assert_eq!(status, 200);
     assert_eq!(body["data"]["enabled"], false);
-    assert_eq!(e.run_state().current, "");
+    assert_eq!(e.disabled_state(), DisabledState::Stopping);
+    assert_eq!(e.run_state().current, "abroad");
+    assert!(e.pin().is_none());
+    assert!(read_json::<Vec<PendingRestore>>(&f.file(RESTORE_FILE)).is_empty());
+    assert_eq!(e.state_json()["disabled_state"], DISABLED_STOPPING);
+    assert_eq!(e.state_json()["current"], "abroad");
+    let summary = e.public_summary();
+    assert_eq!(summary["enabled"], false);
+    assert_eq!(summary["current"], "");
+    assert_eq!(summary["abroad"], false);
+    assert_eq!(summary["wifi_off"], false);
+    assert_eq!(summary["chill_on_when_home"], false);
+    assert_eq!(summary["auto_direct"], false);
     let calls = f.calls();
-    assert!(calls.contains(&"wifi true true".to_string()), "{calls:?}");
-    assert!(calls.iter().any(|c| c.contains("\"member\":\"JP\"") && c.ends_with("(restore)")), "{calls:?}");
-    // disabled: ticks do nothing but retry restores
+    assert!(!calls.iter().any(|c| c.starts_with("wifi ")), "{calls:?}");
+    assert!(!calls.iter().any(|c| c.contains("/api/services/chill/")), "{calls:?}");
+
+    // Disabled ticks do nothing, including retries, scans, and automatic actions.
     tick_after(&f, &e, 600);
     assert!(!f.calls().contains(&"scan".to_string()));
+    assert_eq!(e.disabled_state(), DisabledState::Stopping);
+
+    // Repeating the request is idempotent and keeps the marker in the stopping state.
+    assert_eq!(e.http_enabled(br#"{"enabled":false}"#).0, 200);
+    assert_eq!(e.disabled_state(), DisabledState::Stopping);
+
+    // Malformed enabled requests are rejected without changing the marker.
+    assert_eq!(e.http_enabled(br#"{}"#).0, 400);
+    assert_eq!(e.disabled_state(), DisabledState::Stopping);
+
     assert_eq!(e.http_enabled(br#"{"enabled":true}"#).0, 200);
     assert!(e.enabled());
+}
+
+#[test]
+fn disabled_state_marker_parser_is_strict() {
+    let f = Fake::new("disabled-marker");
+    assert_eq!(disabled_state(f.file(DISABLED_FLAG)), DisabledState::Active);
+    fs::write(f.file(DISABLED_FLAG), b"").unwrap();
+    assert_eq!(disabled_state(f.file(DISABLED_FLAG)), DisabledState::Invalid);
+    fs::write(f.file(DISABLED_FLAG), DISABLED_STOPPING).unwrap();
+    assert_eq!(disabled_state(f.file(DISABLED_FLAG)), DisabledState::Stopping);
+    fs::write(f.file(DISABLED_FLAG), DISABLED_PAUSED).unwrap();
+    assert_eq!(disabled_state(f.file(DISABLED_FLAG)), DisabledState::Paused);
+    fs::write(f.file(DISABLED_FLAG), "paused-v0").unwrap();
+    assert_eq!(disabled_state(f.file(DISABLED_FLAG)), DisabledState::Invalid);
+}
+
+#[test]
+fn pin_selection_resumes_a_disabled_engine() {
+    let f = Fake::new("pin-resume");
+    f.write_config(&config());
+    let e = Engine::new(f.clone());
+    assert_eq!(e.http_enabled(br#"{"enabled":false}"#).0, 200);
+    assert_eq!(e.disabled_state(), DisabledState::Stopping);
+    assert_eq!(e.http_pin(br#"{"id":"home"}"#).0, 200);
+    assert_eq!(e.disabled_state(), DisabledState::Active);
+    assert_eq!(e.pin().as_deref(), Some("home"));
+    e.tick();
+    assert_eq!(e.run_state().current, "home");
 }
 
 #[test]
@@ -271,6 +321,9 @@ fn config_routes_validate_and_persist() {
 fn the_run_loop_beats_and_stops_once_taken_back() {
     struct Stopping(Arc<Fake>, std::sync::atomic::AtomicU32);
     impl luyaz_wifi::Host for Stopping {
+        fn wireless(&self) -> Option<luyaz_wifi::layout::Uci> {
+            luyaz_wifi::Host::wireless(&*self.0)
+        }
         fn uci_get(&self, key: &str) -> Option<String> {
             luyaz_wifi::Host::uci_get(&*self.0, key)
         }
@@ -321,7 +374,7 @@ fn the_run_loop_beats_and_stops_once_taken_back() {
     let f = Fake::new("run");
     let s = Arc::new(Stopping(f.clone(), std::sync::atomic::AtomicU32::new(0)));
     let e = Engine::new(s.clone());
-    e.run();
+    e.run(true);
     assert_eq!(s.1.load(Ordering::SeqCst), 4, "three ticks, then the fourth look ends it");
     let hb = fs::read_to_string(f.file(HEARTBEAT_FILE)).unwrap();
     assert!(hb.trim().parse::<u64>().is_ok(), "{hb:?}");

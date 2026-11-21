@@ -3,7 +3,7 @@
 //! computer and calls this.
 //!
 //! - Off unless `/data/luyaz/agent.token` has at least one `name token` line (R3): 404.
-//! - Source (R1): loopback, the tailnet (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) and the CIDRs in
+//! - Source (R1): loopback and the CIDRs in
 //!   `/data/luyaz/agent.allow`; anything else 403. The token is still needed from all of them.
 //! - `Authorization: Bearer <token>`, compared in constant time; 401 otherwise. No cookie session.
 //! - GET only; each route asks the core over loopback and rebuilds the reply from a field
@@ -168,13 +168,7 @@ pub fn source_ok(ip: IpAddr, extra: &[(IpAddr, u8)]) -> bool {
         IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
         v4 => v4,
     };
-    const TAILNET: [&str; 2] = ["100.64.0.0/10", "fd7a:115c:a1e0::/48"];
-    ip.is_loopback()
-        || TAILNET
-            .iter()
-            .filter_map(|c| parse_cidr(c))
-            .chain(extra.iter().copied())
-            .any(|c| in_cidr(ip, c))
+    ip.is_loopback() || extra.iter().copied().any(|c| in_cidr(ip, c))
 }
 
 fn ct_eq(a: &str, b: &str) -> bool {
@@ -314,7 +308,6 @@ pub fn shape_health(status: &Value, health: &Value) -> Value {
             "checks": checks,
         },
         "services": {
-            "tailscale": pick(&status["services"]["tailscale"], &["installed", "running"]),
             "chill": pick(&status["services"]["chill"], &["state", "on"]),
         },
         "utc_offset": status["clock"]["utc_offset"],

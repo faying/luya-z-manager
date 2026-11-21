@@ -1,30 +1,18 @@
-//! CHILL pieces of the API replies: `services.chill` in `/api/public/status`,
-//! the manual-first notice, the home exit's line and GET `/api/services/chill/home`, and the pure
-//! readers they need. The caller gathers the state (the agent from its threads, u60d from its
-//! shadow and the files) and these render it, so both reply alike.
-//!
-//! Not public (sync-public.sh deletes this file, as the agent's CHILL files).
+//! CHILL replies and request parsing, including the public status and manual-first notice.
 
 use serde_json::{Value, json};
-use std::net::Ipv4Addr;
 
 pub const CHILL_ENV: &str = "/data/chill/chill.env";
 pub const CHILL_STATE: &str = "/tmp/chill.state";
 pub const CHILL_DISABLED: &str = "/data/chill/disabled";
 pub const CHILL_MODE_FILE: &str = "/data/chill/mode";
-pub const HOME_EXIT_STATE: &str = "/data/chill/home-exit.json";
-pub const HOME_IP_LIST: &str = "/data/chill/home_ip.list";
 pub const MANUAL_FIRST_STATE: &str = "/data/chill/manual-first.json";
 
 /// A notice stays on the screens this long.
 pub const NOTICE_KEEP: u64 = 600;
-/// "Off in 10 min · Extend 2h" shows this long before the end (DD8).
-pub const EXTEND_WINDOW: u64 = 600;
 
-/// `NAME=value` from chill.env's text (the agent's `read_env_var`): quotes trimmed, "" when absent.
-/// chill.env with these `KEY='…'` lines replaced (moved to the end), for one atomic rewrite
-/// (the home exit flips three switches together; a half-written set would render something nobody
-/// chose). chill.sh sources the file as shell, so a `'` or a newline in a value is refused.
+/// Render chill.env with these `KEY='…'` lines replaced (moved to the end), for an atomic rewrite.
+/// chill.sh sources the file as shell, so a single quote or newline in a value is refused.
 pub fn env_with(content: &str, vars: &[(&str, &str)]) -> Result<String, String> {
     for (name, value) in vars {
         if value.contains('\'') || value.contains('\n') {
@@ -47,6 +35,7 @@ pub fn env_with(content: &str, vars: &[(&str, &str)]) -> Result<String, String> 
     Ok(kept.chain(added).collect())
 }
 
+/// Read a value from chill.env, trimming space and quotes. An absent key is empty.
 pub fn env_var(content: &str, name: &str) -> String {
     content
         .lines()
@@ -58,17 +47,14 @@ pub fn env_var(content: &str, name: &str) -> String {
 /// `services.chill`. The manual-first notice is one line for the home screen,
 /// e.g. "手选的 JP 03 不通，已临时换到 🇯🇵 日本（自动）", with its English, when it was
 /// said, and its kind (backup / back / alldown / repick / unstable) for the
-/// symbol and colour. Fields are only ever added here (old screens read
-/// `state`, `reason`, `on`, `notice`).
-pub fn public(state: &str, reason: Option<&str>, on: bool, mf: &Value, home: Value) -> Value {
+/// symbol and colour. The original screen fields are `state`, `reason`, `on` and `notice`.
+pub fn public(state: &str, reason: Option<&str>, on: bool, mf: &Value) -> Value {
     json!({
         "state": state, "reason": reason, "on": on,
         "notice": mf["notice"],
         "notice_en": mf["notice_en"],
         "notice_at": mf["notice_at"],
         "notice_kind": mf["notice_kind"],
-        // Home exit (E3 DD2): null, or {media, ip, rest, rest_until, fallback}
-        "home_exit": home,
     })
 }
 
@@ -112,200 +98,6 @@ pub fn manual_first_summary(p: &ManualFirst, now: u64) -> Value {
         "notice_en": (fresh && !p.notice.is_empty() && !p.notice_en.is_empty()).then_some(p.notice_en),
         "notice_at": (fresh && !p.notice.is_empty()).then_some(p.notice_at),
         "notice_kind": (fresh && !p.notice.is_empty() && !p.notice_kind.is_empty()).then_some(p.notice_kind),
-    })
-}
-
-// ── home exit ────────────────────────────────────────────────────────────────
-
-/// CHILL as far as the switches care (DD4).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ChillMode {
-    Off,
-    Hot,
-    Global,
-    Direct,
-    Rule,
-}
-
-impl ChillMode {
-    /// Why a switch can't be turned on now (DD4's reason codes); `None` = OK.
-    pub fn blocked(self) -> Option<&'static str> {
-        match self {
-            ChillMode::Off => Some("chill_off"),
-            ChillMode::Hot => Some("hot"),
-            ChillMode::Global => Some("mode_global"),
-            ChillMode::Direct => Some("mode_direct"),
-            ChillMode::Rule => None,
-        }
-    }
-}
-
-/// `CHILL_HOME_EXIT` as chill.sh accepts it (Q2): IPv4:port, port 1–65535.
-pub fn parse_home_exit(s: &str) -> Option<(Ipv4Addr, u16)> {
-    let (ip, port) = s.trim().rsplit_once(':')?;
-    if ip
-        .split('.')
-        .any(|o| o.is_empty() || o.len() > 3 || !o.bytes().all(|b| b.is_ascii_digit()))
-    {
-        return None;
-    }
-    if port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let port: u16 = port.parse().ok().filter(|p| *p > 0)?;
-    Some((ip.parse().ok()?, port))
-}
-
-/// Sites in `home_ip.list`: non-empty lines that are not comments.
-pub fn count_sites(list: &str) -> usize {
-    list.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .count()
-}
-
-/// How Tailscale reaches the peer that routes `ip` (DD7): "direct", "relay"
-/// or "offline"; `None` when no peer routes it (or status unreadable).
-pub fn ts_path(status: &Value, ip: Ipv4Addr) -> Option<&'static str> {
-    let peers = status.get("Peer")?.as_object()?;
-    let router = peers.values().find(|p| {
-        p.get("PrimaryRoutes")
-            .and_then(Value::as_array)
-            .is_some_and(|r| r.iter().filter_map(Value::as_str).any(|c| cidr_has(c, ip)))
-    })?;
-    if !router
-        .get("Online")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Some("offline");
-    }
-    let direct = router
-        .get("CurAddr")
-        .and_then(Value::as_str)
-        .is_some_and(|a| !a.is_empty());
-    Some(if direct { "direct" } else { "relay" })
-}
-
-fn cidr_has(cidr: &str, ip: Ipv4Addr) -> bool {
-    let Some((net, bits)) = cidr.split_once('/') else {
-        return false;
-    };
-    let (Ok(net), Ok(bits)) = (net.parse::<Ipv4Addr>(), bits.parse::<u32>()) else {
-        return false;
-    };
-    if bits > 32 {
-        return false;
-    }
-    let mask = if bits == 0 {
-        0
-    } else {
-        u32::MAX << (32 - bits)
-    };
-    u32::from(net) & mask == u32::from(ip) & mask
-}
-
-/// CHILL's state file and `/data/chill/mode` → the mode the switches see.
-pub fn chill_mode(state: Option<&Value>, mode: &str) -> ChillMode {
-    let Some(st) = state else {
-        return ChillMode::Off;
-    };
-    match st.get("state").and_then(Value::as_str) {
-        Some("running") => match mode.trim() {
-            "global" => ChillMode::Global,
-            "direct" => ChillMode::Direct,
-            _ => ChillMode::Rule,
-        },
-        _ if st.get("reason").and_then(Value::as_str) == Some("overheat") => ChillMode::Hot,
-        _ => ChillMode::Off,
-    }
-}
-
-/// What the home exit's replies read from its machine.
-#[derive(Clone, Debug, Default)]
-pub struct Home {
-    /// started (the screens show "updating" until then)
-    pub ready: bool,
-    pub media: bool,
-    pub ip: bool,
-    pub rest: bool,
-    pub rest_until: u64,
-    pub home_ok: Option<bool>,
-    pub home_ms: Option<u32>,
-    pub probed_at: u64,
-    /// null, or {item, on, phase, until} while a request runs
-    pub busy: Value,
-    /// the saved notice as stored ({kind, item, text, text_en, at, code, detail})
-    pub notice: Value,
-}
-
-/// The home exit's line in `services.chill` (DD2): what is on, rest's end, and whether home is on
-/// its fallback; null when nothing is on.
-pub fn home_summary(m: &Home) -> Value {
-    if !m.ready || !(m.media || m.ip || m.rest) && m.busy.is_null() {
-        return Value::Null;
-    }
-    json!({
-        "media": m.media,
-        "ip": m.ip,
-        "rest": m.rest,
-        "rest_until": (m.rest).then_some(m.rest_until),
-        "fallback": m.home_ok == Some(false),
-    })
-}
-
-/// Whether GET should say where traffic goes while home is down (DD6 "暂走 X"): only then is
-/// mihomo asked.
-pub fn wants_fallback(m: &Home, mode: ChillMode) -> bool {
-    m.home_ok == Some(false) && (m.ip || m.rest) && mode == ChillMode::Rule
-}
-
-/// The rest of what GET reads, from outside the machine.
-#[derive(Clone, Debug, Default)]
-pub struct Around {
-    pub serving_mcc: Option<i64>,
-    pub home_mcc: Option<i64>,
-    pub true_roaming: Option<bool>,
-    pub blocked: Option<&'static str>,
-    pub sites: usize,
-    pub fallback_to: Option<String>,
-    pub tailscale: Option<&'static str>,
-    pub now: u64,
-}
-
-/// `data` of GET /api/services/chill/home when configured.
-pub fn home_get(m: &Home, a: &Around) -> Value {
-    if !m.ready {
-        // Not started yet: the screens show "updating".
-        return json!({"configured": true, "updating": true});
-    }
-    let now = a.now;
-    let kind = m.notice.get("kind").and_then(Value::as_str).unwrap_or("");
-    let at = m.notice.get("at").and_then(Value::as_u64).unwrap_or(0);
-    let notice = (now.saturating_sub(at) < NOTICE_KEEP && !kind.is_empty()).then_some(&m.notice);
-    json!({
-        "configured": true,
-        "where": {
-            "serving_mcc": a.serving_mcc,
-            "true_roaming": a.true_roaming,
-            // the wire name is old: true = on a network of the owner's home country
-            "in_china": a.serving_mcc.zip(a.home_mcc).map(|(m, h)| m == h),
-        },
-        "blocked": a.blocked,
-        "items": {
-            "media": {"on": m.media},
-            "ip": {"on": m.ip, "sites": a.sites},
-            "rest": {
-                "on": m.rest,
-                "until": m.rest.then_some(m.rest_until),
-                "can_extend": m.rest && now < m.rest_until && m.rest_until - now <= EXTEND_WINDOW,
-            },
-        },
-        "home": {"ok": m.home_ok, "ms": m.home_ms, "checked_at": (m.probed_at > 0).then_some(m.probed_at)},
-        "fallback_to": a.fallback_to,
-        "tailscale": a.tailscale,
-        "busy": m.busy,
-        "notice": notice,
     })
 }
 
@@ -443,6 +235,31 @@ pub fn exit_wanted(body: &Value) -> Result<&str, (u16, Value)> {
         Err((
             400,
             json!({"ok": false, "error": "state must be proxy, direct_keep_ai, direct_all or global"}),
+        ))
+    }
+}
+
+pub fn valid_mode(mode: &str) -> bool {
+    matches!(mode, "rule" | "global" | "direct")
+}
+
+pub fn exit_mode(exit: &str) -> Option<&'static str> {
+    match exit {
+        "proxy" | "direct_keep_ai" => Some("rule"),
+        "direct_all" => Some("direct"),
+        "global" => Some("global"),
+        _ => None,
+    }
+}
+
+pub fn mode_wanted(body: &Value) -> Result<&str, (u16, Value)> {
+    let mode = body.get("mode").and_then(Value::as_str).unwrap_or("");
+    if valid_mode(mode) {
+        Ok(mode)
+    } else {
+        Err((
+            400,
+            json!({"ok": false, "error": "mode must be rule, global or direct"}),
         ))
     }
 }
@@ -692,7 +509,7 @@ pub fn exit_state(mode: &str, main_now: &str) -> &'static str {
     }
 }
 
-/// The region groups from mihomo's `/proxies`: name, current member, size.
+/// The groups from mihomo's `/proxies` that expose an `all` member list.
 pub fn summarize_groups(proxies: Option<&Value>) -> Vec<Value> {
     let Some(proxies) = proxies
         .and_then(|v| v.get("proxies"))
@@ -700,17 +517,22 @@ pub fn summarize_groups(proxies: Option<&Value>) -> Vec<Value> {
     else {
         return Vec::new();
     };
-    REGION_GROUPS
+    let mut groups: Vec<Value> = proxies
         .iter()
-        .filter_map(|name| {
-            let info = proxies.get(*name)?;
+        .filter_map(|(name, info)| {
+            let all = info.get("all").and_then(Value::as_array)?;
             Some(json!({
                 "name": name,
+                "type": info.get("type").and_then(Value::as_str),
                 "now": info.get("now").and_then(Value::as_str),
-                "size": info.get("all").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0),
+                "size": all.len(),
+                "selectable": info.get("type").and_then(Value::as_str)
+                    .is_some_and(|t| t.eq_ignore_ascii_case("Selector") || t.eq_ignore_ascii_case("select")),
             }))
         })
-        .collect()
+        .collect();
+    groups.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    groups
 }
 
 /// One group from mihomo's `/proxies`: its current member and options.
@@ -723,14 +545,13 @@ pub fn group_now(proxies: Option<&Value>, group: &str) -> Option<Value> {
 }
 
 /// GET /api/services/chill's data: the state file, and while running what mihomo says
-/// (`version`, `proxies`, `mode` from its `/configs`), then the two summaries.
+/// (`version`, `proxies`, `mode` from its `/configs`), plus the manual-first summary.
 pub fn status_data(
     state: Option<Value>,
     version: Option<&Value>,
     proxies: Option<&Value>,
     mode: Option<String>,
     manual_first: Value,
-    home_exit: Value,
 ) -> Value {
     let Some(st) = state else {
         // chill.sh hasn't written a state file yet (never started since boot).
@@ -747,15 +568,13 @@ pub fn status_data(
         data["groups"] = json!(summarize_groups(proxies));
         data["region"] = json!(group_now(proxies, MAIN_GROUP));
         data["ai_exit"] = json!(group_now(proxies, AI_GROUP));
-        let main_now = group_now(proxies, MAIN_GROUP)
-            .and_then(|g| g.get("active").and_then(Value::as_str).map(str::to_string));
-        if let (Some(m), Some(n)) = (&mode, &main_now) {
-            data["exit"] = json!(exit_state(m, n));
+        if let Some(mode) = mode.as_deref().filter(|m| valid_mode(m)) {
+            let main_now = data["region"]["active"].as_str().unwrap_or("");
+            data["exit"] = json!(exit_state(mode, main_now));
         }
-        data["mode"] = json!(mode);
+        data["mode"] = json!(mode.as_deref().filter(|m| valid_mode(m)));
     }
     data["manual_first"] = manual_first;
-    data["home_exit"] = home_exit;
     data
 }
 
@@ -846,6 +665,29 @@ mod status_tests {
     }
 
     #[test]
+    fn canonical_mode_parser_rejects_legacy_values() {
+        assert_eq!(mode_wanted(&json!({"mode": "rule"})), Ok("rule"));
+        assert_eq!(mode_wanted(&json!({"mode": "global"})), Ok("global"));
+        assert_eq!(mode_wanted(&json!({"mode": "direct"})), Ok("direct"));
+        assert_eq!(mode_wanted(&json!({"mode": "proxy"})).unwrap_err().0, 400);
+    }
+
+    #[test]
+    fn dynamic_group_summary_keeps_any_selectable_group() {
+        let groups = summarize_groups(Some(&json!({
+            "proxies": {
+                "custom": {"type": "select", "now": "DIRECT", "all": ["DIRECT", "A"]},
+                "url": {"type": "url-test", "now": "A", "all": ["A"]},
+                "leaf": {"type": "direct", "now": "DIRECT"}
+            }
+        })));
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0]["name"], "custom");
+        assert_eq!(groups[0]["selectable"], true);
+        assert_eq!(groups[1]["selectable"], false);
+    }
+
+    #[test]
     fn status_shows_the_region_and_exit_while_running() {
         let proxies =
             json!({"proxies": {"🚀 节点选择": {"now": "DIRECT", "all": ["JP", "DIRECT"]}}});
@@ -855,9 +697,9 @@ mod status_tests {
             Some(&proxies),
             Some("rule".into()),
             json!(null),
-            json!(null),
         );
         assert_eq!(d["region"]["active"], "DIRECT");
+        assert!(d.get("home_exit").is_none());
         assert_eq!(d["exit"], "direct_keep_ai");
         assert_eq!(d["version"], "1.19");
         assert_eq!(d["groups"][0]["size"], 2);
@@ -867,12 +709,11 @@ mod status_tests {
             None,
             None,
             json!(1),
-            json!(2),
         );
         assert!(stopped.get("region").is_none());
         assert_eq!(stopped["manual_first"], 1);
         assert_eq!(
-            status_data(None, None, None, None, json!(1), json!(2)),
+            status_data(None, None, None, None, json!(1)),
             json!({"state": "unknown"})
         );
     }

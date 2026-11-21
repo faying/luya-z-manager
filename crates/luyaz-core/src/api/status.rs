@@ -1,16 +1,14 @@
 //! `/api/public/status` and `/api/health` for the touch screen.
 //!
 //! public/status carries only what luyaz-ui reads (touch-ui/rs/ui/src/data/scenario.rs): `alerts.unread`,
-//! `health.{checked,bad,warn}`, `services.chill` (on, the manual-first notice, the home exit's line),
-//! `scenario`, plus `clock.utc_offset`; and `services.tailscale` for luyaz-web's top bar (8d-1c).
+//! `health.{checked,bad,warn}`, `services.chill` (on and the manual-first notice),
+//! `scenario`, plus `clock.utc_offset`.
 //! Network, Wi-Fi, battery, SMS and device are the admin web's, which stays on the agent.
 //!
 //! Where each piece comes from while the agent still runs everything (the shadow period):
 //! - health: the doctor snapshot (`/tmp/health.json`), written by u60d's check (9d:
 //!   `compat/health.rs`)
 //! - manual-first: u60d's own replay of the agent's records; before any record, the agent's file
-//! - home exit: on/off and rest from the agent's file (requests change them without a record),
-//!   the probe results from u60d's replay; `busy` is null until the PUT moves here (8e)
 //! - scenario: the engine's files (config, state.json, pin, disabled, restore.json, the guard's
 //!   takeover flag), which the agent writes on every switch
 
@@ -45,11 +43,11 @@ fn exists(c: &Compat, p: &str) -> bool {
 /// Everything but the clock (blocking: files and the shadow's lock).
 pub(super) fn gather(c: &Compat) -> Value {
     let health = Snapshot::read(&c.path(luyaz_api::health::SNAPSHOT_FILE));
-    #[allow(unused_mut)]
     let mut data = json!({
         "alerts": {"unread": Alerts::at(&c.alerts_dir()).unread()},
         "health": luyaz_api::health::public_summary(&health),
         "scenario": scenario(c),
+        "services": {"chill": chill(c)},
         // netwatch's home verdict while u60d owns it (9b; the agent shows this one then)
         "network": {"verdict": super::watch::verdict(c)},
     });
@@ -57,25 +55,7 @@ pub(super) fn gather(c: &Compat) -> Value {
     data["network"]["finding"] = super::finding::home_now().map_or(Value::Null, |h| h.to_value());
     data["network"]["health"] =
         luyaz_api::execution::network_health::build(&super::underlay::health_input(&c.root));
-    data["services"] = json!({"tailscale": tailscale(c)});
-    data["services"]["chill"] = chill(c);
     data
-}
-
-/// The agent's `services.tailscale` (8d-1c; luyaz-web's top bar reads `installed`/`running`): the
-/// CLI is there; a `tailscaled` process runs (the agent's `pidof`, as a /proc scan).
-fn tailscale(c: &Compat) -> Value {
-    let running = std::fs::read_dir(c.path("/proc")).is_ok_and(|d| {
-        d.flatten().any(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .bytes()
-                .all(|b| b.is_ascii_digit())
-                && std::fs::read_to_string(e.path().join("comm"))
-                    .is_ok_and(|s| s.trim_end() == "tailscaled")
-        })
-    });
-    json!({"installed": exists(c, "/data/tailscale/tailscale"), "running": running})
 }
 
 pub(super) const SCENARIO_CONFIG: &str = "/data/scenario/scenarios.json";
@@ -87,20 +67,26 @@ pub(super) const TAKEOVER_FILE: &str = "/tmp/luyaz/wifiguard.took-over";
 
 /// The agent's `scenario::public_summary`, from the engine's files.
 fn scenario(c: &Compat) -> Value {
+    let disabled = luyaz_scenario::disabled_state(c.path(SCENARIO_DISABLED));
+    let enabled = disabled == luyaz_scenario::DisabledState::Active;
     let cfg: sc::Config = read(c, SCENARIO_CONFIG).unwrap_or_default();
     let st: sc::RunState = read(c, SCENARIO_STATE).unwrap_or_default();
-    let pin = std::fs::read_to_string(c.path(SCENARIO_PIN))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let scen = cfg.scenario(&st.current);
+    let pin = enabled
+        .then(|| {
+            std::fs::read_to_string(c.path(SCENARIO_PIN))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .flatten();
+    let scen = enabled.then(|| cfg.scenario(&st.current)).flatten();
     let e = luyaz_api::scenario::Engine {
         configured: !cfg.scenarios.is_empty(),
-        enabled: !exists(c, SCENARIO_DISABLED),
-        current: &st.current,
+        enabled,
+        current: if enabled { &st.current } else { "" },
         pin,
-        guard_takeover: exists(c, TAKEOVER_FILE),
-        last_switch: st.last_switch,
+        guard_takeover: enabled && exists(c, TAKEOVER_FILE),
+        last_switch: enabled.then_some(st.last_switch).flatten(),
     };
     let current = scen.map(|s| luyaz_api::scenario::Current {
         id: &s.id,
@@ -115,7 +101,7 @@ fn scenario(c: &Compat) -> Value {
         &mut v,
         restores
             .iter()
-            .any(|p| p.key == luyaz_api::chill::CHILL_ON_KEY),
+            .any(|p| p.key == luyaz_api::chill::CHILL_ON_KEY) && enabled,
         scen.is_some_and(sc::is_abroad),
         scen.iter().flat_map(|s| s.actions.iter()).map(|a| {
             let member = a
@@ -127,11 +113,11 @@ fn scenario(c: &Compat) -> Value {
             (a.action.path.as_str(), member)
         }),
     );
+    v["disabled_state"] = json!(disabled.as_str());
     v
 }
 
-/// `services.chill`: CHILL's state file and switch, the manual-first notice, the home exit's line,
-/// the AI gate.
+/// `services.chill`: CHILL's state file and switch, the manual-first notice and AI gate.
 fn chill(c: &Compat) -> Value {
     use luyaz_api::chill as ch;
     let state: Option<Value> = read(c, ch::CHILL_STATE);
@@ -141,7 +127,6 @@ fn chill(c: &Compat) -> Value {
         reason.as_deref(),
         !exists(c, ch::CHILL_DISABLED),
         &manual_first_summary(c),
-        home_exit_summary(c),
     );
     // the AI gate (engines/chill_ai_gate.rs): null when off
     v["ai_gate"] = crate::engines::chill_ai_gate::view();
@@ -168,13 +153,5 @@ pub(super) fn manual_first_summary(c: &Compat) -> Value {
                 super::home::now_unix(),
             )
         }
-    }
-}
-
-/// The home exit's line: u60d's engine when it owns it, else the agent's from its file.
-pub(super) fn home_exit_summary(c: &Compat) -> Value {
-    match c.home_exit.as_ref().filter(|e| e.owner()) {
-        Some(e) => e.summary(),
-        None => luyaz_api::chill::home_summary(&super::home::machine(c)),
     }
 }

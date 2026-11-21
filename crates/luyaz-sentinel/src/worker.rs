@@ -16,7 +16,9 @@
 //! Only this process's own timers (dropbear's hourly limit) use the monotonic clock.
 
 pub use luyaz_alerts::clock::CLOCK_YEAR_MIN;
+use crate::wifi;
 use luyaz_alerts::clock::{BootTime, ClockEvidence, ClockSource, WALL_STEP_TOLERANCE_S};
+use luyaz_scenario::{DisabledState, DISABLED_FLAG};
 
 pub const INTERVAL_S: u64 = 60;
 /// After boot: judge nothing.
@@ -53,6 +55,7 @@ pub struct Paths {
     /// This sentinel's own state (tmpfs: a reboot starts clean, as the guard's `$STATE`).
     pub state: String,
     pub heartbeat: String,
+    pub disabled: String,
     pub marker: String,
     /// The /tmp tree the sentinel alone writes (`/tmp/luyaz`): `clock-ok`, `recovery-set`.
     pub tmp: String,
@@ -88,6 +91,7 @@ impl Default for Paths {
         Paths {
             state: s("/tmp/luyaz-sentinel"),
             heartbeat: s("/tmp/scenario.heartbeat"),
+            disabled: s(DISABLED_FLAG),
             marker: s("/tmp/luyaz/wifiguard.took-over"),
             tmp: s("/tmp/luyaz"),
             handover: s("/tmp/luyaz/handover"),
@@ -105,8 +109,7 @@ impl Default for Paths {
             ui_gave_up: s("/data/luyaz/screen/gave-up"),
             long_open: s("/data/luyaz/core/long/open.json"),
             disk_open: s("/data/luyaz/screen/disk-open"),
-            // tailscaled writes ~7.5 MB/day and nothing rotates it; start.sh opens it for append.
-            cap_logs: vec![s("/data/tailscaled.log")],
+            cap_logs: vec![],
             cap_bytes: 1_048_576,
             // RAM logs trimmed otherwise only when their writer starts (the .old copy is RAM too).
             cap_tmp_logs: vec![
@@ -152,6 +155,17 @@ pub trait WorkerIo {
     /// Monotonic seconds (stops in suspend).
     fn mono_s(&mut self) -> i64;
     fn read(&mut self, path: &str) -> Option<String>;
+    /// The scenario marker, parsed with the same strict semantics as the scenario engine.
+    fn scenario_state(&mut self, path: &str) -> DisabledState {
+        DisabledState::from_marker(self.read(path).as_deref())
+    }
+    /// Whether the scenario worker is in a valid stopping or paused state.
+    fn scenario_paused(&mut self) -> bool {
+        matches!(
+            self.scenario_state(DISABLED_FLAG),
+            DisabledState::Stopping | DisabledState::Paused
+        )
+    }
     fn exists(&mut self, path: &str) -> bool;
     fn size(&mut self, path: &str) -> Option<u64>;
     /// Is any running process's `/proc/<pid>/cmdline` containing `needle`, for this pid?
@@ -186,7 +200,7 @@ pub trait WorkerIo {
     fn verify_prev(&mut self) -> bool;
     /// A process of this name runs; None = cannot tell.
     fn comm_running(&mut self, comm: &str) -> Option<bool>;
-    /// `ssh`, `lan` or `tailscale`, by the same rules as luyaz-ship.sh `conn_probe`.
+    /// `ssh` or `lan`, by the same rules as luyaz-ship.sh `conn_probe`.
     fn conn_ok(&mut self, item: &str) -> Option<bool>;
     /// A directory's file names, sorted; empty when it is not there.
     fn list_dir(&mut self, path: &str) -> Vec<String>;
@@ -716,7 +730,8 @@ impl Worker {
         } else {
             let mut v: Vec<String> = Vec::new();
             for it in watched.iter().flat_map(|e| e.2.split(',')) {
-                if !it.is_empty() && !v.iter().any(|x| x == it) {
+                // Older ship records can contain retired or unknown baseline items.
+                if matches!(it, "ssh" | "lan") && !v.iter().any(|x| x == it) {
                     v.push(it.to_string());
                 }
             }
@@ -1072,6 +1087,26 @@ impl Worker {
         w.alerted_restore = false;
     }
 
+    fn pause_episode(&mut self, io: &mut dyn WorkerIo) {
+        if self.wifi.episode.is_none() && !self.wifi.sleep_held && !self.wifi.took_over {
+            return;
+        }
+        io.log("scenario mode is disabled; ending the Wi-Fi watchdog takeover");
+        if self.wifi.sleep_held {
+            io.set_autosleep(true);
+        }
+        io.remove(&self.paths.marker);
+        let w = &mut self.wifi;
+        w.sleep_held = false;
+        w.episode = None;
+        w.took_over = false;
+        w.next_try = 0;
+        w.backoff = 0;
+        w.woke = 0;
+        w.alerted_silent = false;
+        w.alerted_restore = false;
+    }
+
     fn arm_rtc(&mut self, io: &mut dyn WorkerIo) {
         // Make sure the RTC wakes the device within five minutes so this gets to run. Never pushes an
         // earlier alarm out — the engine arms its own, and whichever is sooner should win.
@@ -1090,11 +1125,19 @@ impl Worker {
 
     pub fn guard_round(&mut self, io: &mut dyn WorkerIo) {
         let now = io.uptime();
+        let prev = self.wifi.last_round;
+        self.wifi.last_round = now;
+        let disabled = io.scenario_state(&self.paths.disabled);
+        if matches!(disabled, DisabledState::Paused | DisabledState::Stopping) {
+            self.pause_episode(io);
+            return;
+        }
+        if disabled == DisabledState::Invalid {
+            io.log("scenario disabled marker is invalid; applying watchdog protection");
+        }
         // /proc/uptime counts through suspend, but neither our sleep nor the engine's does. Rounds
         // much further apart than INTERVAL mean we were asleep: the engine then gets a full STALE
         // window before it counts as gone.
-        let prev = self.wifi.last_round;
-        self.wifi.last_round = now;
         if prev > 0 && now.saturating_sub(prev) > WAKE_GAP_S {
             self.wifi.woke = now;
             io.log(&format!(
@@ -1165,7 +1208,18 @@ impl Worker {
         if now < self.wifi.next_try {
             return;
         }
-        match io.restore_wifi() {
+        let restore = io.restore_wifi();
+        if matches!(
+            io.scenario_state(&self.paths.disabled),
+            DisabledState::Paused | DisabledState::Stopping
+        ) || restore
+            .as_ref()
+            .is_err_and(|e| e.as_str() == wifi::SCENARIO_PAUSED)
+        {
+            self.pause_episode(io);
+            return;
+        }
+        match restore {
             Ok(()) => {
                 io.log("Wi-Fi restored");
                 self.wifi.next_try = 0;
@@ -1191,6 +1245,13 @@ impl Worker {
     /// Keep an eye on the RTC whenever the APs are down, even with the engine alive: if it dies
     /// while the device is suspended, only a wake gets this running again.
     pub fn rtc_round(&mut self, io: &mut dyn WorkerIo) {
+        let disabled = io.scenario_state(&self.paths.disabled);
+        if matches!(disabled, DisabledState::Paused | DisabledState::Stopping) {
+            return;
+        }
+        if disabled == DisabledState::Invalid {
+            io.log("scenario disabled marker is invalid; applying RTC watchdog protection");
+        }
         if !io.beaconing() {
             self.arm_rtc(io);
         }

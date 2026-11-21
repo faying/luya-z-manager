@@ -75,7 +75,7 @@ async function own(p, urls) {
   ok(await p.inputValue("#sim-f-on") === "000", "non-digits are dropped as typed");
   await submit(p, "pin-on", { on: "0000" });
   ok(/还剩 3 次 PIN 尝试机会/.test(await txt(p, "#sim-confirm")), `dialog quotes the attempts: ${(await txt(p, "#sim-confirm")).slice(0, 160)}`);
-  ok(/Tailscale|远程/.test(await txt(p, "#sim-confirm")) === false || true, "(local browser)");
+  ok(!/按远程处理|你正在远程操作/.test(await txt(p, "#sim-confirm")), "local browser: no remote warning in the PIN dialog");
   await p.screenshot({ path: `${OUT}/sim-dialog.png`, fullPage: true });
   await p.click("#sim-confirm .nd-btn--secondary");
   await p.waitForFunction(() => !document.querySelector("#sim-confirm"), null, { timeout: 5000 });

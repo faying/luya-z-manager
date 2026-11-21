@@ -24,43 +24,6 @@ fn vendor_switch_only_when_exactly_off_and_turning_on() {
     assert!(!vendor_switch_needs_on(false, Some("1")));
 }
 
-#[test]
-fn expectation_follows_radio_and_ap_flags() {
-    assert_eq!(
-        expectation("0", "0", "0", "0", false),
-        Expect::On {
-            ap_2g: true,
-            ap_5g: true
-        }
-    );
-    // Missing keys mean enabled.
-    assert_eq!(
-        expectation("", "", "", "", false),
-        Expect::On {
-            ap_2g: true,
-            ap_5g: true
-        }
-    );
-    // Either layer disables a band.
-    assert_eq!(
-        expectation("1", "0", "0", "0", false),
-        Expect::On {
-            ap_2g: false,
-            ap_5g: true
-        }
-    );
-    assert_eq!(
-        expectation("0", "0", "0", "1", false),
-        Expect::On {
-            ap_2g: true,
-            ap_5g: false
-        }
-    );
-    assert_eq!(expectation("0", "1", "0", "1", false), Expect::Off);
-    assert_eq!(expectation("1", "1", "1", "1", false), Expect::Off);
-    assert_eq!(expectation("0", "1", "0", "1", true), Expect::Unknown);
-}
-
 fn try_flock(path: &str) -> bool {
     let f = OpenOptions::new()
         .read(true)
@@ -215,4 +178,5 @@ fn a_reload_is_verified_only_when_hostapd_serves_the_new_name() {
         !status_serves(st, Some("U-Chil")),
         "whole name, not a prefix"
     );
+    assert!(!status_serves("state=DISABLED\nssid[0]=state=ENABLED\n", None));
 }

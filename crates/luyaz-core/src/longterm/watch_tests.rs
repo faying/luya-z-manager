@@ -79,12 +79,12 @@ fn of<'a>(lk: &'a Look, k: &str) -> Vec<&'a Value> {
 #[test]
 fn stat_start_time_and_comm_search() {
     let d = Dev::new("stat");
-    d.proc(7, "tailscaled", 1234, b"a");
-    d.proc(3, "tailscaled", 99, b"b");
+    d.proc(7, "mihomo", 1234, b"a");
+    d.proc(3, "mihomo", 99, b"b");
     assert_eq!(start_time(&d.p.proc_, 7), Some(1234));
     assert_eq!(start_time(&d.p.proc_, 8), None);
     // the first hit by pid, as the guard's find_pid over /proc/[0-9]*
-    assert_eq!(find_pids(&d.p.proc_, &["tailscaled"])["tailscaled"], 3);
+    assert_eq!(find_pids(&d.p.proc_, &["mihomo"])["mihomo"], 3);
     // the core's card child (a lower pid after a wrap) is not the core
     d.proc(40, "luyaz-core", 500, b"d");
     d.proc(2, "luyaz-core", 900, b"d");
@@ -102,14 +102,14 @@ fn stat_start_time_and_comm_search() {
 #[test]
 fn ver_once_a_boot_then_on_a_new_build() {
     let d = Dev::new("ver");
-    d.proc(200, "tailscaled", 10, b"ts-1");
+    d.proc(200, "mihomo", 10, b"m-1");
     d.write("guard/doctor.sh", "#!/bin/sh\n");
     let mut st = State::default();
     let lk = d.look(&mut st, 60);
     let v = of(&lk, "ver");
     let get = |p: &str| v.iter().find(|x| x["prog"] == p).copied().unwrap().clone();
-    assert_eq!(get("tailscaled")["md5"], md5_hex(b"ts-1", 8));
-    assert_eq!(get("tailscaled")["pid"], 200);
+    assert_eq!(get("mihomo")["md5"], md5_hex(b"m-1", 8));
+    assert_eq!(get("mihomo")["pid"], 200);
     assert_eq!(get("luyaz-core")["extra"], "ubus=socket");
     assert_eq!(
         get("luyaz-ui")["md5"],
@@ -124,22 +124,22 @@ fn ver_once_a_boot_then_on_a_new_build() {
     assert!(of(&d.look(&mut st, 120), "ver").is_empty());
     // restarted, same build: no ver (a proc_restart, below)
     d.gone(200);
-    d.proc(201, "tailscaled", 500, b"ts-1");
+    d.proc(201, "mihomo", 500, b"m-1");
     assert!(of(&d.look(&mut st, 180), "ver").is_empty());
     // a new build
     d.gone(201);
-    d.proc(202, "tailscaled", 600, b"ts-2");
+    d.proc(202, "mihomo", 600, b"m-2");
     let lk = d.look(&mut st, 240);
     let v = of(&lk, "ver");
     assert_eq!(v.len(), 1);
-    assert_eq!(v[0]["md5"], md5_hex(b"ts-2", 8));
+    assert_eq!(v[0]["md5"], md5_hex(b"m-2", 8));
     // the touch UI comes up later: found on the rescan, md5 differs from "not running"
     d.proc(300, "luyaz-ui", 700, b"ui");
     assert!(
         of(&d.look(&mut st, 300), "ver").is_empty(),
         "rescan not due yet"
     );
-    // (the last search by name was at 240, when tailscaled's pid changed)
+    // (the last search by name was at 240, when mihomo's pid changed)
     assert!(of(&d.look(&mut st, 239 + RESCAN_S), "ver").is_empty());
     let v = d.look(&mut st, 240 + RESCAN_S);
     assert_eq!(of(&v, "ver").len(), 1);
@@ -225,7 +225,7 @@ fn svc_exit_first_go_live_takes_what_is_there() {
 fn svc_exit_at_boot_says_boot_init() {
     let d = Dev::new("sxb");
     d.write("long/crashlog.seen", "");
-    d.write("crashlog/tailscaled/a-up5.log", "status: signal 9\n");
+    d.write("crashlog/mihomo/a-up5.log", "status: signal 9\n");
     let mut st = State::default();
     let lk = d.look(&mut st, 60);
     assert_eq!(of(&lk, "svc_exit")[0]["found"], "boot_init");
@@ -287,7 +287,6 @@ fn nothing_missing_no_rescan() {
     let d = Dev::new("ret1");
     d.proc(301, "mihomo", 10, b"m");
     d.proc(302, "luyaz-ui", 10, b"ui");
-    d.proc(304, "tailscaled", 10, b"ts");
     let mut st = State::default();
     d.look(&mut st, 60);
     assert_eq!(st.scanned, Some(60));

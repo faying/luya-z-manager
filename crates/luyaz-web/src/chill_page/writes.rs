@@ -1,8 +1,8 @@
 //! /services/chill: the writes. Tiers are the inventory's (web/docs/controls-inventory.md):
 //!
 //! ```text
-//! tier 1 (post at once): exit proxy / direct_keep_ai / global, region, AI exit, profile, extend 2 h
-//! tier 2 (inline confirm): start, stop, exit direct_all, home-exit switches, subscription refresh,
+//! tier 1 (post at once): exit proxy / direct_keep_ai / global, region, AI exit, profile
+//! tier 2 (inline confirm): start, stop, exit direct_all, subscription refresh,
 //!                          subscription link save, device bypass (switch and the stale ×)
 //! ```
 //! Every write goes to the agent once (never retried) and is read back from the agent. Start, stop,
@@ -19,7 +19,7 @@ use std::convert::Infallible;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use axum::extract::{Query, Request, State};
+use axum::extract::{FromRequest, Multipart, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
@@ -40,7 +40,6 @@ const STATUS: &str = "/api/services/chill";
 const JOB: &str = "/api/services/chill/job";
 const JOB_EVERY: Duration = Duration::from_millis(1500);
 const JOB_LIMIT: Duration = Duration::from_secs(180);
-const HOME_LIMIT: Duration = Duration::from_secs(90);
 
 fn who(app: &Shared, req: &Request) -> (Caller, Lang, Via) {
     let ctx = crate::topbar::Ctx::of_request(req, PATH);
@@ -354,121 +353,124 @@ pub async fn profile_set(State(app): State<Shared>, Query(q): Query<ExitQ>, req:
     })
 }
 
-// ---- home exit (tier 2; extend tier 1) ----
+pub async fn mode_ask(req: Request) -> impl IntoResponse {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let l = ctx.lang;
+    let c = inline(l.pick("Switch to direct mode?", "切到直连模式？").into(), l.pick("All traffic, including AI and VoWiFi, goes direct.", "全屋流量改为直连，AI 和 VoWiFi 也直连。").into(), l.pick("Confirm: direct", "确认：直连").into());
+    one(ask("ch-md", l, ctx.remote, &format!("{PATH}/mode/set?v=direct"), c))
+}
+
+pub async fn mode_set(State(app): State<Shared>, Query(q): Query<ExitQ>, req: Request) -> impl IntoResponse {
+    let (who, l, _) = who(&app, &req);
+    write::respond(pending("ch-md", l, l.pick("Switching…", "正在切换…")), async move {
+        let want = q.v;
+        if !["rule", "global", "direct"].contains(&want.as_str()) {
+            return done("ch-md", l, Outcome::Failed(l.pick("Unknown mode", "未知模式").into()));
+        }
+        let r = agent::send_json(&app, &who, reqwest::Method::PUT, "/api/services/chill/mode", &json!({"mode": want})).await;
+        let o = match sent(r, l) {
+            Err(o) => o,
+            Ok((_, no_reply)) => finish(&app, &who, STATUS, no_reply, l.pick("Mode updated", "模式已更新").into(), |v| s(v, "mode") == want).await,
+        };
+        done("ch-md", l, o)
+    })
+}
+
+const CONFIGS: &str = "/api/services/chill/configs";
 
 #[derive(Deserialize, Default)]
-pub struct HomeQ {
-    #[serde(default)]
-    item: String,
-    #[serde(default)]
-    on: u8,
+pub struct ConfigQ {
+    #[serde(default)] act: String,
+    #[serde(default)] i: usize,
+    #[serde(default)] h: String,
 }
 
-const HOME: &str = "/api/services/chill/home";
-
-fn home_words(item: &str, on: bool, l: Lang) -> String {
-    let w = if on { l.pick("on", "打开") } else { l.pick("off", "关闭") };
-    format!("{} · {w}", home_label(item, l))
+async fn config_at(app: &Shared, who: &Caller, q: &ConfigQ, l: Lang) -> Result<(String, bool), Outcome> {
+    let v = read(app, who, CONFIGS).await.map_err(|e| failed(&e, l))?;
+    v["profiles"].as_array().and_then(|a| a.get(q.i)).filter(|p| tag(s(p, "id")) == q.h)
+        .and_then(|p| {
+            let id = s(p, "id");
+            let valid = !id.is_empty() && id.len() <= 32 && id.bytes().next().is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+            valid.then(|| (id.to_owned(), p["active"].as_bool() == Some(true)))
+        }).ok_or_else(|| Outcome::NotYet(l.pick("The list changed; press it again", "列表变了，请再按一次").into()))
 }
 
-pub async fn home_ask(State(app): State<Shared>, Query(q): Query<HomeQ>, req: Request) -> impl IntoResponse {
+pub async fn config_ask(State(app): State<Shared>, Query(q): Query<ConfigQ>, req: Request) -> impl IntoResponse {
     let (who, l, remote) = who(&app, &req);
-    let on = q.on == 1;
-    if !HOME_ITEMS.contains(&q.item.as_str()) {
-        return one(done("ch-ho", l, Outcome::Failed(l.pick("unknown item", "不认识这一项").into())));
-    }
-    let h = match read(&app, &who, HOME).await {
-        Ok(h) => h,
-        Err(e) => return one(done("ch-ho", l, Outcome::Failed(e.text(l)))),
+    let valid = ["activate", "refresh", "delete"].contains(&q.act.as_str());
+    let result = if valid { config_at(&app, &who, &q, l).await } else { Err(Outcome::Failed(l.pick("Unknown action", "未知操作").into())) };
+    let html = match result {
+        Err(o) => done("ch-cf", l, o),
+        Ok((_, active)) if active && q.act == "delete" => done("ch-cf", l, Outcome::Failed(l.pick("The active configuration cannot be deleted", "不能删除使用中的配置档案").into())),
+        Ok(_) => {
+            let c = inline(l.pick("Apply this configuration action?", "执行配置档案操作？").into(), l.pick("Switching or refreshing an active configuration can interrupt connections.", "切换或刷新使用中的配置可能中断连接。").into(), l.pick("Confirm", "确认").into());
+            ask("ch-cf", l, remote, &format!("{PATH}/config/set?act={}&i={}&h={}", q.act, q.i, q.h), c)
+        }
     };
-    if on && let Some(b) = h["blocked"].as_str() {
-        return one(done("ch-ho", l, Outcome::NotYet(home_code_text(b, l))));
-    }
-    let roaming = h["where"]["true_roaming"].as_bool() != Some(false);
-    let c = inline(
-        home_words(&q.item, on, l),
-        if roaming { l.pick("Drops ~5 s, uses roaming data", "会断一下，走漫游流量") } else { l.pick("Drops for ~5 s", "会断一下（约 5 秒）") }.into(),
-        match l {
-            Lang::En => format!("Confirm: {}", home_words(&q.item, on, l)),
-            Lang::Zh => format!("确认：{}", home_words(&q.item, on, l)),
-        },
-    );
-    one(ask("ch-ho", l, remote, &format!("{PATH}/home/set?item={}&on={}", q.item, u8::from(on)), c))
+    one(html)
 }
 
-pub async fn home_set(State(app): State<Shared>, Query(q): Query<HomeQ>, req: Request) -> impl IntoResponse {
+pub async fn config_set(State(app): State<Shared>, Query(q): Query<ConfigQ>, req: Request) -> impl IntoResponse {
     let (who, l, _) = who(&app, &req);
-    let on = q.on == 1;
-    write::respond(pending("ch-ho", l, l.pick("Switching, this can take a minute…", "正在切换，可能要一分钟…")), async move {
-        if !HOME_ITEMS.contains(&q.item.as_str()) {
-            return done("ch-ho", l, Outcome::Failed(l.pick("unknown item", "不认识这一项").into()));
-        }
-        let body = json!({"item": q.item, "on": on, "confirm": true});
-        let r = agent::send_json(&app, &who, reqwest::Method::PUT, HOME, &body).await;
-        // a 409 carries a code ("busy", "mode_global", …) in the agent's error
-        let no_reply = match r {
-            Ok(_) => false,
-            Err(Fail::Unreachable) => true,
-            Err(Fail::Refused(409, m, _)) => return done("ch-ho", l, Outcome::Failed(home_code_text(&m, l))),
-            Err(e) => return done("ch-ho", l, Outcome::Failed(e.text(l))),
-        };
-        bump(&app);
-        // The switch runs in the background (checking → trial → applying): wait for it to end.
-        let start = Instant::now();
-        let mut read_any = false;
-        let mut last = Value::Null;
-        while start.elapsed() < HOME_LIMIT {
-            tokio::time::sleep(JOB_EVERY).await;
-            let Ok(h) = read(&app, &who, HOME).await else { continue };
-            read_any = true;
-            let busy = h["busy"].is_object();
-            let is_on = h["items"][&q.item]["on"].as_bool() == Some(true);
-            last = h;
-            if busy {
-                continue;
-            }
-            if is_on == on {
-                bump(&app);
-                return done("ch-ho", l, Outcome::Applied(home_words(&q.item, on, l)));
-            }
-            if start.elapsed() > Duration::from_secs(5) {
-                break;
-            }
-        }
-        let n = &last["notice"];
-        let o = if read_any && s(n, "kind") == "failed" && s(n, "item") == q.item {
-            let d = s(n, "detail");
-            let t = if l == Lang::En && !s(n, "text_en").is_empty() { s(n, "text_en") } else { s(n, "text") };
-            Outcome::Failed(if d.is_empty() { t.to_owned() } else { format!("{t} ({d})") })
-        } else if read_any {
-            Outcome::Accepted
-        } else if no_reply {
-            Outcome::Unknown
-        } else {
-            Outcome::Accepted
-        };
-        bump(&app);
-        done("ch-ho", l, o)
-    })
-}
-
-pub async fn home_extend(State(app): State<Shared>, req: Request) -> impl IntoResponse {
-    let (who, l, _) = who(&app, &req);
-    write::respond(pending("ch-ho", l, l.pick("Extending…", "正在延长…")), async move {
-        let before = read(&app, &who, HOME).await.ok().and_then(|h| h["items"]["rest"]["until"].as_i64());
-        let r = agent::send_json(&app, &who, reqwest::Method::PUT, HOME, &json!({"action": "extend"})).await;
-        let o = match sent(r, l) {
-            Err(Outcome::Failed(m)) => Outcome::Failed(home_code_text(&m, l)),
+    write::respond(pending("ch-cf", l, l.pick("Working…", "正在处理…")), async move {
+        if !["activate", "refresh", "delete"].contains(&q.act.as_str()) { return done("ch-cf", l, Outcome::Failed(l.pick("Unknown action", "未知操作").into())); }
+        let (id, active) = match config_at(&app, &who, &q, l).await { Ok(v) => v, Err(o) => return done("ch-cf", l, o) };
+        if q.act == "delete" && active { return done("ch-cf", l, Outcome::Failed(l.pick("The active configuration cannot be deleted", "不能删除使用中的配置档案").into())); }
+        let path = format!("{CONFIGS}/{}", q.act);
+        let o = match run_job(&app, &who, reqwest::Method::POST, &path, json!({"id": id}), l).await {
+            Err(Outcome::Failed(_)) => Outcome::Failed(l.pick("Configuration operation failed; check the source and retry", "配置档案操作失败，请检查来源后重试").into()),
             Err(o) => o,
-            Ok((_, no_reply)) => {
-                finish(&app, &who, HOME, no_reply, l.pick("Extended by 2 hours", "已再开 2 小时").into(), move |h| {
-                    h["items"]["rest"]["on"].as_bool() == Some(true) && h["items"]["rest"]["until"].as_i64() > before
-                })
-                .await
-            }
+            Ok(_) => finish(&app, &who, CONFIGS, false, l.pick("Configuration updated", "配置档案已更新").into(), |v| {
+                let found = v["profiles"].as_array().is_some_and(|a| a.iter().any(|p| s(p, "id") == id));
+                match q.act.as_str() { "activate" => s(v, "active_id") == id, "delete" => !found, _ => found }
+            }).await,
         };
-        done("ch-ho", l, o)
+        bump(&app);
+        done("ch-cf", l, o)
     })
+}
+
+pub async fn config_import(State(app): State<Shared>, req: Request) -> axum::response::Response {
+    use askama::Template;
+    let headers = req.headers().clone();
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let (who, l, _) = who(&app, &req);
+    let mut fields = HashMap::<String, Vec<u8>>::new();
+    let mut valid = true;
+    if let Ok(mut mp) = Multipart::from_request(req, &app).await {
+        loop {
+            let mut field = match mp.next_field().await { Ok(Some(f)) => f, Ok(None) => break, Err(_) => { valid = false; break; } };
+            let name = field.name().unwrap_or("").to_owned();
+            let mut value = Vec::new();
+            loop {
+                match field.chunk().await {
+                    Ok(Some(chunk)) if value.len() + chunk.len() <= if name == "file" { 4 * 1024 * 1024 } else { 8192 } => value.extend_from_slice(&chunk),
+                    Ok(Some(_)) | Err(_) => { valid = false; break; },
+                    Ok(None) => break,
+                }
+            }
+            if !valid { break; }
+            if ["name", "kind", "url", "file"].contains(&name.as_str()) && fields.insert(name, value).is_some() { valid = false; break; }
+        }
+    } else { valid = false; }
+    let text = |key: &str| fields.get(key).and_then(|v| std::str::from_utf8(v).ok()).unwrap_or("");
+    let (name, kind, url, yaml) = (text("name").trim(), text("kind"), text("url").trim(), text("file"));
+    valid &= !name.is_empty() && name.len() <= 128 && match kind { "full_url" | "node_url" => sub_url_ok(url), "local_yaml" => !yaml.is_empty(), _ => false };
+    let o = if valid {
+        let body = if kind == "local_yaml" { json!({"name": name, "kind": kind, "yaml": yaml}) } else { json!({"name": name, "kind": kind, "url": url}) };
+        match run_job(&app, &who, reqwest::Method::POST, &format!("{CONFIGS}/import"), body, l).await {
+            Ok(_) => finish(&app, &who, CONFIGS, false, l.pick("Configuration imported", "配置档案已导入").into(), |v| v["profiles"].as_array().is_some_and(|a| a.iter().any(|p| s(p, "name") == name && s(p, "kind") == kind))).await,
+            Err(_) => Outcome::Failed(l.pick("Import failed; check the source and try again", "导入失败，请检查来源后重试").into()),
+        }
+    } else { Outcome::Failed(l.pick("Enter a name and a valid source (maximum 4 MiB)", "请输入名称及有效来源（最大 4 MiB）").into()) };
+    bump(&app);
+    let tab = crate::auth::random_id();
+    let poll = super::Poll::new(who, l, tab.clone());
+    let shell = app.hub.read(|st| crate::shell::Shell::new(&headers, PATH).live(st, &ctx, Some(format!("{PATH}/events?g={}&t={tab}", st.generation))));
+    let mut ops = AREAS.map(|id| area(id, l, ctx.remote, "", &Phase::Idle));
+    ops[8] = done("ch-cf", l, o);
+    let html = super::Page { shell, l, leaves: poll.leaves(), ops }.render().unwrap();
+    crate::assets::maybe_gzip(&headers, "text/html; charset=utf-8", html.into_bytes(), "no-store")
 }
 
 // ---- subscriptions ----

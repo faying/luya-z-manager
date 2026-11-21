@@ -247,10 +247,7 @@ pub fn describe_does(actions: &[Does], inhibit_sleep: bool) -> (String, String) 
         }
     }
     if inhibit_sleep {
-        out.push(pair(
-            "不休眠，Tailscale 一直连得上",
-            "No sleep; Tailscale stays reachable",
-        ));
+        out.push(pair("不休眠", "Stay awake"));
     }
     if out.is_empty() {
         return pair("什么都不改", "Changes nothing");

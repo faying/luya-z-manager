@@ -78,6 +78,7 @@ pub struct Cfg {
     wget: Vec<String>,
     proc_dir: String,
     heartbeat: String,
+    scenario_disabled: String,
     marker: String,
     uid_state: String,
     uid_want: String,
@@ -98,8 +99,6 @@ pub struct Cfg {
     md5_cache: String,
     /// DOC_MD5SUM: hash with that command; unset: in-process (the same hex as busybox md5sum)
     md5sum: Option<Vec<String>>,
-    ts_dir: String,
-    ts_tuning: String,
     /// the touch UI's fonts, beside the program
     ui_fonts: String,
     /// its operator logos (Luya-Z D5: with the program)
@@ -164,6 +163,7 @@ impl Cfg {
             wget: w("DOC_WGET", "wget"),
             proc_dir: s("DOC_PROC", "/proc"),
             heartbeat: s("DOC_HEARTBEAT", "/tmp/scenario.heartbeat"),
+            scenario_disabled: s("DOC_SCENARIO_DISABLED", luyaz_scenario::DISABLED_FLAG),
             marker: s("DOC_MARKER", "/tmp/luyaz/wifiguard.took-over"),
             uid_state: s("DOC_UID_STATE", uid_state),
             uid_want: s("DOC_UID_WANT", "/tmp/luyaz/screen.want"),
@@ -183,8 +183,6 @@ impl Cfg {
             md5sum: get("DOC_MD5SUM")
                 .filter(|v| !v.is_empty())
                 .map(|v| v.split_whitespace().map(str::to_owned).collect()),
-            ts_dir: s("DOC_TS_DIR", "/data/tailscale"),
-            ts_tuning: s("DOC_TS_TUNING", "/data/tailscale/tuning.env"),
             ui_fonts: s("DOC_UI_FONTS", "/data/luyaz/ui/fonts"),
             ui_logos: s("DOC_UI_LOGOS", "/data/luyaz/ui/operator-logos"),
             u60d_plugins: s("DOC_U60D_PLUGINS", &format!("{data_dir}/plugins")),
@@ -210,8 +208,6 @@ impl Cfg {
             calib_url: s("DOC_CALIB_URL", "http://127.0.0.1:9460/v2/longterm/calib"),
             chill: chill::Cfg {
                 env: s("DOC_CHILL_ENV", "/data/chill/chill.env"),
-                state: s("DOC_CHILL_STATE", "/tmp/chill.state"),
-                ip: w("DOC_IP", "ip"),
                 template: s("DOC_CHILL_TEMPLATE", "/data/chill/template.yaml"),
                 dir: s("DOC_CHILL_DIR", "/data/chill"),
             },
@@ -1074,6 +1070,39 @@ fn services(c: &Cfg) -> Vec<Row> {
 }
 
 fn heartbeat(c: &Cfg) -> Row {
+    match luyaz_scenario::disabled_state(&c.scenario_disabled) {
+        luyaz_scenario::DisabledState::Paused => {
+            return row(
+                "ok",
+                "heartbeat",
+                "后台心跳",
+                "情景模式已关闭".into(),
+                "Admin heartbeat",
+                "Scenario mode is off".into(),
+            )
+        }
+        luyaz_scenario::DisabledState::Stopping => {
+            return row(
+                "warn",
+                "heartbeat",
+                "后台心跳",
+                "正在停止情景模式".into(),
+                "Admin heartbeat",
+                "Scenario mode is stopping".into(),
+            )
+        }
+        luyaz_scenario::DisabledState::Invalid => {
+            return row(
+                "warn",
+                "heartbeat",
+                "后台心跳",
+                "情景模式关闭标记不可识别".into(),
+                "Admin heartbeat",
+                "Scenario mode marker is unrecognized".into(),
+            )
+        }
+        luyaz_scenario::DisabledState::Active => {}
+    }
     let up = uptime_s(c);
     match cat(&c.heartbeat).and_then(|s| digits(&s)) {
         None => row(
@@ -1144,6 +1173,19 @@ fn wifi(c: &Cfg) -> Row {
             "在广播".into(),
             "Wi-Fi",
             "Broadcasting".into(),
+        );
+    }
+    if matches!(
+        luyaz_scenario::disabled_state(&c.scenario_disabled),
+        luyaz_scenario::DisabledState::Paused | luyaz_scenario::DisabledState::Stopping
+    ) {
+        return row(
+            "warn",
+            "wifi",
+            "Wi-Fi",
+            "情景模式已关闭，当前未在广播".into(),
+            "Wi-Fi",
+            "Scenario mode is off and Wi-Fi is not broadcasting".into(),
         );
     }
     // 情景有意关掉的（在家）不算问题：问后台当前情景是不是关 Wi-Fi 的那种

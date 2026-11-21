@@ -63,6 +63,8 @@ pub const CONFIG_FILE: &str = "/data/scenario/scenarios.json";
 pub const STATE_FILE: &str = "/data/scenario/state.json";
 pub const PIN_FILE: &str = "/data/scenario/pin";
 pub const DISABLED_FLAG: &str = "/data/scenario/disabled";
+pub const DISABLED_STOPPING: &str = "stopping-v1";
+pub const DISABLED_PAUSED: &str = "paused-v1";
 pub const LOG_FILE: &str = "/data/scenario/log";
 /// Values to put back on leaving a scenario. Kept apart from `state.json`
 /// because boot clears that, and a reboot abroad must not turn "what it was
@@ -75,15 +77,84 @@ const LOG_TAIL_LINES: usize = 300;
 /// agent's engine waits for it to go before starting, so the two never tick at once.
 pub const LEASE_FILE: &str = "/tmp/scenario.owner";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisabledState {
+    Active,
+    Stopping,
+    Paused,
+    Invalid,
+}
+
+impl DisabledState {
+    pub fn from_marker(marker: Option<&str>) -> Self {
+        match marker {
+            None => Self::Active,
+            Some(DISABLED_STOPPING) => Self::Stopping,
+            Some(DISABLED_PAUSED) => Self::Paused,
+            Some(_) => Self::Invalid,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Stopping => DISABLED_STOPPING,
+            Self::Paused => DISABLED_PAUSED,
+            Self::Invalid => "invalid",
+        }
+    }
+}
+
+/// Read the scenario disabled marker without any device or engine side effects.
+/// Only an absent marker means the engine is active. Core migrates the old empty
+/// marker at startup. Until then it cannot authorize a watchdog exemption.
+pub fn disabled_state(path: impl AsRef<Path>) -> DisabledState {
+    match fs::read_to_string(path) {
+        Ok(text) => DisabledState::from_marker(Some(&text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DisabledState::Active,
+        Err(_) => DisabledState::Invalid,
+    }
+}
+
+/// Atomically update the disabled marker. `Active` removes it, while the
+/// disabled states write their versioned marker. `Invalid` is never written.
+pub fn write_disabled_state(path: impl AsRef<Path>, state: DisabledState) -> std::io::Result<()> {
+    let path = path.as_ref();
+    match state {
+        DisabledState::Active => remove_if_present(path),
+        DisabledState::Stopping => write_marker(path, DISABLED_STOPPING),
+        DisabledState::Paused => write_marker(path, DISABLED_PAUSED),
+        DisabledState::Invalid => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid disabled state cannot be written",
+        )),
+    }
+}
+
+fn remove_if_present(path: impl AsRef<Path>) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+fn write_marker(path: &Path, marker: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    atomic_write(path.to_string_lossy().as_ref(), marker.as_bytes())
+}
+
 // ── Contract with the sentinel's Wi-Fi guard (luyaz-sentinel) ────────────────
 //
 // The Wi-Fi guard is the watchdog that forces Wi-Fi on when the engine stops
 // working while the APs are down. It knows the engine only through these two
 // files, both on tmpfs so a reboot starts clean:
 //
-//  * HEARTBEAT_FILE — written by the engine thread before bootsafe and then on
-//    every loop, whether or not the engine is enabled or configured: it proves
-//    the engine is alive, not that it is switching. Content is whole seconds of
+//  * HEARTBEAT_FILE — written by an active engine thread before bootsafe and then
+//    on every loop: it proves the engine is alive, not that it is switching.
+//    A paused or invalid marker has no worker and therefore no heartbeat.
+//    Content is whole seconds of
 //    /proc/uptime (monotonic, immune to the clock jump when the network sets
 //    the time). The guard only starts judging once it has seen it at least once.
 //    Whichever process runs the engine writes it (the core).
@@ -422,10 +493,14 @@ impl Engine {
     }
 
     fn write_json<T: Serialize>(&self, file: &str, value: &T) {
-        let _ = fs::create_dir_all(self.p(DIR));
-        if let Ok(text) = serde_json::to_string_pretty(value) {
-            let _ = atomic_write(&self.p(file), text.as_bytes());
-        }
+        let _ = self.write_json_result(file, value);
+    }
+
+    fn write_json_result<T: Serialize>(&self, file: &str, value: &T) -> std::io::Result<()> {
+        fs::create_dir_all(self.p(DIR))?;
+        let text = serde_json::to_string_pretty(value)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        atomic_write(&self.p(file), text.as_bytes())
     }
 
     fn write_state(&self, st: &RunState) {
@@ -473,8 +548,18 @@ impl Engine {
         Path::new(&self.p(TAKEOVER_FILE)).exists()
     }
 
+    pub fn disabled_state(&self) -> DisabledState {
+        disabled_state(self.p(DISABLED_FLAG))
+    }
+
     pub fn enabled(&self) -> bool {
-        !Path::new(&self.p(DISABLED_FLAG)).exists()
+        self.disabled_state() == DisabledState::Active
+    }
+
+    /// Update the marker through the engine's path root. Core uses this for
+    /// lifecycle transitions that happen outside the HTTP handlers.
+    pub fn write_disabled_state(&self, state: DisabledState) -> std::io::Result<()> {
+        write_disabled_state(self.p(DISABLED_FLAG), state)
     }
 
     pub fn pin(&self) -> Option<String> {
@@ -540,19 +625,33 @@ impl Engine {
         lk(&self.beat).map(|t| t.elapsed())
     }
 
-    /// Bootsafe, then tick until taken back ([`Io::active`]). The host runs this on a thread of
-    /// its own: `bootsafe` can take tens of seconds if it has to repair Wi-Fi, an apply up to a few
-    /// minutes, and nothing else may wait for that. The heartbeat goes first, before bootsafe:
-    /// The guard should see the engine alive as early as possible.
-    pub fn run(&self) {
+    /// On Core startup run bootsafe, then tick while the worker and marker are active.
+    /// An explicit resume skips bootsafe and starts detection with fresh decision state.
+    /// The host runs this on a thread of its own because
+    /// bootsafe can take tens of seconds and an apply can take a few minutes.
+    /// The heartbeat goes first, before bootsafe, so the guard sees the engine
+    /// alive as early as possible.
+    pub fn run(&self, boot: bool) {
+        if !self.io.active() || !self.enabled() {
+            return;
+        }
         self.heartbeat();
-        self.bootsafe();
-        loop {
-            self.heartbeat();
+        if boot {
+            self.bootsafe();
+        } else {
+            // While paused the user may have changed the device. Detect and apply the new mode
+            // from scratch. The disk state is left intact for the duration of the pause.
+            let mut state = lk(&self.state);
+            *state = RunState::default();
+            self.write_state(&state);
+            self.pin_retry_at.store(0, Ordering::Relaxed);
+        }
+        while self.io.active() && self.enabled() {
             self.io.idle(Duration::from_secs(TICK_SECS));
-            if !self.io.active() {
+            if !self.io.active() || !self.enabled() {
                 return;
             }
+            self.heartbeat();
             self.tick();
         }
     }
@@ -601,6 +700,9 @@ impl Engine {
         self.io.sleep(Duration::from_secs(5));
         let up_once = self.io.beaconing();
         self.io.sleep(Duration::from_secs(4));
+        if !self.enabled() {
+            return;
+        }
         if up_once && self.io.beaconing() {
             self.log("[bootsafe] Wi-Fi already up; nothing to repair");
             return;
@@ -853,11 +955,17 @@ impl Engine {
         // (1–5 min; never, while pinned — 9-26 live test).
         let mut chill_wait: Option<f64> = None;
         for key in &due {
+            if !self.enabled() {
+                break;
+            }
             let Some(p) = pending.iter().find(|p| &p.key == key) else { continue };
             set_in_restore(true);
             let mut result = self.run_action(&p.action);
             while result.is_err() && chill_wait.is_some_and(|t| self.io.mono() < t) {
                 self.io.sleep(Duration::from_secs(2));
+                if !self.enabled() {
+                    break;
+                }
                 result = self.run_action(&p.action);
             }
             if result.is_ok() && key == sc::CHILL_ON_KEY {
@@ -918,15 +1026,20 @@ impl Engine {
     }
 
     fn switch_to(&self, cfg: &Config, id: &str) {
+        if !self.enabled() {
+            return;
+        }
         let Some(scen) = cfg.scenario(id) else {
             return;
         };
         self.log(&format!("entering scenario {:?} ({})", scen.name, scen.id));
         self.run_restores(Some(scen), false);
+        if !self.enabled() {
+            return;
+        }
 
-        // Hold off suspend *before* tearing the APs down: once they are off,
-        // Tailscale over cellular is the only way back in, and a suspended
-        // device answers nothing.
+        // Hold off suspend before applying the scenario, so any configured
+        // management connection can stay up while the APs switch.
         if scen.inhibit_sleep {
             self.io.set_auto_sleep(false);
             self.arm_wakealarm(cfg.params.scan_interval_home_secs as i64 + 30);
@@ -970,7 +1083,7 @@ impl Engine {
         });
         let to = st.current.clone();
         drop(st);
-        // switch_to is only reached from tick (the HTTP paths go through bootsafe)
+        // Only the running worker switches scenarios.
         self.publish(rec);
         self.io.switched(&from, &to, &scen.name, applied_ok);
     }
@@ -979,6 +1092,9 @@ impl Engine {
     /// scan, with it, and with the recheck when it asks; this runs what they say, in the agent's
     /// order, and writes the agent's tick records.
     pub fn tick(&self) {
+        if self.disabled_state() != DisabledState::Active {
+            return;
+        }
         if self.busy.swap(true, Ordering::SeqCst) {
             return; // previous tick still working
         }
@@ -1008,6 +1124,9 @@ impl Engine {
             mcc: None,
             beaconing: true,
         };
+        if self.disabled_state() != DisabledState::Active {
+            return;
+        }
         let out = self.io.step(&input);
         let current = st.current.clone();
 
@@ -1020,27 +1139,13 @@ impl Engine {
                 // the agent's record: switch_to whenever enabled, configured and not in away
                 let would = enabled && !cfg.scenarios.is_empty() && current != AWAY_ID;
                 self.publish(json!({"kind": "takeover", "current": current, "enabled": enabled, "switch_to": would.then_some(AWAY_ID)}));
-                if let Some(to) = to {
+                if let Some(to) = to.filter(|_| self.disabled_state() == DisabledState::Active) {
                     self.log("Wi-Fi watchdog takeover: returning to away");
                     self.switch_to(&cfg, &to);
                 }
                 return;
             }
             Branch::Disabled => {
-                // Not just "stop working": if the engine is switched off while a
-                // scenario has Wi-Fi down, freezing there would leave the device
-                // permanently without the network it exists to provide. The off
-                // switch has to be an escape hatch, so it restores `away` first.
-                // The HTTP endpoint does this too; doing it here as well makes
-                // `touch /data/scenario/disabled` — the only escape available over
-                // SSH — behave the same way.
-                if out.intent == Intent::Bootsafe {
-                    self.log("engine disabled while away from the away scenario — restoring it");
-                    self.bootsafe();
-                }
-                // Off means "as if the engine were not here": put back anything a
-                // scenario changed, too.
-                self.run_restores(None, true);
                 return;
             }
             Branch::Unconfigured => return, // unconfigured engines do nothing
@@ -1052,6 +1157,9 @@ impl Engine {
                     "kind": "pin", "pin": pinned, "current": current,
                     "switch_to": (pinned != current).then_some(&pinned),
                 }));
+                if self.disabled_state() != DisabledState::Active {
+                    return;
+                }
                 if let Intent::Switch { to } = &out.intent {
                     self.switch_to(&cfg, to);
                 } else if let Some(r) = &out.restores {
@@ -1065,7 +1173,7 @@ impl Engine {
             }
             Branch::NotDue => {
                 // Keep the sleep defences fresh even when not scanning.
-                if out.keep_awake {
+                if out.keep_awake && self.disabled_state() == DisabledState::Active {
                     self.io.set_auto_sleep(false);
                     self.arm_wakealarm(cfg.params.scan_interval_home_secs as i64 + 30);
                 }
@@ -1080,8 +1188,15 @@ impl Engine {
         // with nothing applied yet the device may well still be abroad, and
         // restoring there would flip the route back and forth.
         if let Some(r) = &out.restores {
+            if self.disabled_state() != DisabledState::Active {
+                return;
+            }
             let next = r.next.as_deref().and_then(|id| cfg.scenario(id));
             self.run_restores(next, true);
+        }
+
+        if self.disabled_state() != DisabledState::Active {
+            return;
         }
 
         let before = tick_state(&st);
@@ -1097,6 +1212,9 @@ impl Engine {
                     (failures >= sc::SCAN_FAILURES_BEFORE_FAIL_OPEN && current != AWAY_ID).then(|| self.io.beaconing());
                 input.scan = Scan::Failed { at: self.io.now(), error: &e };
                 input.beaconing = beaconing.unwrap_or(true);
+                if self.disabled_state() != DisabledState::Active {
+                    return;
+                }
                 let out = self.io.step(&input);
                 *lk(&self.state) = out.state.clone();
                 self.write_state(&out.state);
@@ -1108,9 +1226,11 @@ impl Engine {
                     "after": tick_state(&out.state),
                     "switch_to": fail_open.then_some(AWAY_ID),
                 }));
-                if let Intent::Switch { to } = &out.intent {
-                    self.log("cannot scan and Wi-Fi is off — failing open to the away scenario");
-                    self.switch_to(&cfg, to);
+                if self.disabled_state() == DisabledState::Active {
+                    if let Intent::Switch { to } = &out.intent {
+                        self.log("cannot scan and Wi-Fi is off — failing open to the away scenario");
+                        self.switch_to(&cfg, to);
+                    }
                 }
                 return;
             }
@@ -1121,6 +1241,9 @@ impl Engine {
         input.mcc = mcc.as_deref();
         let at = self.io.now();
         input.scan = Scan::Networks { at, networks: &nets };
+        if self.disabled_state() != DisabledState::Active {
+            return;
+        }
         let mut out = self.io.step(&input);
         let mut all = nets.clone();
         let mut rechecked = false;
@@ -1129,11 +1252,20 @@ impl Engine {
         // a partial scan also does not see it. Look again before believing it,
         // and say what was (not) seen, so a wrong exit can be explained later.
         if out.intent == Intent::NeedRecheck {
+            if self.disabled_state() != DisabledState::Active {
+                return;
+            }
             self.io.sleep(MISS_RECHECK_DELAY);
+            if !self.enabled() {
+                return;
+            }
             rechecked = true;
             let more = self.io.scan().unwrap_or_default();
             all.extend(more.iter().cloned());
             input.recheck = Some(Recheck { at: self.io.now(), networks: &more });
+            if self.disabled_state() != DisabledState::Active {
+                return;
+            }
             out = self.io.step(&input);
             let detected = sc::detect(&cfg, &all, mcc.as_deref()).unwrap_or_else(|| AWAY_ID.to_string());
             // why a seen-but-weak scan counts as a miss, or an absent one does not
@@ -1166,7 +1298,9 @@ impl Engine {
         }));
 
         if let Some(to) = switch {
-            self.switch_to(&cfg, &to);
+            if self.disabled_state() == DisabledState::Active {
+                self.switch_to(&cfg, &to);
+            }
         }
     }
 
@@ -1219,6 +1353,9 @@ impl Engine {
             return false;
         }
         let _g = lk(&RESTORE_LOCK);
+        if !self.enabled() {
+            return false;
+        }
         let mut pending = self.pending();
         if pending.iter().any(|p| p.key == entry.key) {
             return false;

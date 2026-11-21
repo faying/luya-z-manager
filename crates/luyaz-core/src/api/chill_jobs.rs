@@ -73,7 +73,7 @@ impl ChillJobs {
 /// half started or stopped. Killed (its process group) past `limit` instead (resilience audit R7):
 /// a wedged chill.sh would otherwise hold the CHILL slot until u60d restarts.
 async fn chill_sh(c: &Compat, args: &str, limit: std::time::Duration) -> (bool, String) {
-    let cmd = format!("{} {args}", c.path(ch::CHILL_SH).display());
+    let cmd = format!("exec {} {args}", shell_quote(&c.path(ch::CHILL_SH).to_string_lossy()));
     match crate::ops::chill::sh_within(&cmd, limit).await {
         Ok(r) => r,
         Err(e) => (false, e),
@@ -82,9 +82,43 @@ async fn chill_sh(c: &Compat, args: &str, limit: std::time::Duration) -> (bool, 
 
 /// Start `args` as the job; 409 while one runs. `ok` words the success from the output.
 fn start_job(c: &Compat, kind: &str, args: String, ok: fn(&str, &str) -> String) -> Option<u64> {
+    let slot = reserve(c)?;
+    let c2 = c.clone();
+    Some(spawn(c, slot, kind, async move {
+        let (success, out) = chill_sh(&c2, &args, c2.chill.limit).await;
+        if success {
+            Ok(ok(&args, ""))
+        } else {
+            Err(script_error(&out))
+        }
+    }))
+}
+
+pub(super) struct Slot(Arc<AtomicBool>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+pub(super) fn reserve(c: &Compat) -> Option<Slot> {
     if c.chill.running.swap(true, Ordering::SeqCst) {
         return None;
     }
+    let slot = Slot(c.chill.running.clone());
+    if c.root.is_empty() && crate::ops::chill::sh_running() {
+        return None;
+    }
+    Some(slot)
+}
+
+pub(super) fn spawn(
+    c: &Compat,
+    slot: Slot,
+    kind: &str,
+    work: impl Future<Output = Result<String, String>> + Send + 'static,
+) -> u64 {
     let id = {
         let mut j = c.chill.lock();
         let id = j["id"].as_u64().unwrap_or(0).wrapping_add(1);
@@ -94,24 +128,22 @@ fn start_job(c: &Compat, kind: &str, args: String, ok: fn(&str, &str) -> String)
     };
     let c2 = c.clone();
     tokio::spawn(async move {
-        let (success, out) = chill_sh(&c2, &args, c2.chill.limit).await;
+        let (status, message) = match work.await {
+            Ok(message) => ("done", message),
+            Err(message) => ("error", message),
+        };
         {
             let mut j = c2.chill.lock();
-            if success {
-                j["status"] = json!("done");
-                j["message"] = json!(ok(&args, &out));
-            } else {
-                j["status"] = json!("error");
-                j["message"] = json!(format!("chill.sh {args} failed: {}", ch::tail(&out, 6)));
-            }
+            j["status"] = json!(status);
+            j["message"] = json!(message);
             j["finished_unix"] = json!(now());
+            drop(slot);
         }
-        c2.chill.running.store(false, Ordering::Relaxed);
     });
-    Some(id)
+    id
 }
 
-fn busy() -> Response {
+pub(super) fn busy() -> Response {
     reply(409, json!({"ok": false, "error": "operation in progress"}))
 }
 
@@ -120,6 +152,41 @@ fn started(id: u64) -> Response {
         200,
         json!({"ok": true, "data": {"job_id": id, "status": "running"}}),
     )
+}
+
+pub(super) fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn script_error(output: &str) -> String {
+    // Configuration parsers and providers can print source URLs and secrets.
+    // Surface only fixed reason codes, never their output.
+    if let Some(reason) = output.lines().rev().map(str::trim).find(|line| matches!(
+        *line,
+        "ipv6_unavailable" | "provider_refresh_failed" | "profile_switch_failed"
+            | "profile_activation_failed_rolled_back" | "profile_recovery_failed" | "profile_busy"
+    )) {
+        reason.into()
+    } else if output.contains("timed out") {
+        "CHILL operation timed out".into()
+    } else {
+        "CHILL operation failed".into()
+    }
+}
+
+pub(super) async fn profile_command(
+    c: &Compat,
+    command: &str,
+    id: &str,
+) -> Result<(), String> {
+    if !super::chill_profiles::valid_id(id)
+        || !matches!(command, "profile-switch" | "profile-validate" | "profile-refresh")
+    {
+        return Err("invalid profile command".into());
+    }
+    let args = format!("{command} {}", shell_quote(id));
+    let (success, output) = chill_sh(c, &args, c.chill.limit).await;
+    if success { Ok(()) } else { Err(script_error(&output)) }
 }
 
 fn read_state(c: &Compat) -> Option<Value> {
@@ -178,8 +245,8 @@ pub async fn profile(State(c): State<Compat>, body: Bytes) -> Response {
         Ok(p) => p.to_string(),
         Err(r) => return reply(r.0, r.1),
     };
-    match start_job(&c, "profile", format!("profile {want}"), |_, out| {
-        ch::tail(out, 2)
+    match start_job(&c, "profile", format!("profile {want}"), |a, _| {
+        format!("chill.sh {a} ok")
     }) {
         Some(id) => started(id),
         None => busy(),
@@ -197,9 +264,9 @@ pub async fn providers(State(c): State<Compat>, body: Bytes) -> Response {
     if let Err(e) = ch::precheck(read_state(&c).as_ref()) {
         return reply(409, json!({"ok": false, "error": e}));
     }
-    if c.chill.running.load(Ordering::SeqCst) {
+    let Some(slot) = reserve(&c) else {
         return busy();
-    }
+    };
     let p = c.path(ch::CHILL_ENV);
     let out = match ch::env_with(
         &std::fs::read_to_string(&p).unwrap_or_default(),
@@ -219,10 +286,12 @@ pub async fn providers(State(c): State<Compat>, body: Bytes) -> Response {
     if let Some(m) = mode {
         let _ = std::fs::set_permissions(&p, m);
     }
-    match start_job(&c, "reload", "reload".into(), |_, _| "Reloaded".into()) {
-        Some(id) => started(id),
-        None => busy(),
-    }
+    let work = c.clone();
+    let id = spawn(&c, slot, "reload", async move {
+        let (success, output) = chill_sh(&work, "reload", work.chill.limit).await;
+        if success { Ok("Reloaded".into()) } else { Err(script_error(&output)) }
+    });
+    started(id)
 }
 
 /// GET /api/services/chill/job
@@ -252,7 +321,10 @@ fn toggled(c: &Compat, on: bool, was_on: bool) {
         }
         return;
     }
-    if !was_on || c.path(SCENARIO_DISABLED).exists() {
+    if !was_on
+        || luyaz_scenario::disabled_state(c.path(SCENARIO_DISABLED))
+            != luyaz_scenario::DisabledState::Active
+    {
         return;
     }
     let cfg: sc::Config = read(SCENARIO_CONFIG)

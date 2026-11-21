@@ -36,7 +36,6 @@ mod paths;
 mod peer_pid;
 // 进程插件的连线（luyaz-phone 设计 R1、R3、R26–R33）
 mod plug;
-mod poller;
 mod procfs;
 mod qmi_nas;
 mod record;

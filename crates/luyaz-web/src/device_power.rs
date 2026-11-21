@@ -1428,8 +1428,8 @@ fn rst_confirm(k: Rst, l: Lang) -> write::Confirm {
         },
         Rst::Reset => {
             let what = l.pick(
-                "Every setting is erased — Wi-Fi, APN, locks, SMS forwarding — and so is this project's software: this manager, the touchscreen interface, CHILL and Tailscale. This cannot be undone.",
-                "所有设置都会被清除（Wi-Fi、APN、锁频锁小区、短信转发等），本项目的软件也会一起删掉：这个管理后台、触屏界面、CHILL 和 Tailscale。此操作无法撤销。",
+                "Every setting is erased — Wi-Fi, APN, locks, SMS forwarding — and so is this project's software: this manager, the touchscreen interface and CHILL. This cannot be undone.",
+                "所有设置都会被清除（Wi-Fi、APN、锁频锁小区、短信转发等），本项目的软件也会一起删掉：这个管理后台、触屏界面和 CHILL。此操作无法撤销。",
             );
             write::Confirm {
                 tier: write::Tier::Dialog,

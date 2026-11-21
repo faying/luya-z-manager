@@ -1,6 +1,6 @@
 //! The home page's landing card (docs/designs/travel-assist.md §5): after arriving in a new
-//! country, one card with what matters on landing — where, which network, local time, the home
-//! exit, data used since.
+//! country, one card with what matters on landing — where, which network, local time, and data
+//! used since.
 //!
 //! ```text
 //!  poll  GET /v2/usage/landing (core usage_log.rs, 60 s) → {mcc, from, at, rx, tx} | null
@@ -54,10 +54,6 @@ pub(crate) struct Now<'a> {
     pub utc_offset: Option<i64>,
     pub signal: &'a Value,
     pub device: &'a Value,
-    /// The core's `/api/services/chill` (`None`: not read).
-    pub chill: Option<&'a Value>,
-    /// CHILL is installed (without it the "Home exit" row, CHILL's, is left out).
-    pub chill_installed: bool,
 }
 
 fn country(mcc: i64, l: Lang) -> String {
@@ -103,20 +99,6 @@ fn local_time(n: &Now, mcc: i64, l: Lang) -> Option<String> {
     Some(s)
 }
 
-/// The home exit in one word (chill_page/data.rs's reading of the same status).
-fn home_exit(h: Option<&Value>, l: Lang) -> (&'static str, &'static str) {
-    let Some(h) = h.filter(|h| h.is_object()) else {
-        return (l.pick("Not read", "读不到"), "neutral");
-    };
-    if h["home"].is_null() && h["tailscale"].is_null() {
-        return (l.pick("Not set up", "未配置"), "neutral");
-    }
-    if h["home"]["ok"].as_bool() == Some(false) || h["tailscale"] == "offline" {
-        return (l.pick("Down", "不可用"), "bad");
-    }
-    (l.pick("Up", "可用"), "ok")
-}
-
 fn ago(secs: i64, l: Lang) -> String {
     let m = (secs / 60).max(0);
     match (m, l) {
@@ -127,14 +109,10 @@ fn ago(secs: i64, l: Lang) -> String {
     }
 }
 
-fn row(label: &str, value: &str, tone: Option<&str>) -> String {
-    let v = match tone {
-        Some(t) => format!("<span class=\"nd-mark nd-mark--{t}\"><span>{}</span></span>", esc(value)),
-        None => esc(value),
-    };
+fn row(label: &str, value: &str) -> String {
     format!(
-        "<div class=\"nd-row\"><span class=\"nd-row__text\"><span class=\"nd-row__label\">{}</span></span><span class=\"nd-row__value\" data-data>{v}</span></div>",
-        esc(label)
+        "<div class=\"nd-row\"><span class=\"nd-row__text\"><span class=\"nd-row__label\">{}</span></span><span class=\"nd-row__value\" data-data>{}</span></div>",
+        esc(label), esc(value)
     )
 }
 
@@ -171,18 +149,13 @@ pub(crate) fn card(l: Lang, land: Option<&Value>, n: &Now) -> String {
         .collect::<Vec<_>>()
         .join(" · ");
     let used = d["rx"].as_f64().unwrap_or(0.0) + d["tx"].as_f64().unwrap_or(0.0);
-    let (exit, tone) = home_exit(n.chill, l);
-    let mut rows = row(l.pick("Network", "网络"), &net, None);
+    let mut rows = row(l.pick("Network", "网络"), &net);
     if let Some(t) = local_time(n, mcc, l) {
-        rows.push_str(&row(l.pick("Local time", "当地时间"), &t, None));
-    }
-    if n.chill_installed {
-        rows.push_str(&row(l.pick("Home exit", "家里出口"), exit, Some(tone)));
+        rows.push_str(&row(l.pick("Local time", "当地时间"), &t));
     }
     rows.push_str(&row(
         l.pick("Data since landing", "落地以来流量"),
         &agent::bytes(Some(used)).unwrap_or_else(|| "—".into()),
-        None,
     ));
     format!(
         "<section id=\"hm-land\" class=\"hm-o1 hm-land\" aria-labelledby=\"hm-land-t\"><div class=\"nd-group\">\
@@ -224,7 +197,7 @@ impl Landing {
         }
     }
 
-    pub(super) fn leaves(&self, app: &Shared, l: Lang, chill: Option<&Value>, chill_installed: bool) -> Vec<(String, String)> {
+    pub(super) fn leaves(&self, app: &Shared, l: Lang) -> Vec<(String, String)> {
         let html = app.hub.read(|st| {
             let data = |k: &str| st.blocks.get(k).map_or(&Value::Null, |b| &b.data);
             let n = Now {
@@ -232,8 +205,6 @@ impl Landing {
                 utc_offset: self.status.val.as_ref().and_then(|s| s["clock"]["utc_offset"].as_i64()),
                 signal: data("signal"),
                 device: data("uci_device_info"),
-                chill,
-                chill_installed,
             };
             card(l, self.src.val.as_ref(), &n)
         });
@@ -261,45 +232,39 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn now<'a>(t: i64, sig: &'a Value, dev: &'a Value, chill: Option<&'a Value>) -> Now<'a> {
-        Now { t, utc_offset: Some(28_800), signal: sig, device: dev, chill, chill_installed: true }
+    fn now<'a>(t: i64, sig: &'a Value, dev: &'a Value) -> Now<'a> {
+        Now { t, utc_offset: Some(28_800), signal: sig, device: dev }
     }
 
     #[test]
     fn card_after_a_landing() {
         let sig = json!({"operator": "KDDI", "true_roaming": true, "type": "SA"});
         let dev = json!({"nitz_timezone": "9.00", "nitz_time_dst": "0.00", "nitz_sync_flag": "1"});
-        let chill = json!({"home": {"ok": true, "ms": 40}, "tailscale": "direct"});
         let land = json!({"mcc": 440, "from": 460, "at": 1_000_000, "rx": 3_000_000, "tx": 500_000});
         // device clock 8 h ahead of UTC: 1_007_200 device = 978_400 UTC (07:46) → 16:46 JST
-        let h = card(Lang::Zh, Some(&land), &now(1_007_200, &sig, &dev, Some(&chill)));
+        let h = card(Lang::Zh, Some(&land), &now(1_007_200, &sig, &dev));
         assert!(h.contains("到了日本") && h.contains("从中国来 · 2 小时前"), "{h}");
         assert!(h.contains("KDDI · 漫游 · SA"), "{h}");
         assert!(h.contains("16:46 (UTC+9)") && !h.contains("估计"), "{h}");
-        assert!(h.contains("可用") && h.contains("3.50 MB"), "{h}");
+        assert!(h.contains("3.50 MB") && !h.contains("家里出口"), "{h}");
         // no NITZ: Japan's own zone, marked
-        let h = card(Lang::En, Some(&land), &now(1_007_200, &sig, &json!({}), None));
-        assert!(h.contains("16:46 (UTC+9) · estimate") && h.contains("Not read"), "{h}");
+        let h = card(Lang::En, Some(&land), &now(1_007_200, &sig, &json!({})));
+        assert!(h.contains("16:46 (UTC+9) · estimate") && !h.contains("Home exit"), "{h}");
         // half-hour zones
         let dev_in = json!({"nitz_timezone": "5.50", "nitz_sync_flag": "1"});
-        assert!(local_time(&now(1_007_200, &sig, &dev_in, None), 404, Lang::En).unwrap().starts_with("13:16 (UTC+5:30)"));
+        assert!(local_time(&now(1_007_200, &sig, &dev_in), 404, Lang::En).unwrap().starts_with("13:16 (UTC+5:30)"));
     }
 
     #[test]
     fn hidden_cases() {
         let (sig, dev) = (json!({}), json!({}));
         let first = json!({"mcc": 460, "from": null, "at": 100, "rx": 0, "tx": 0});
-        assert!(card(Lang::Zh, Some(&first), &now(200, &sig, &dev, None)).contains("hidden"));
+        assert!(card(Lang::Zh, Some(&first), &now(200, &sig, &dev)).contains("hidden"));
         let land = json!({"mcc": 440, "from": 460, "at": 100, "rx": 0, "tx": 0});
-        assert!(!card(Lang::Zh, Some(&land), &now(200, &sig, &dev, None)).contains("hidden"));
-        assert!(card(Lang::Zh, Some(&land), &now(100 + SHOW_FOR, &sig, &dev, None)).contains("hidden"));
-        assert!(card(Lang::Zh, Some(&Value::Null), &now(200, &sig, &dev, None)).contains("hidden"));
-        assert_eq!(home_exit(Some(&json!({"home": {"ok": false}})), Lang::Zh).0, "不可用");
-        // no CHILL on the device: no "Home exit" row, the rest unchanged
-        let mut n = now(200, &sig, &dev, None);
-        n.chill_installed = false;
-        let h = card(Lang::En, Some(&land), &n);
+        assert!(!card(Lang::Zh, Some(&land), &now(200, &sig, &dev)).contains("hidden"));
+        assert!(card(Lang::Zh, Some(&land), &now(100 + SHOW_FOR, &sig, &dev)).contains("hidden"));
+        assert!(card(Lang::Zh, Some(&Value::Null), &now(200, &sig, &dev)).contains("hidden"));
+        let h = card(Lang::En, Some(&land), &now(200, &sig, &dev));
         assert!(!h.contains("Home exit") && h.contains("Data since landing"), "{h}");
-        assert_eq!(home_exit(Some(&json!({"enabled": false})), Lang::Zh).0, "未配置");
     }
 }

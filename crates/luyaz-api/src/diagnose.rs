@@ -886,7 +886,7 @@ pub struct BearerIn {
     pub default_route: Option<bool>,
     /// Effective rp_filter on the cellular interface (max of `all` and its own).
     pub rp_filter: Option<u8>,
-    /// Ways out besides the cellular one counted too (Tailscale, CHILL's TUN, other defaults).
+    /// Paths besides the cellular one, including tunnel interfaces and other default routes.
     pub exits: usize,
 }
 

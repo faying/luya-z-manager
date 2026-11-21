@@ -706,6 +706,7 @@ struct Dev {
     beacon: bool,
     health: Option<Health>,
     restore_ok: bool,
+    pause_during_restore: bool,
     restores: u32,
     autosleep: Vec<bool>,
     alerts: Vec<String>,
@@ -715,6 +716,7 @@ struct Dev {
     verify_calls: u32,
     gone_comms: Vec<String>,
     conn_bad: Vec<String>,
+    conn_probes: Vec<String>,
     cmdlines: HashMap<i32, String>,
     non_append: Vec<String>,
     capped: Vec<String>,
@@ -827,6 +829,13 @@ impl WorkerIo for Dev {
         self.alerts.push(kind.into());
     }
     fn restore_wifi(&mut self) -> Result<(), String> {
+        if self.pause_during_restore {
+            self.files.insert(
+                luyaz_scenario::DISABLED_FLAG.into(),
+                luyaz_scenario::DISABLED_STOPPING.into(),
+            );
+            return Err(wifi::SCENARIO_PAUSED.into());
+        }
         self.changes += 1;
         self.restores += 1;
         if self.restore_ok {
@@ -865,6 +874,7 @@ impl WorkerIo for Dev {
         v
     }
     fn conn_ok(&mut self, item: &str) -> Option<bool> {
+        self.conn_probes.push(item.into());
         Some(!self.conn_bad.iter().any(|c| c == item))
     }
     fn comm_running(&mut self, comm: &str) -> Option<bool> {
@@ -1120,6 +1130,72 @@ fn guard_device_suspended() {
     d.up = w.wifi.next_try + 1200;
     w.round(&mut d);
     assert_eq!(d.restores, 2, "…keeps being handled after waking");
+}
+
+#[test]
+fn guard_paused_skips_watchdog_across_stale_windows_and_releases_old_takeover() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    d.beacon = false;
+    d.restore_ok = true;
+    d.files
+        .insert(luyaz_scenario::DISABLED_FLAG.into(), luyaz_scenario::DISABLED_PAUSED.into());
+    d.files
+        .insert("/tmp/luyaz/wifiguard.took-over".into(), "700\n".into());
+    d.files
+        .insert("/sys/class/rtc/rtc0/since_epoch".into(), "1000\n".into());
+    d.files
+        .insert("/sys/class/rtc/rtc0/wakealarm".into(), "".into());
+    w.wifi.episode = Some(700);
+    w.wifi.took_over = true;
+    w.wifi.sleep_held = true;
+    w.wifi.next_try = 1200;
+    w.wifi.backoff = 240;
+
+    w.round(&mut d);
+    d.up = 1900;
+    w.round(&mut d);
+
+    assert_eq!(d.restores, 0);
+    assert!(d.alerts.is_empty(), "paused mode must not alert on missing heartbeat");
+    assert!(d.files.get("/sys/class/rtc/rtc0/wakealarm").is_some_and(|v| v.is_empty()));
+    assert!(marker(&d).is_none());
+    assert_eq!(d.autosleep, vec![true]);
+    assert_eq!(w.wifi.episode, None);
+    assert_eq!(w.wifi.next_try, 0);
+    assert_eq!(w.wifi.backoff, 0);
+}
+
+#[test]
+fn guard_stopping_skips_recovery_and_rtc() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    d.files.insert(
+        luyaz_scenario::DISABLED_FLAG.into(),
+        luyaz_scenario::DISABLED_STOPPING.into(),
+    );
+    d.files
+        .insert("/sys/class/rtc/rtc0/since_epoch".into(), "1000\n".into());
+    d.files
+        .insert("/sys/class/rtc/rtc0/wakealarm".into(), "".into());
+    w.round(&mut d);
+    assert_eq!(d.restores, 0);
+    assert!(d.alerts.is_empty());
+    assert!(d.files.get("/sys/class/rtc/rtc0/wakealarm").is_some_and(|v| v.is_empty()));
+}
+
+#[test]
+fn guard_stopping_race_clears_retry_without_restore_failure() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 2000;
+    d.hb(1600);
+    d.pause_during_restore = true;
+    w.round(&mut d);
+    assert_eq!(d.restores, 0);
+    assert!(!d.kinds().contains("wifi-restore-failed"));
+    assert_eq!(w.wifi.next_try, 0);
+    assert_eq!(w.wifi.backoff, 0);
+    assert!(marker(&d).is_none());
 }
 
 #[test]
@@ -1527,6 +1603,7 @@ fn logcap() {
 fn logcap_default_covers_every_service_log() {
     // every RAM log our procd services write (/tmp/<name>.log), luyaz-web included
     let p = Paths::default();
+    assert!(p.cap_logs.is_empty());
     for l in [
         "/tmp/luyaz-core.log",
         "/tmp/luyaz-sentinel.log",
@@ -1733,6 +1810,8 @@ struct W {
     up: bool,
     /// other uci keys (`wireless.guest_*`)
     uci: HashMap<String, String>,
+    scenario_paused: bool,
+    pause_on_lock: bool,
 }
 
 impl WifiOps for W {
@@ -1763,6 +1842,9 @@ impl WifiOps for W {
             return Err("busy".into());
         }
         self.held.push("wifi");
+        if self.pause_on_lock {
+            self.scenario_paused = true;
+        }
         Ok(())
     }
     fn unlock_wifi(&mut self) {
@@ -1782,6 +1864,9 @@ impl WifiOps for W {
     }
     fn unlock_write(&mut self) {
         self.held.retain(|h| *h != "write");
+    }
+    fn scenario_paused(&mut self) -> bool {
+        self.scenario_paused
     }
     fn uci_get(&mut self, key: &str) -> Option<String> {
         if key.ends_with("wifi_onoff") {
@@ -1842,6 +1927,20 @@ fn wifi_through_the_core_writes_nothing_directly() {
     );
     assert!(w.held.is_empty(), "locks let go");
     assert!(wifi::APPLY.contains(r#""wireless.wifi0.disabled":"0","wireless.wifi1.disabled":"0","wireless.main_2g.disabled":"0","wireless.main_5g.disabled":"0","wireless.guest_2g.disabled":"1","wireless.guest_5g.disabled":"1"},"reload":true,"best_effort":true"#));
+}
+
+#[test]
+fn wifi_stopping_after_lock_skips_without_device_writes() {
+    let mut w = W {
+        listening: true,
+        pause_on_lock: true,
+        comes_up: true,
+        ..Default::default()
+    };
+    assert_eq!(wifi::restore(&mut w), Err(wifi::SCENARIO_PAUSED.into()));
+    assert!(wops(&w, "core").is_empty());
+    assert!(wops(&w, "uci").is_empty() && wops(&w, "ubus").is_empty());
+    assert!(w.held.is_empty(), "lock-race cancellation releases both locks");
 }
 
 #[test]
@@ -2846,21 +2945,51 @@ fn conn_rounds(w: &mut Worker, d: &mut Dev, n: u32) {
     }
 }
 
+#[test]
+fn watch_conn_ignores_legacy_tailscale_only_baseline() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    conn_watched(&mut d, "t1", "lweb", "tailscale");
+    d.conn_bad.push("tailscale".into());
+    conn_rounds(&mut w, &mut d, 61);
+    assert!(d.conn_probes.is_empty());
+    assert!(d.auto_calls.is_empty());
+    assert!(!d.files.contains_key(&format!("{WD}/t1")));
+    assert!(d.files.contains_key("/data/luyaz/ship/prev-check/t1"));
+}
+
+#[test]
+fn watch_conn_ignores_legacy_tailscale_but_checks_ssh_and_lan() {
+    for lost in ["ssh", "lan"] {
+        let mut w = wk();
+        let mut d = Dev::new();
+        conn_watched(&mut d, "t1", "lweb", "ssh,tailscale,unknown,lan");
+        d.conn_bad.push("tailscale".into());
+        d.conn_bad.push(lost.into());
+        conn_rounds(&mut w, &mut d, 11);
+        assert_eq!(d.auto_calls, [format!("t1: conn lost: {lost}")]);
+        assert!(d.conn_probes.iter().any(|item| item == "ssh"));
+        assert!(d.conn_probes.iter().any(|item| item == "lan"));
+        assert!(!d.conn_probes.iter().any(|item| item == "tailscale"));
+        assert!(!d.conn_probes.iter().any(|item| item == "unknown"));
+    }
+}
+
 /// Ten minutes down, not a round less, and coming back starts the clock over.
 #[test]
 fn watch_conn_sends_back_after_ten_minutes_down() {
     let mut w = wk();
     let mut d = Dev::new();
-    conn_watched(&mut d, "t1", "lweb", "ssh,tailscale");
-    d.conn_bad.push("tailscale".into());
+    conn_watched(&mut d, "t1", "lweb", "ssh,lan");
+    d.conn_bad.push("ssh".into());
     conn_rounds(&mut w, &mut d, 10);
     d.conn_bad.clear();
     conn_rounds(&mut w, &mut d, 1);
-    d.conn_bad.push("tailscale".into());
+    d.conn_bad.push("ssh".into());
     conn_rounds(&mut w, &mut d, 10);
     assert!(d.auto_calls.is_empty(), "{:?}", d.auto_calls);
     conn_rounds(&mut w, &mut d, 1);
-    assert_eq!(d.auto_calls, ["t1: conn lost: tailscale"]);
+    assert_eq!(d.auto_calls, ["t1: conn lost: ssh"]);
 }
 
 /// What the baseline did not have, or a record with no baseline, is never this build's doing.
@@ -2871,7 +3000,7 @@ fn watch_conn_only_compares_with_the_baseline() {
     conn_watched(&mut d, "t1", "lweb", "ssh");
     let (b, up) = (this_boot(&mut d), d.up);
     watched(&mut d, "t0", "core", &b, up);
-    d.conn_bad.push("tailscale".into());
+    d.conn_bad.push("lan".into());
     conn_rounds(&mut w, &mut d, 30);
     assert!(d.auto_calls.is_empty(), "{:?}", d.auto_calls);
 }
@@ -2881,13 +3010,13 @@ fn watch_conn_only_compares_with_the_baseline() {
 fn watch_conn_blames_the_newest_that_had_it() {
     let mut w = wk();
     let mut d = Dev::new();
-    conn_watched(&mut d, "t1", "touch", "ssh,tailscale");
-    conn_watched(&mut d, "t2", "lweb", "ssh,tailscale");
+    conn_watched(&mut d, "t1", "touch", "ssh,lan");
+    conn_watched(&mut d, "t2", "lweb", "ssh,lan");
     conn_watched(&mut d, "t3", "core", "ssh");
-    conn_watched(&mut d, "t4", "sentinel", "ssh,tailscale");
-    d.conn_bad.push("tailscale".into());
+    conn_watched(&mut d, "t4", "sentinel", "ssh,lan");
+    d.conn_bad.push("lan".into());
     conn_rounds(&mut w, &mut d, 11);
-    assert_eq!(d.auto_calls, ["t2: conn lost: tailscale"]);
+    assert_eq!(d.auto_calls, ["t2: conn lost: lan"]);
 }
 
 /// A carrier or a person may be the cause: once sent back, the other builds are left alone.
@@ -2895,9 +3024,9 @@ fn watch_conn_blames_the_newest_that_had_it() {
 fn watch_conn_goes_back_once_per_boot() {
     let mut w = wk();
     let mut d = Dev::new();
-    conn_watched(&mut d, "t1", "touch", "tailscale");
-    conn_watched(&mut d, "t2", "lweb", "tailscale");
-    d.conn_bad.push("tailscale".into());
+    conn_watched(&mut d, "t1", "touch", "lan");
+    conn_watched(&mut d, "t2", "lweb", "lan");
+    d.conn_bad.push("lan".into());
     conn_rounds(&mut w, &mut d, 11);
     assert_eq!(d.auto_calls.len(), 1);
     // what `auto_records` leaves

@@ -10,10 +10,7 @@
 //! - The answer says what happened, never the core's whole reply: `trial` with the `op_id` (the
 //!   result comes later in the events), `done`, `sensitive` with the page to send the owner to,
 //!   `rate_limited` with when, `busy`, `refused`, `failed`.
-//! - Changes that can cut the agent's own link (D-g: band locks, band reset, cell locks — the actions
-//!   whose rollback is proven) go through `/agent-api/act/link`, only as the owner's instruction: the
-//!   caller must send `instruction: "owner"`, passed on to the core as is. The core refuses them while
-//!   roaming, keeps one per half hour for the whole class, and its trial also waits for Tailscale.
+//! - Band and cell locks are owner-operated through the web or touch UI, not agent writes.
 //! - Never here, not even as a page: eSIM profile deletes, factory reset, rc.local, firmware updates.
 
 use axum::Router;
@@ -49,7 +46,6 @@ pub fn routes() -> Router<Shared> {
         .route("/agent-api/act/chill/exit", post(chill_exit))
         .route("/agent-api/act/apn/use", post(apn_use))
         .route("/agent-api/act/apn", post(apn))
-        .route("/agent-api/act/link", post(link))
         .route("/agent-api/act/regress-accept", post(regress_accept))
         .route("/agent-api/act/status", get(status))
         .route("/agent-api/action-url", get(action_url))
@@ -70,16 +66,6 @@ const APN_ACTIONS: &[(&str, &[&str])] = &[
     ),
     ("apn.delete", &["profile_id"]),
     ("apn.set_pdp_type", &["pdp_type"]),
-];
-
-/// The changes that can cut the agent's own link (D-g) and their parameter keys. Same list as the
-/// core's (`ops::agent::link`: rollback proven on the device); the core checks it again.
-pub const LINK_ACTIONS: &[(&str, &[&str])] = &[
-    ("band.set_lte", &["bands"]),
-    ("band.set_nr", &["sa", "nsa"]),
-    ("band.reset", &[]),
-    ("cell.lock_lte", &["pci", "earfcn", "off"]),
-    ("cell.lock_nr", &["pci", "arfcn", "band", "off"]),
 ];
 
 /// The pages a sensitive change sends the owner to (`get_action_url`).
@@ -244,21 +230,10 @@ async fn control(app: &Shared, action: &str, params: Value, owner: bool) -> Resu
 }
 
 async fn act(app: &Shared, name: &str, action: &str, params: Value, url: Option<String>) -> Response {
-    act_as(app, name, action, params, url, false).await
-}
-
-async fn act_as(
-    app: &Shared,
-    name: &str,
-    action: &str,
-    params: Value,
-    url: Option<String>,
-    owner: bool,
-) -> Response {
     eprintln!("[agent-api] {name} act {action}");
-    match control(app, action, params, owner).await {
+    match control(app, action, params, false).await {
         Ok((code, v)) => {
-            let layer = if owner { "link" } else { action.split('.').next().unwrap_or("") };
+            let layer = action.split('.').next().unwrap_or("");
             reply(shape_as(code, &v, url, Some((name, layer))))
         }
         Err(()) => reply(json!({"core": "down"})),
@@ -304,31 +279,6 @@ async fn apn(State(app): State<Shared>, req: Request) -> Response {
         return refuse(400, "bad_request", "action must be one of apn.set_mode, apn.enable, apn.add, apn.modify, apn.delete, apn.set_pdp_type");
     };
     act(&app, &name, action, pick(&b["params"], keys), url).await
-}
-
-/// A change that can cut the agent's own link (D-g), only as the owner's instruction.
-async fn link(State(app): State<Shared>, req: Request) -> Response {
-    let name = match admit_act(&req) {
-        Ok(n) => n,
-        Err(r) => return r,
-    };
-    let (band_url, cell_url) = (page_url(&req, "band"), page_url(&req, "cell"));
-    let Some(b) = body_of(req).await else {
-        return refuse(400, "bad_request", "a JSON object with action, params and instruction");
-    };
-    let wanted = b["action"].as_str().unwrap_or("");
-    let Some((action, keys)) = LINK_ACTIONS.iter().find(|(a, _)| *a == wanted) else {
-        return refuse(400, "bad_request", "action must be one of band.set_lte, band.set_nr, band.reset, cell.lock_lte, cell.lock_nr");
-    };
-    if b["instruction"] != "owner" {
-        return refuse(
-            403,
-            "needs_instruction",
-            "this change can cut your own link: only on the owner's explicit instruction (instruction: owner)",
-        );
-    }
-    let url = if action.starts_with("cell.") { cell_url } else { band_url };
-    act_as(&app, &name, action, pick(&b["params"], keys), url, true).await
 }
 
 /// Accept a relative regress incident's level as the new normal (design 2026-10-24 §4, CEO

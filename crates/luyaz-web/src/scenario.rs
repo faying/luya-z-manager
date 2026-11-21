@@ -1,5 +1,5 @@
 //! /router/scenario (情景模式): where the device
-//! thinks it is, the engine switch, a pin, the home networks (with a scan to pick them from), what
+//! thinks it is, the mode picker, the home networks (with a scan to pick them from), what
 //! each scenario does, how eagerly it reacts, the run log.
 //!
 //! Where each value comes from (all through agent.rs with the tab's own session; agent.rs asks u60d
@@ -18,7 +18,7 @@
 //! - tier 2 (in the page): engine on/off (`PUT /enabled {"enabled":bool}`), pin / unpin (`POST /pin
 //!   {"id":…|null}`), every config edit (`PUT /api/scenario`, the whole config: add / remove a home
 //!   network, create the defaults, a scenario's Wi-Fi, the timing numbers), the scan;
-//! - tier 3 (dialog): a scenario's Wi-Fi set to off, when the browser came over Tailscale.
+//! - tier 3 (dialog): a scenario's Wi-Fi set to off, when the browser is remote.
 //! - A config edit is read-modify-write on the config as a `serde_json::Value` (so `snapshot`,
 //!   `verify_field`, `restore_on_exit`, the original names… are sent back as they were) from a
 //!   fresh read at confirm time, under one lock, and only `config` is sent.
@@ -63,7 +63,7 @@ const PIN: &str = "/api/scenario/pin";
 const EVERY: Duration = Duration::from_secs(10);
 const LOG_EVERY: Duration = Duration::from_secs(15);
 const READBACK: Duration = Duration::from_secs(15);
-/// Turning the engine off runs the agent's boot-safe repair first (9–20 s on the device).
+/// Turning the engine off can take longer than an ordinary readback while the worker stops.
 const ENGINE_OFF_READBACK: Duration = Duration::from_secs(45);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(45);
 const HOME_ID: &str = "home";
@@ -687,7 +687,7 @@ pub struct View {
     pub home_mcc: String,
     pub sim_differs: bool,
     pub enabled: bool,
-    pub eng_url: String,
+    pub off_url: String,
     // pin
     pub pin_name: Option<String>,
     pub pin_rows: Vec<PinRow>,
@@ -775,8 +775,8 @@ pub fn view(g: &Got, l: Lang, sid: &str) -> View {
             l.pick("Engine off", "引擎已关闭").into(),
             Some(
                 l.pick(
-                    "The device is not switching scenarios by itself. Wi-Fi stays on.",
-                    "设备不会自己切换情景，Wi-Fi 保持开着。",
+                    "The device keeps its current Wi-Fi, CHILL and other state. Automatic scanning and control are stopped.",
+                    "设备会保留当前 Wi-Fi、CHILL 和其它状态。自动扫描与自动控制已停止。",
                 )
                 .into(),
             ),
@@ -838,7 +838,7 @@ pub fn view(g: &Got, l: Lang, sid: &str) -> View {
             PinRow {
                 name: name_of(s, d, l),
                 url: format!("{PATH}/ask/pin?id={}", enc(id)),
-                on: pin_id.as_deref() == Some(id),
+                on: enabled && pin_id.as_deref() == Some(id),
             }
         })
         .collect();
@@ -929,10 +929,10 @@ pub fn view(g: &Got, l: Lang, sid: &str) -> View {
         home_mcc: s["config"]["home_mcc"].as_str().unwrap_or("").to_owned(),
         sim_differs: s["sim_mcc"].as_str().is_some_and(|m| s["config"]["home_mcc"].as_str() != Some(m)),
         enabled,
-        eng_url: format!("{PATH}/ask/engine?on={}", !enabled),
+        off_url: format!("{PATH}/ask/engine?on=false"),
         pin_name: pin_id.as_deref().map(|p| name_by_id(s, p, l)),
         pin_rows,
-        auto_on: pin_id.is_none(),
+        auto_on: enabled && pin_id.is_none(),
         entries,
         nameless,
         scanned,
@@ -1240,11 +1240,10 @@ async fn ask_engine(
                 "设备开始按看到的网络自己切换情景；认出在家时会关掉自己的 Wi-Fi。",
             )
         } else {
-            let off = l.pick(
-                "The device stops switching scenarios and goes back to the away settings: Wi-Fi on, a changed CHILL node put back. This can take up to a minute.",
-                "设备不再切换情景，回到「外出」的设置：Wi-Fi 打开，改过的 CHILL 节点恢复。最长要一分钟左右。",
-            );
-            off
+            l.pick(
+                "The device keeps its current Wi-Fi, CHILL and other device state, then stops automatic scanning and control. You can turn it back on from this selector.",
+                "设备会保留当前 Wi-Fi、CHILL 和其它设备状态，然后停止自动扫描与自动控制。之后可从这个选择条重新开启。",
+            )
         };
         let action = match (l, on) {
             (Lang::En, true) => "Confirm: turn the engine on",
@@ -1435,8 +1434,8 @@ async fn ask_wifi(
                     "From the moment the device enters “{name}” until it leaves it.",
                     "从设备进入「{name}」开始，到离开为止。"));
                 c.recovery = Some(l.pick(
-                    "Turn this switch back on, or turn the engine off (it puts Wi-Fi back on). Over Tailscale the page stays reachable through the mobile connection.",
-                    "把这个开关重新打开，或关闭情景引擎（会把 Wi-Fi 打开）。经 Tailscale 访问时，这个页面仍可以通过移动网络打开。",
+                    "Turn this switch back on, or turn the engine off (it puts Wi-Fi back on). If the page becomes unreachable, someone at the device must restore access.",
+                    "把这个开关重新打开，或关闭情景引擎（会把 Wi-Fi 打开）。如果页面无法访问，需要有人在设备旁恢复连接。",
                 ).into());
             }
         }
@@ -1654,7 +1653,11 @@ async fn run(app: &Shared, who: &Caller, kind: Kind, l: Lang) -> Outcome {
                 Err(o) => return o,
             };
             let t = if on { READBACK } else { ENGINE_OFF_READBACK };
-            let ok = held(app, who, t, |s| s["enabled"].as_bool() == Some(on)).await;
+            let ok = held(app, who, t, |s| {
+                s["enabled"].as_bool() == Some(on)
+                    && (on || (s["pin"].is_null() && s["disabled_state"].as_str().is_none_or(|v| v == "paused-v1")))
+            })
+            .await;
             verdict(
                 ok,
                 sent,
@@ -1681,7 +1684,11 @@ async fn run(app: &Shared, who: &Caller, kind: Kind, l: Lang) -> Outcome {
             };
             let want = id.clone();
             let ok = held(app, who, READBACK, move |s| {
-                s["pin"].as_str() == want.as_deref()
+                let pin_ok = match want.as_deref() {
+                    Some(id) => s["pin"].as_str() == Some(id),
+                    None => s["pin"].is_null(),
+                };
+                s["enabled"].as_bool() == Some(true) && pin_ok
             })
             .await;
             let text = match &id {
@@ -1959,6 +1966,36 @@ mod tests {
         let v = view(&got(Some(s), Some(Fail::Unreachable)), l, "");
         assert_eq!(v.tone, "stale");
         assert!(v.locked && v.meta.unwrap().contains("Settings stopped at"));
+    }
+
+    #[test]
+    fn the_picker_keeps_auto_pins_and_off_mutually_exclusive() {
+        let l = Lang::En;
+        let selected = |v: &View| {
+            (
+                v.auto_on,
+                v.pin_rows.iter().filter(|p| p.on).count(),
+                !v.enabled,
+            )
+        };
+
+        let v = view(&got(Some(state(true)), None), l, "");
+        assert_eq!(selected(&v), (true, 0, false));
+
+        let mut pinned = state(true);
+        pinned["pin"] = json!("home");
+        let v = view(&got(Some(pinned), None), l, "");
+        assert_eq!(selected(&v), (false, 1, false));
+        assert!(v.pin_rows.iter().find(|p| p.name == "Home").is_some_and(|p| p.on));
+
+        let mut off = state(true);
+        off["enabled"] = json!(false);
+        let v = view(&got(Some(off), None), l, "");
+        assert_eq!(selected(&v), (false, 0, true));
+        assert!(v.off_url.ends_with("ask/engine?on=false"));
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("aria-checked=\"true\""));
+        assert!(!html.contains("Engine on"));
     }
 
     #[test]

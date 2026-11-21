@@ -592,7 +592,7 @@ pub fn state(c: &Cfg, fresh: bool) -> State {
 }
 
 /// The files the manifest only records, as luyaz-ship.sh `record_list` (a test holds them to
-/// the same names): (name, path, tree)
+/// the same names, in its order): (name, path, tree)
 pub(super) fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
     let mut v: Vec<(String, String, bool)> = Vec::new();
     v.push((
@@ -601,18 +601,11 @@ pub(super) fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
         false,
     ));
     v.push(("template.yaml".into(), c.chill.template.clone(), false));
-    let ts = &c.ts_dir;
-    v.push(("tailscale-start.sh".into(), format!("{ts}/start.sh"), false));
-    v.push(("tuning.env".into(), c.ts_tuning.clone(), false));
-    v.push(("tailscaled".into(), format!("{ts}/tailscaled"), false));
     v.push((
-        "tailscaled-nofight".into(),
-        format!("{ts}/nofight/tailscaled"),
+        "init.d/luyaz-core".into(),
+        format!("{}/luyaz-core", c.initd),
         false,
     ));
-    for s in ["luyaz-core", "tailscale"] {
-        v.push((format!("init.d/{s}"), format!("{}/{s}", c.initd), false));
-    }
     v.push(("rc.local".into(), c.rc.clone(), false));
     let txn_dir = c
         .ship_txn

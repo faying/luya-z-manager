@@ -108,7 +108,7 @@ impl SimIdentity {
     }
 
     /// Once per epoch, when its transition has settled back to `online`: the epoch, for the
-    /// listeners that must follow a card change (CHILL reload, home exit's miss count).
+    /// CHILL reload that follows a card change.
     /// The identity the core started on is epoch 0 and never reported.
     pub fn settled(&mut self) -> Option<u64> {
         (self.phase == Phase::Online && self.epoch > self.notified).then(|| {

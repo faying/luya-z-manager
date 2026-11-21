@@ -252,7 +252,7 @@ br-lan\t0000A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n";
     assert_eq!(default_routes(route), Some(vec!["rmnet_data0".to_string()]));
     assert_eq!(default_routes("Iface\tDestination\n"), Some(vec![]));
     assert_eq!(default_routes(""), None);
-    let devs: Vec<String> = ["lo", "br-lan", "rmnet_data0", "tailscale0", "Meta"].map(String::from).to_vec();
+    let devs: Vec<String> = ["lo", "br-lan", "rmnet_data0", "wg0", "Meta"].map(String::from).to_vec();
     assert_eq!(ways_out("rmnet_data0", &["rmnet_data0".into()], &devs), 3);
     assert_eq!(ways_out("rmnet_data0", &["rmnet_data0".into()], &devs[..3]), 1);
     let idle: Vec<String> = ["tunl0", "sit0", "ip6tnl0", "tun0"].map(String::from).to_vec();

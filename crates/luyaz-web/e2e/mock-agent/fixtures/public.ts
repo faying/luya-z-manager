@@ -11,8 +11,6 @@ import type { PublicStatus } from "../../../src/lib/api/schemas/public.ts";
 
 /** Wi-Fi SSID (main2g_ssid). No shared field; keep in step with fixtures/wifi.ts if it differs. */
 const SSID = "U60-Pro";
-/** Tailscale IPv4 of this node (first column of `tailscale status`). */
-const TS_IP = "100.101.7.23";
 /** Last scenario switch: 2026-09-22 18:40 on the device clock (local time labelled UTC). */
 const LAST_SWITCH = Date.UTC(2026, 8, 22, 18, 40, 12) / 1000;
 
@@ -60,11 +58,6 @@ function publicStatus(ctx: Ctx): PublicStatus {
     battery: { percent: 76, charging: true },
     sms: { unread: shared.sms.unread },
     services: {
-      tailscale: {
-        running: shared.tailscale.running,
-        installed: true,
-        node: shared.tailscale.running ? `${TS_IP} ${shared.tailscale.node}` : "",
-      },
       chill: {
         state: chillState,
         reason: null,

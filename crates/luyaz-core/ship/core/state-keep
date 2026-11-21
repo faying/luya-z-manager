@@ -30,7 +30,6 @@
 /data/luyaz/core/crashwatch.json counter 缓存
 /data/luyaz/core/screen-guard-on counter 标记
 /data/luyaz/core/ims-voice-seen counter 标记
-/data/luyaz/core/poller-state.json counter 事件和确认，丢了重来
 /data/luyaz/core/findings.json counter 重新探测
 /data/luyaz/core/findings.probe-budget.json counter 探测预算
 /data/luyaz/core/findings.probe-budget.lock counter 锁

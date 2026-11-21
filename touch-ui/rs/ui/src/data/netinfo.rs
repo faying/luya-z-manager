@@ -186,12 +186,14 @@ pub fn parse(n: &mut netinfo_t, data: &[u8]) {
     }
 
     n.scene_known = 0;
+    n.scene_stopping = false;
     n.nscenes = 0;
     n.scene_current.clear();
     n.scene_pin.clear();
     if let Some(sub) = json::get(data, "scenes", 8192) {
         n.scene_known = 1;
         n.scene_enabled = (jstr(&sub, "enabled", 16) == "true") as i32;
+        n.scene_stopping = jstr(&sub, "disabled_state", 16) == "stopping-v1";
         n.scene_takeover = (jstr(&sub, "guard_takeover", 16) == "true") as i32;
         n.scene_current = jstr(&sub, "current", 24);
         n.scene_pin = jstr(&sub, "pin", 24);
@@ -410,10 +412,14 @@ impl Netinfo {
     }
 
     /// Send an action; refused (409 …): keep the agent's reason for the page.
-    fn act(&mut self, agent: &mut CoreApi, path: &str, json: Option<&str>) {
-        let (code, b) = agent.api("POST", path, json, NI_RESP_MAX);
+    fn act_method(&mut self, agent: &mut CoreApi, method: &str, path: &str, json: Option<&str>) {
+        let (code, b) = agent.api(method, path, json, NI_RESP_MAX);
         self.act_err.clear();
-        if code == 0 {
+        if code == 0 && method == "PUT" && path == "/api/scenario/enabled" {
+            // Stopping waits for the current scenario action; the request may outlive the
+            // short UI timeout. Poll the actual state until the pending deadline instead of
+            // claiming the request failed or resending it.
+        } else if code == 0 {
             self.act_err = trunc(tr("连不上管理后台"), 160);
         } else if code >= 300 {
             if let Some(b) = b {
@@ -425,6 +431,14 @@ impl Netinfo {
         }
         self.poll_ms = 0; // read again at once
         self.was_mode = 0;
+    }
+
+    fn act(&mut self, agent: &mut CoreApi, path: &str, json: Option<&str>) {
+        self.act_method(agent, "POST", path, json);
+    }
+
+    pub fn scenario_enable(&mut self, agent: &mut CoreApi, on: bool) {
+        self.act_method(agent, "PUT", "/api/scenario/enabled", Some(if on { "{\"enabled\":true}" } else { "{\"enabled\":false}" }));
     }
 
     pub fn scan(&mut self, agent: &mut CoreApi) {

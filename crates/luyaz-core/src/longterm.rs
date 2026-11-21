@@ -361,8 +361,7 @@ impl Fold {
     }
 
     /// This check's power and process readings into the hour (`hour_power`, `hour_proc`); the
-    /// reading itself (the screen and charging as read for the tailnet poller check, the exits
-    /// and memory for the regress layer).
+    /// reading itself (the exits and memory for the regress layer).
     pub fn power(&mut self, c: &Clock, p: &power::Paths, out: &mut Out) -> power::Read {
         if self.boot != c.boot {
             self.tick(c, out);
@@ -1404,8 +1403,6 @@ pub fn start(dir: PathBuf) -> std::sync::mpsc::Sender<Msg> {
                         }
                     }
                     let r = fold.power(&c, &ppaths, &mut out);
-                    // power.tailnet_poller: conntrack on screen-off checks only (poller.rs)
-                    crate::poller::check(c.wall, c.mono, r.screen_known, r.charging_known);
                     reading = Some(r);
                     let mut rep = sh.report();
                     rep.looks = lk.cov;

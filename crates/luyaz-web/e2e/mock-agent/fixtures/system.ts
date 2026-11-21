@@ -101,7 +101,6 @@ const PROCS: ProcSeed[] = [
   { pid: 1302, name: "luyaz-sentinel", rss_kb: 1_048, cpu: 0 },
   { pid: 1318, name: "luyaz-ui", rss_kb: 18_540, cpu: 1.6 },
   { pid: 1406, name: "mihomo", rss_kb: 42_760, cpu: 2.4 },
-  { pid: 1455, name: "tailscaled", rss_kb: 31_228, cpu: 0.9 },
   { pid: 19, name: "ksoftirqd/1", rss_kb: 0, cpu: 0.2 },
   { pid: 87, name: "kworker/u16:2", rss_kb: 0, cpu: 0.1 },
   { pid: 9, name: "rcu_preempt", rss_kb: 0, cpu: 0.1 },

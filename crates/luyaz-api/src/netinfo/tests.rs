@@ -275,7 +275,7 @@ fn bearer_needs_a_default_route_out_of_the_interface() {
     let a6 = "240e00000000000000000000000000ab 0c 40 00 80 rmnet_data0\n";
     let ll = "fe800000000000000000000000000001 0c 40 20 80 rmnet_data0\n";
     let r6 = "00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000001 00000000 00000003 rmnet_data0\n";
-    let r6_other = r6.replace("rmnet_data0", "tailscale0");
+    let r6_other = r6.replace("rmnet_data0", "wg0");
     assert_eq!(bearer_from_proc(Some(head), a6, r6, i), Some(true));
     assert_eq!(bearer_from_proc(Some(head), ll, r6, i), Some(false));
     assert_eq!(bearer_from_proc(Some(head), a6, "", i), Some(false));

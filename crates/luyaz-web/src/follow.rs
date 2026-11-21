@@ -114,8 +114,7 @@ pub fn receipt_note(cf: &mut write::Confirm, via: crate::topbar::Via, l: Lang) {
 }
 
 /// §2 `remote.wifi_change`: from off the LAN, say whether this change may cut the page off for
-/// good. Advice only: the write stays allowed (the receipt still reverts it), and a tailnet page
-/// rides the mobile link, so only a subnet route or an unknown origin gets a line.
+/// good. Advice only: the write stays allowed and the receipt still reverts it.
 pub fn remote_risk_note(
     cf: &mut write::Confirm,
     via: crate::topbar::Via,
@@ -127,15 +126,15 @@ pub fn remote_risk_note(
     use crate::topbar::Via;
     use luyaz_api::execution::wifi_change::{Advice, Evidence, Origin, replay, revert_measured};
     let origin = match via {
-        Via::Local | Via::Tailnet => return,
-        Via::SubnetRoute => Some(Origin::Remote),
+        Via::Local => return,
+        Via::Remote => Some(Origin::Remote),
         Via::Unknown => None,
     };
     let e = Evidence {
         change: Some(change),
         origin,
         clients_on_ap: clients,
-        // a subnet route's other ways in are not visible from here
+        // Other ways in are not visible from here.
         other_entry: None,
         // the core reads the old values before it writes
         old_values: Some(true),
@@ -152,12 +151,12 @@ pub fn remote_risk_note(
         Advice::OnSiteOnly {
             why: "no_other_entry",
         } => l.pick(
-            "This page reaches the device through another device's route, and no other way in is known: after this change, devices may not get back on even when it is reverted. If you can, make it on site.",
-            "这个页面是经别的设备的路由连到设备的，也不知道有没有别的入口：这次改完，即使设置被改回，设备也可能连不回来。能的话，到现场再改。",
+            "This page is connected remotely, and no other way in is known: after this change, devices may not get back on even when it is reverted. If you can, make it on site.",
+            "这个页面是远程连接的，也不知道有没有别的入口：这次改完，即使设置被改回，设备也可能连不回来。能的话，到现场再改。",
         ),
         Advice::OnSiteOnly { .. } => l.pick(
-            "This page reaches the device through another device's route. Reverting this kind of change from afar has not been tested: if you can, make it on site.",
-            "这个页面是经别的设备的路由连到设备的。这类改动的远程退回还没实测过：能的话，到现场再改。",
+            "This page is connected remotely. Reverting this kind of change from afar has not been tested: if you can, make it on site.",
+            "这个页面是远程连接的。这类改动的远程退回还没实测过：能的话，到现场再改。",
         ),
         Advice::Unknown { .. } => l.pick(
             "Where this page comes from cannot be told, so it is treated as remote: it may lose the device until the change is reverted.",
@@ -255,9 +254,9 @@ mod receipt_tests {
     }
 
     #[test]
-    fn remote_risk_only_for_subnet_routes_and_unknown_origins() {
+    fn remote_risk_for_remote_and_unknown_origins() {
         use luyaz_api::execution::wifi_change::{Ap, Change};
-        for via in [Via::Local, Via::Tailnet] {
+        for via in [Via::Local] {
             let mut c = cf(None);
             remote_risk_note(&mut c, via, Ap::Main, Change::Settings, Some(2), Lang::En);
             assert_eq!(c.recovery, None, "{via:?}");
@@ -267,7 +266,7 @@ mod receipt_tests {
             let mut c = cf(Some("Reconnect."));
             remote_risk_note(
                 &mut c,
-                Via::SubnetRoute,
+                Via::Remote,
                 ap,
                 Change::Settings,
                 Some(2),
@@ -279,13 +278,13 @@ mod receipt_tests {
                 "{r}"
             );
         }
-        // a no-rejoin change on either AP was measured (O3): no line over a subnet route,
+        // a no-rejoin change on either AP was measured (O3): no line for a known remote,
         // even when the guest page reads no client count
         for (ap, clients) in [(Ap::Main, Some(2)), (Ap::Guest, None)] {
             let mut c = cf(None);
             remote_risk_note(
                 &mut c,
-                Via::SubnetRoute,
+                Via::Remote,
                 ap,
                 Change::OnOff,
                 clients,
@@ -329,7 +328,7 @@ mod receipt_tests {
 
     #[test]
     fn only_off_lan_confirms_mention_the_receipt() {
-        for via in [Via::Tailnet, Via::SubnetRoute, Via::Unknown] {
+        for via in [Via::Remote, Via::Unknown] {
             let mut c = cf(Some("Reconnect."));
             receipt_note(&mut c, via, Lang::En);
             let r = c.recovery.unwrap();
@@ -338,7 +337,7 @@ mod receipt_tests {
         let mut c = cf(None);
         receipt_note(&mut c, Via::Local, Lang::Zh);
         assert_eq!(c.recovery, None);
-        receipt_note(&mut c, Via::Tailnet, Lang::Zh);
+        receipt_note(&mut c, Via::Remote, Lang::Zh);
         assert!(c.recovery.unwrap().contains("60 秒"));
     }
 }

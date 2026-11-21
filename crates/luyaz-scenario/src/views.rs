@@ -5,7 +5,7 @@
 use serde_json::{json, Value};
 use luyaz_policy::scenario::{self as sc, Config, Detect, Scenario};
 
-use crate::{lk, Engine, ALLOWED_PATHS};
+use crate::{lk, DisabledState, Engine, ALLOWED_PATHS};
 
 /// English names of the factory scenarios that still have their factory name.
 pub fn names_en(cfg: &Config) -> Value {
@@ -53,20 +53,29 @@ pub fn picker(enabled: bool, current: &str, pin: Option<String>, guard_takeover:
                 .collect(),
         })
         .collect();
-    luyaz_api::scenario::picker(enabled, current, pin, guard_takeover, &scenes, &cfg.home_mcc)
+    luyaz_api::scenario::picker(
+        enabled,
+        if enabled { current } else { "" },
+        if enabled { pin } else { None },
+        guard_takeover,
+        &scenes,
+        &cfg.home_mcc,
+    )
 }
 
 impl Engine {
     /// `GET /api/scenario`'s data.
     pub fn state_json(&self) -> Value {
         let sim_mcc = self.io.sim_mcc();
-        let enabled = self.enabled();
+        let disabled = self.disabled_state();
+        let enabled = disabled == DisabledState::Active;
         let pin = self.pin();
         let takeover = self.takeover_marked();
         let cfg = lk(&self.cfg);
         let st = lk(&self.state);
         json!({
             "enabled": enabled,
+            "disabled_state": disabled.as_str(),
             "pin": pin,
             "guard_takeover": takeover,
             "current": st.current,
@@ -95,19 +104,20 @@ impl Engine {
 
     /// The scenario part of the public status.
     pub fn public_summary(&self) -> Value {
-        let enabled = self.enabled();
-        let pin = self.pin();
+        let disabled = self.disabled_state();
+        let enabled = disabled == DisabledState::Active;
+        let pin = enabled.then(|| self.pin()).flatten();
         let takeover = self.takeover_marked();
         let cfg = lk(&self.cfg);
         let st = lk(&self.state);
-        let scen = cfg.scenario(&st.current);
+        let scen = enabled.then(|| cfg.scenario(&st.current)).flatten();
         let e = luyaz_api::scenario::Engine {
             configured: !cfg.scenarios.is_empty(),
             enabled,
-            current: &st.current,
+            current: if enabled { &st.current } else { "" },
             pin,
-            guard_takeover: takeover,
-            last_switch: st.last_switch,
+            guard_takeover: enabled && takeover,
+            last_switch: enabled.then_some(st.last_switch).flatten(),
         };
         let current = scen.map(|s| luyaz_api::scenario::Current {
             id: &s.id,
@@ -117,6 +127,7 @@ impl Engine {
         });
         #[allow(unused_mut)]
         let mut v = luyaz_api::scenario::public_summary(&e, current);
+        v["disabled_state"] = json!(disabled.as_str());
         let members: Vec<(String, Option<String>)> = scen
             .iter()
             .flat_map(|s| s.actions.iter())
@@ -132,7 +143,7 @@ impl Engine {
             .collect();
         luyaz_api::chill::scenario_fields(
             &mut v,
-            self.pending().iter().any(|p| p.key == sc::CHILL_ON_KEY),
+            enabled && self.pending().iter().any(|p| p.key == sc::CHILL_ON_KEY),
             scen.is_some_and(sc::is_abroad),
             members.iter().map(|(p, m)| (p.as_str(), m.as_deref())),
         );

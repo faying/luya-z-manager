@@ -34,8 +34,24 @@ check "export includes config" 'echo "$list" | grep -q "files/data/scenario/scen
 check "runtime state left out" '! echo "$list" | grep -q "state.json"'
 check "tailscale identity left out by default" '! echo "$list" | grep -q tailscale'
 check "Wi-Fi exported as uci text" 'echo "$list" | grep -q "u60-backup/wireless.uci"'
-sh $CB export --with-tailscale >$T/bts.tgz
-check "--with-tailscale adds it" 'tar tzf $T/bts.tgz | grep -q "files/data/tailscale/state/tailscaled.state"'
+check "retired export option rejected" '! sh $CB export --with-tailscale >$T/rejected 2>/dev/null'
+
+# A legacy archive can mix a node identity with ordinary settings. It remains
+# verifiable, but neither the plan nor restore may put the identity back.
+mkdir -p $T/legacy; tar xzf $T/b.tgz -C $T/legacy
+mkdir -p $T/legacy/u60-backup/files/data/tailscale/state
+cp $D/data/tailscale/state/tailscaled.state $T/legacy/u60-backup/files/data/tailscale/state/
+(cd $T/legacy/u60-backup && printf '  %s  files/data/tailscale/state/tailscaled.state\n' "$(md5sum files/data/tailscale/state/tailscaled.state | cut -c1-32)" >>MANIFEST)
+(cd $T/legacy && tar czf $T/bts.tgz u60-backup)
+check "legacy mixed archive verifies" 'sh $CB verify $T/bts.tgz >/dev/null'
+RLEG=$T/legacy-root; mkdir -p $RLEG
+sh $CB plan $T/bts.tgz $RLEG >$T/legacy-plan
+check "plan reports retired identity skipped" 'grep -q "skip .* /data/tailscale/state/tailscaled.state" $T/legacy-plan && grep -q "new .* /data/luyaz/web.env" $T/legacy-plan'
+sh $CB restore $T/bts.tgz $RLEG >$T/legacy-restore
+check "restore skips identity but restores other settings" 'grep -q "skipped /data/tailscale/state/tailscaled.state" $T/legacy-restore && [ ! -e $RLEG/data/tailscale ] && cmp -s $RLEG/data/luyaz/web.env $D/data/luyaz/web.env'
+echo corrupted >$T/legacy/u60-backup/files/data/tailscale/state/tailscaled.state
+(cd $T/legacy && tar czf $T/bts-bad.tgz u60-backup)
+check "legacy identity still checked for corruption" '! sh $CB verify $T/bts-bad.tgz >/dev/null 2>&1'
 
 check "verify passes on a good backup" 'sh $CB verify $T/b.tgz >/dev/null'
 

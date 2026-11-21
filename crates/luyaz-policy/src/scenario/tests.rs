@@ -9,12 +9,6 @@ fn j(v: serde_json::Value) -> Json {
     Json::from(v)
 }
 
-/// A3: the scenario engine can't touch the home exit.
-#[test]
-fn home_exit_not_scenario_reachable() {
-    assert!(!ALLOWED_PATHS.iter().any(|p| p.contains("/chill/home")));
-}
-
 fn net(ssid: &str, bssid: &str, signal: f64) -> Network {
     Network {
         ssid: ssid.into(),

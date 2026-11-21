@@ -379,15 +379,15 @@ impl Ui {
         kit::scroll_extent(c.scroll, y + c.rest.style_height(0) - 10 + TAB_PAD);
     }
 
-    /// 出口: where the traffic goes out (CHILL, Tailscale), and how fast.
+    /// 出口: where the traffic goes out (CHILL), and how fast.
     pub(super) fn build_exit(&mut self, tile: Obj) {
         let sc = kit::scroll(tile, 0, VIEW_H, 1000);
         self.net.nh_scroll[NH_EXIT] = sc;
-        // Home's CHILL card (Tailscale went back to Home 9-25)
+        // Home's CHILL card
         self.ex.chill_card.set_parent(sc);
         // 出口 IP (build_sub_net) on top, this card after it (net_reflow)
         self.net.nh_base[NH_EXIT] = 4;
-        self.nav_card(sc, 4, n_("代理与测速"), &[Sub::Chill, Sub::Ts, Sub::Speed], &["CHILL", "Tailscale", n_("测速")]);
+        self.nav_card(sc, 3, n_("代理与测速"), &[Sub::Chill, Sub::Speed], &["CHILL", n_("测速")]);
         self.net.exit_nav_sec = self.nav_sec;
         self.net.exit_nav_card = self.nav_card;
     }
@@ -448,16 +448,20 @@ impl Ui {
         );
         // the mode as the backend says it: psk2 / sae / sae-mixed differ
         self.set(w.enc, if open { tr("开放") } else { d.ap_auth.as_str() });
-        self.set(w.state, if d.ap_on != 0 { tr("已开启") } else { tr("已关闭") });
-        kit::text_color(w.state, if d.ap_on != 0 { th.ok_t } else { th.t3 });
+        let broadcasting = w.up.map_or(d.ap_on != 0, |up| up[0] || up[1]);
+        self.set(w.state, if broadcasting { tr("已开启") } else { tr("已关闭") });
+        kit::text_color(w.state, if broadcasting { th.ok_t } else { th.t3 });
         // 5 GHz and the channel guard: stopped / moved off radar for now / on DFS (radar can stop it)
         let ch = || cf!("%d · %d MHz", d.ap5_ch, d.ap5_width);
-        let (txt, tone) = match d.ap5_dfs {
-            2 => (tr("已停（可能遇到雷达）").as_bytes().to_vec(), th.warn_t),
-            3 => ([ch(), cf!(" · %s", tr("暂避雷达"))].concat(), th.t1),
-            1 => ([ch(), b" \xc2\xb7 DFS".to_vec()].concat(), th.t1),
-            _ if d.ap5_ch > 0 => (ch(), th.t1),
-            0 => (tr("未开").as_bytes().to_vec(), th.t3),
+        let up_5g = w.up.map(|up| up[1]);
+        let (txt, tone) = match (up_5g, d.ap5_dfs) {
+            (Some(false) | None, 2) if d.ap_on != 0 =>
+                (tr("已停（可能遇到雷达）").as_bytes().to_vec(), th.warn_t),
+            (Some(false), _) => (tr("未开").as_bytes().to_vec(), th.t3),
+            (_, 3) if d.ap5_ch > 0 => ([ch(), cf!(" · %s", tr("暂避雷达"))].concat(), th.t1),
+            (_, 1) if d.ap5_ch > 0 => ([ch(), b" \xc2\xb7 DFS".to_vec()].concat(), th.t1),
+            (_, _) if d.ap5_ch > 0 => (ch(), th.t1),
+            (None, 0) if d.ap_on == 0 => (tr("未开").as_bytes().to_vec(), th.t3),
             _ => (b"\xe2\x80\x94".to_vec(), th.t3),
         };
         self.set(w.ch5, txt);

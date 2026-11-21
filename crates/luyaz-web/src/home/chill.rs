@@ -121,11 +121,6 @@ impl Chill {
         self.src.next()
     }
 
-    /// The last good `/api/services/chill` read (the landing card's home exit).
-    pub(super) fn status(&self) -> Option<&Value> {
-        self.src.val.as_ref()
-    }
-
     pub(super) async fn poll(&mut self, app: &Shared, who: &Caller, now: Instant, force: bool) {
         if !force && !self.src.due(now) {
             return;

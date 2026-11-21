@@ -48,10 +48,7 @@ fn approval(s: &Spec, loop_only: bool) -> Value {
         "agent_mcp": agent.map(|l| json!({
             "layer": l.as_str(),
             "per_layer_limit_s": agent::LIMIT_SECS,
-            "sensitive_check": matches!(l, agent::Layer::Apn | agent::Layer::Link),
-            // D-g: only on the owner's instruction; the trial also needs the device's own Tailscale
-            "owner_instruction_only": l == agent::Layer::Link,
-            "tailnet_check": l == agent::Layer::Link,
+            "sensitive_check": l == agent::Layer::Apn,
         })),
         "auto_allow_list": allow,
     })
@@ -129,7 +126,7 @@ fn direct_entry(action: &str) -> Value {
             "agent_mcp": agent.map(|l| json!({
                 "layer": l.as_str(),
                 "per_layer_limit_s": agent::LIMIT_SECS,
-                "sensitive_check": matches!(l, agent::Layer::Apn | agent::Layer::Link),
+                "sensitive_check": l == agent::Layer::Apn,
             })),
             "auto_allow_list": crate::api::execute::ALLOW.contains(&action),
         },
@@ -277,6 +274,8 @@ mod tests {
         let band = find("band.set_lte");
         assert_eq!(band["rollback"]["capability"], "captured_and_proven");
         assert_eq!(band["rollback"]["on_loop_execution"], true);
+        assert_eq!(band["approval"]["agent_mcp"], Value::Null);
+        assert_eq!(band["rollback"]["on_agent_write"], false);
         assert_eq!(
             find("verified.restore")["approval"]["agent_mcp"],
             Value::Null

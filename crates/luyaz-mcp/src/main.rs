@@ -71,7 +71,7 @@ fn tools() -> Value {
     let mut list = json!([
         {
             "name": "get_device_health",
-            "description": format!("Overall state of the Luya-Z router (ZTE U60 Pro): network verdict, open finding, unread alerts, health checks, Tailscale/CHILL proxy state, UTC offset. {UNTRUSTED_NOTE}"),
+            "description": format!("Overall state of the Luya-Z router (ZTE U60 Pro): network verdict, open finding, unread alerts, health checks, CHILL proxy state, UTC offset. {UNTRUSTED_NOTE}"),
             "inputSchema": none,
             "annotations": {"readOnlyHint": true, "openWorldHint": false},
         },
@@ -132,7 +132,7 @@ fn tools() -> Value {
         },
         {
             "name": "get_incidents",
-            "description": format!("The device's own incidents (\"tell me when it gets worse\"): what it judged a regression — memory (regress-mem against a 7-day baseline, regress-mem-abs over a fixed limit), cellular down 5+ min, an exit (CHILL/Tailscale) failing, standby power up, an unexpected reboot, the core down or its recorder stalled, a crash row (core-crash, ui-crash, …) — with from/to (device local time as epoch seconds; null when the clock was not trusted), end (recovered = a signal said it is over; quiet = a crash row's window passed, not proof it is fixed; reboot = cut by a reboot), count, the build, observed (what else was seen then: words, not a cause), ship + ship_clock (a ship up to an hour before it in the same boot = may be related; uncertain = across a reboot, the clocks cannot order them), drill (a real-device test switch such as rx-quiet turned on up to an hour before it, same rules) and unread. An alert `rg-<id>-ask` is the device asking, after 3 days open, whether a regress-mem/regress-power level is the new normal: relay it, and accept only when the user says so in their own words (never on your own). Without `id`: open ones, then those ended in the last 7 days. With `id`: that one with its alerts, the 6 hours of hour summaries before it (evidence_hours: memory, exits, standby power), recovery_s, the boot's reboot code (boot_code) and the memory snapshot; archived = read back from its evidence (kept 30 days) after the 8-day list let it go. state \"not_described\" = an older core without incidents, never \"no incidents\"; \"pruned\" = past its keeping time. {UNTRUSTED_NOTE}"),
+            "description": format!("The device's own incidents (\"tell me when it gets worse\"): what it judged a regression — memory (regress-mem against a 7-day baseline, regress-mem-abs over a fixed limit), cellular down 5+ min, a CHILL outage, standby power up, an unexpected reboot, the core down or its recorder stalled, a crash row (core-crash, ui-crash, …) — with from/to (device local time as epoch seconds; null when the clock was not trusted), end (recovered = a signal said it is over; quiet = a crash row's window passed, not proof it is fixed; reboot = cut by a reboot), count, the build, observed (what else was seen then: words, not a cause), ship + ship_clock (a ship up to an hour before it in the same boot = may be related; uncertain = across a reboot, the clocks cannot order them), drill (a real-device test switch such as rx-quiet turned on up to an hour before it, same rules) and unread. An alert `rg-<id>-ask` is the device asking, after 3 days open, whether a regress-mem/regress-power level is the new normal: relay it, and accept only when the user says so in their own words (never on your own). Without `id`: open ones, then those ended in the last 7 days. With `id`: that one with its alerts, the 6 hours of hour summaries before it (evidence_hours: memory, exits, standby power), recovery_s, the boot's reboot code (boot_code) and the memory snapshot; archived = read back from its evidence (kept 30 days) after the 8-day list let it go. state \"not_described\" = an older core without incidents, never \"no incidents\"; \"pruned\" = past its keeping time. {UNTRUSTED_NOTE}"),
             "inputSchema": {"type": "object", "properties": {
                 "id": {"type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "An incident id from the list"}},
                 "additionalProperties": false},
@@ -178,17 +178,6 @@ fn tools() -> Value {
                 "params": {"type": "object"}},
                 "required": ["action", "params"], "additionalProperties": false},
             "annotations": act(false, true),
-        },
-        {
-            "name": "change_band_or_cell",
-            "description": format!("Lock bands or a cell, or put the bands back to default: band.set_lte {{bands: \"1,3\"}}, band.set_nr {{sa, nsa}}, band.reset {{}}, cell.lock_lte {{pci, earfcn}} or {{off: true}}, cell.lock_nr {{pci, arfcn, band}} or {{off: true}}. These can cut your own connection to the device (Tailscale, mobile data), so NEVER decide one yourself: only when the owner explicitly told you to make this change, and then set `owner_instruction: true`. The device cannot check that, and logs it as the owner's instruction (unverified). One change of this kind per 30 minutes; while roaming or abroad it is `sensitive` (hand the URL to the owner). Rollback: automatic — the device tries it for up to 2 minutes and keeps it only if it sees mobile data AND Tailscale working by itself; you may lose contact meanwhile, ask get_change_status afterwards. {ACT_NOTE}"),
-            "inputSchema": {"type": "object", "properties": {
-                "action": {"type": "string", "enum": ["band.set_lte", "band.set_nr", "band.reset", "cell.lock_lte", "cell.lock_nr"]},
-                "params": {"type": "object"},
-                "owner_instruction": {"type": "boolean", "const": true,
-                    "description": "true only when the owner explicitly asked for this change"}},
-                "required": ["action", "params", "owner_instruction"], "additionalProperties": false},
-            "annotations": act(false, false),
         },
         {
             "name": "accept_regress_level",
@@ -461,23 +450,6 @@ pub fn call_for(name: &str, args: &Value) -> Result<Call, String> {
             }
             Call::post("/agent-api/act/apn", json!({"action": action, "params": args["params"]}))
         }
-        "change_band_or_cell" => {
-            let action = word(
-                args,
-                "action",
-                &["band.set_lte", "band.set_nr", "band.reset", "cell.lock_lte", "cell.lock_nr"],
-            )?;
-            if !args["params"].is_object() {
-                return Err("`params` must be an object".into());
-            }
-            if args["owner_instruction"] != true {
-                return Err("only on the owner's explicit instruction: set `owner_instruction: true` only when the owner asked for this change".into());
-            }
-            Call::post(
-                "/agent-api/act/link",
-                json!({"action": action, "params": args["params"], "instruction": "owner"}),
-            )
-        }
         "accept_regress_level" => {
             let kind = word(args, "kind", &["regress-mem", "regress-power"])?;
             if args["owner_instruction"] != true {
@@ -725,7 +697,7 @@ fn tool_result(got: Got) -> Value {
                 match reason.as_str() {
                     "read_only_token" => "This token can only read: the device did not change anything. Making changes needs a token line marked `act` on the device (the owner decides).".into(),
                     "act_source" => "This computer's address may not make changes (not in /data/luyaz/agent.act-allow on the device). Nothing was changed.".into(),
-                    _ => "The device refused this computer's address. Add its network to /data/luyaz/agent.allow on the device, or connect over Tailscale.".to_string(),
+                    _ => "The device refused this computer's address. Ask the owner to add its network to /data/luyaz/agent.allow on the device.".to_string(),
                 },
                 true,
             )
@@ -749,7 +721,7 @@ fn tool_result(got: Got) -> Value {
             true,
         ),
         Got::Unreachable(why) => (
-            format!("The device cannot be reached ({why}). Tailscale or the home link may be down, or the device is offline. For offline self-help use the device's touch screen or its LAN repair page."),
+            format!("The device cannot be reached ({why}). Use the device's touch screen or LAN repair page to check its connection."),
             false,
         ),
     };
@@ -873,7 +845,7 @@ pub fn handle_cached(
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL),
             "capabilities": {"tools": {"listChanged": false}},
             "serverInfo": {"name": "luyaz-mcp", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "Luya-Z routers (one, or several in the owner's device list: list_devices names them; pass `device` when there is more than one). The get_*, diagnose and explain_recovery_action tools only read (get_firmware_capabilities and explain_recovery_action answer from what the device already knows; unknown stays unknown). set_chill_profile, set_chill_exit, use_apn, change_apn, change_band_or_cell and accept_regress_level change the device and need a token the owner marked `act`; the device checks every change itself, tries it for up to 2 minutes and rolls it back when it does not get through. A `sensitive` answer comes with a page URL: hand it to the owner and stop. change_band_or_cell can cut your own link: use it only when the owner told you to.",
+            "instructions": "Luya-Z routers (one, or several in the owner's device list: list_devices names them; pass `device` when there is more than one). The get_*, diagnose and explain_recovery_action tools only read (get_firmware_capabilities and explain_recovery_action answer from what the device already knows; unknown stays unknown). set_chill_profile, set_chill_exit, use_apn, change_apn and accept_regress_level change the device and need a token the owner marked `act`. The device verifies trial actions and rolls them back when confirmation fails. A `sensitive` answer comes with a page URL: hand it to the owner and stop.",
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools()})),

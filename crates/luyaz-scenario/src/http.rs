@@ -1,14 +1,14 @@
 //! The engine's web routes (`/api/scenario*`), as `(status, body)`. The agent's tiny_http and
-//! u60d's axum each mount them. Two of them do device work and block for a while — disabling
-//! restores away (bootsafe: seconds, minutes when Wi-Fi needs repairing) and the scan (a few
-//! seconds of `iw`) — so a host with a single runtime thread runs those off it.
+//! u60d's axum each mount them. The scan does device work and blocks for a while
+//! (a few seconds of `iw`), so a host with a single runtime thread runs it off
+//! that thread.
 
 use std::fs;
 
 use serde_json::{json, Value};
 use luyaz_policy::scenario::{self as sc, Config};
 
-use crate::{atomic_write, lk, Engine, CONFIG_FILE, DIR, DISABLED_FLAG, LOG_FILE, PIN_FILE};
+use crate::{atomic_write, lk, remove_if_present, DisabledState, Engine, CONFIG_FILE, DIR, LOG_FILE, PIN_FILE};
 
 fn bad_json() -> (u16, Value) {
     (400, json!({"ok": false, "error": "invalid JSON"}))
@@ -33,9 +33,13 @@ impl Engine {
         if let Err(e) = sc::validate(&cfg) {
             return (400, json!({"ok": false, "error": e}));
         }
-        *lk(&self.cfg) = cfg.clone();
-        self.write_json(CONFIG_FILE, &cfg);
+        let mut stored = lk(&self.cfg);
+        if let Err(e) = self.write_json_result(CONFIG_FILE, &cfg) {
+            return (500, json!({"ok": false, "error": format!("write config: {e}")}));
+        }
+        *stored = cfg;
         *lk(&self.cfg_seen) = crate::stamp(&self.p(CONFIG_FILE));
+        drop(stored);
         self.log("configuration replaced");
         self.ok_state()
     }
@@ -56,45 +60,75 @@ impl Engine {
         let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
             return bad_json();
         };
-        let _ = fs::create_dir_all(self.p(DIR));
-        match parsed.get("id").and_then(|v| v.as_str()) {
-            Some(id) => {
+        let Some(id) = parsed.get("id") else {
+            return (400, json!({"ok": false, "error": "id must be a string or null"}));
+        };
+        let written = match id {
+            Value::String(id) => {
                 if lk(&self.cfg).scenario(id).is_none() {
                     return (400, json!({"ok": false, "error": format!("unknown scenario {id:?}")}));
                 }
-                let _ = atomic_write(&self.p(PIN_FILE), id.as_bytes());
-                self.log(&format!("pinned to {id:?}"));
+                fs::create_dir_all(self.p(DIR)).and_then(|()| atomic_write(&self.p(PIN_FILE), id.as_bytes()))
             }
-            None => {
-                let _ = fs::remove_file(self.p(PIN_FILE));
-                self.log("pin cleared");
-            }
+            Value::Null => remove_if_present(&self.p(PIN_FILE)),
+            _ => return (400, json!({"ok": false, "error": "id must be a string or null"})),
+        };
+        if let Err(e) = written {
+            return (500, json!({"ok": false, "error": format!("write pin: {e}")}));
+        }
+        if let Err(e) = self.enable() {
+            return (500, json!({"ok": false, "error": format!("enable scenario engine: {e}")}));
+        }
+        match id.as_str() {
+            Some(id) => self.log(&format!("pinned to {id:?}")),
+            None => self.log("pin cleared"),
         }
         self.ok_state()
     }
 
     /// PUT /api/scenario/enabled — body `{"enabled": bool}`.
-    ///
-    /// Disabling does not freeze the device where it stands: it restores the away
-    /// scenario first. Freezing would be a trap — disable it while the APs are off
-    /// and you would have locked yourself out of the network you were trying to get
-    /// back. Blocks for the bootsafe (see the module docs).
     pub fn http_enabled(&self, body: &[u8]) -> (u16, Value) {
         let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
             return bad_json();
         };
-        let enabled = parsed.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-        let _ = fs::create_dir_all(self.p(DIR));
-        if enabled {
-            let _ = fs::remove_file(self.p(DISABLED_FLAG));
-            self.log("engine enabled");
+        let Some(enabled) = parsed.get("enabled").and_then(|v| v.as_bool()) else {
+            return (400, json!({"ok": false, "error": "enabled must be a boolean"}));
+        };
+        let result = if enabled {
+            self.enable()
+        } else if self.disabled_state() == DisabledState::Paused {
+            Ok(())
         } else {
-            let _ = fs::write(self.p(DISABLED_FLAG), "");
-            self.log("engine disabled — restoring away scenario");
-            self.bootsafe();
-            self.run_restores(None, false);
+            self.write_disabled_state(DisabledState::Stopping)
+                .and_then(|()| self.clean_for_pause())
+        };
+        if let Err(e) = result {
+            return (500, json!({"ok": false, "error": format!("change scenario mode: {e}")}));
         }
         self.ok_state()
+    }
+
+    fn enable(&self) -> std::io::Result<()> {
+        if self.disabled_state() != DisabledState::Active {
+            self.write_disabled_state(DisabledState::Active)?;
+            self.log("engine enabled");
+        }
+        Ok(())
+    }
+
+    /// Complete the one-time shutdown cleanup after the last automatic tick has drained.
+    /// Also used to recover an interrupted shutdown on the next Core start.
+    pub fn clean_for_pause(&self) -> std::io::Result<()> {
+        remove_if_present(&self.p(PIN_FILE))?;
+        self.io.set_auto_sleep(true);
+        self.clear_wakealarm();
+        {
+            let _restore_lock = lk(&crate::RESTORE_LOCK);
+            self.write_json_result(crate::RESTORE_FILE, &[] as &[sc::PendingRestore; 0])?;
+        }
+        self.set_abroad(false);
+        self.log("engine disabled; current device state retained");
+        Ok(())
     }
 
     /// GET /api/scenario/scan — what the detector can see right now. The helper the

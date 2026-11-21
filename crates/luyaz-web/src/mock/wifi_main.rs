@@ -9,6 +9,9 @@
 //! transactions rolled back (`"confirmed"` again by default); `{"ms": n}` stretches a transaction
 //! to about n ms; `{"set": {...}}` merges keys into the block (`band_2g` etc. as whole objects);
 //! `{"gone": true}` makes the bands unreadable; `{"stale": true|false}` republishes `wifi` marked so.
+//! `{"psm":{"saved":true,"live":false,"write":"mismatch"}}` configures power-save reads and writes.
+//! The write mode is `"normal"`, `"mismatch"` or `"unknown"`. `{"nfc":{"switch":null,"stale":true}}`
+//! sets the NFC block; send `switch: 0` or `switch: 1` with `stale: false` to restore a current value.
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -18,18 +21,33 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use serde_json::{Value, json};
 
 use super::{Mock, active_op, set_field};
 
-const KEYS: [&str; 5] = ["on", "wifi6", "country", "band_2g", "band_5g"];
+const KEYS: [&str; 6] = ["on", "module_on", "wifi6", "country", "band_2g", "band_5g"];
 
-#[derive(Default)]
 struct Hooks {
     next: String,
     end: String,
     ms: u64,
+    psm_saved: Option<bool>,
+    psm_live: Option<bool>,
+    psm_write: String,
+}
+
+impl Default for Hooks {
+    fn default() -> Self {
+        Self {
+            next: String::new(),
+            end: String::new(),
+            ms: 0,
+            psm_saved: Some(false),
+            psm_live: Some(false),
+            psm_write: String::new(),
+        }
+    }
 }
 
 fn hooks() -> &'static Mutex<Hooks> {
@@ -40,6 +58,7 @@ fn hooks() -> &'static Mutex<Hooks> {
 fn defaults() -> Value {
     json!({
         "on": true,
+        "module_on": true,
         "wifi6": true,
         "country": "CN",
         "band_2g": {"ap_on": true, "radio_on": true, "ssid": "U60-Home", "encryption": "psk2+ccmp", "has_password": true,
@@ -105,14 +124,25 @@ fn applied(cur: &Value, p: &Value) -> Value {
     if let Some(on) = p.get("wifi_onoff").and_then(Value::as_str) {
         let on = on != "0";
         w["on"] = json!(on);
-        for b in ["band_2g", "band_5g"] {
-            w[b]["ap_on"] = json!(on);
-            if on {
-                w[b]["radio_on"] = json!(true);
-            }
-        }
+        w["module_on"] = json!(on);
     }
     w
+}
+
+#[cfg(test)]
+#[test]
+fn wifi_master_mock_preserves_band_preferences_and_ap_settings() {
+    let mut w = defaults();
+    w["band_2g"]["radio_on"] = json!(false);
+    w["band_5g"]["ap_on"] = json!(false);
+    let off = applied(&w, &json!({"wifi_onoff": "0"}));
+    let on = applied(&off, &json!({"wifi_onoff": "1"}));
+    assert_eq!(off["on"], false);
+    assert_eq!(off["module_on"], false);
+    assert_eq!(on["on"], true);
+    assert_eq!(on["module_on"], true);
+    assert_eq!(on["band_2g"], w["band_2g"]);
+    assert_eq!(on["band_5g"], w["band_5g"]);
 }
 
 fn publish_op(m: &Mock, active: Value, last: Value) {
@@ -238,6 +268,37 @@ fn settings(m: &Arc<Mock>, body: &Value) -> Response {
     axum::Json(json!({"ok": true, "action": A, "result": result, "op": {"op_id": id, "phase": "applying"}})).into_response()
 }
 
+async fn power_save() -> axum::Json<Value> {
+    let h = hooks().lock().unwrap();
+    axum::Json(json!({"ok": true, "data": {
+        "enabled": h.psm_live.or(h.psm_saved),
+        "preferred": h.psm_saved.or(h.psm_live),
+        "live": h.psm_live,
+        "saved": h.psm_saved,
+    }}))
+}
+
+async fn status(State(m): State<Arc<Mock>>) -> axum::Json<Value> {
+    let w = current(&m);
+    let up = |band: &str| {
+        w["module_on"] == true && w[band]["radio_on"] == true && w[band]["ap_on"] == true
+    };
+    let (up2, up5) = (up("band_2g"), up("band_5g"));
+    axum::Json(json!({"ok": true, "data": {
+        "actual_channel_2g": if up2 { "6" } else { "" },
+        "actual_bw_2g": if up2 { "20 MHz" } else { "" },
+        "actual_channel_5g": if up5 { "149" } else { "" },
+        "actual_bw_5g": if up5 { "80 MHz" } else { "" },
+        "clients_2g": u8::from(up2), "clients_5g": u8::from(up5),
+    }}))
+}
+
+fn publish_nfc(m: &Mock, switch: Value, stale: bool) {
+    let at = m.blocks.lock().unwrap().get("nfc")
+        .and_then(|b| b["observed_at"].as_u64()).unwrap_or(0);
+    m.publish("nfc", json!({"switch": switch}), at + 1, stale);
+}
+
 /// `/control` bodies this page's writes send; None = not this page's.
 pub(super) fn control(m: &Arc<Mock>, body: &Value, noreadback: bool) -> Option<Response> {
     let action = body["action"].as_str()?;
@@ -248,7 +309,26 @@ pub(super) fn control(m: &Arc<Mock>, body: &Value, noreadback: bool) -> Option<R
             let Some(on) = body["params"]["enabled"].as_bool() else {
                 return Some(reply_err(StatusCode::BAD_REQUEST, action, "invalid_parameter", "enabled must be a boolean", None));
             };
-            Some(axum::Json(json!({"ok": true, "action": action, "result": {"enabled": on, "applied": 4}})).into_response())
+            let module_off = current(m)["module_on"] == false;
+            let mut h = hooks().lock().unwrap();
+            let live = match h.psm_write.as_str() {
+                "mismatch" => Some(!on),
+                "unknown" => None,
+                _ => (!module_off).then_some(on),
+            };
+            if !noreadback {
+                h.psm_saved = Some(on);
+                h.psm_live = live;
+            }
+            if live == Some(!on) || (live.is_none() && !module_off) {
+                let reason = if live.is_some() {
+                    "Wi-Fi power save saved, but not active"
+                } else {
+                    "Wi-Fi power save saved, but driver state is unknown"
+                };
+                return Some(reply_err(StatusCode::CONFLICT, action, "failed", reason, None));
+            }
+            Some(axum::Json(json!({"ok": true, "action": action, "result": {"enabled": on, "saved": true, "live": live}})).into_response())
         }
         "nfc.set" => {
             m.page_ops.lock().unwrap().push(body.clone());
@@ -259,8 +339,7 @@ pub(super) fn control(m: &Arc<Mock>, body: &Value, noreadback: bool) -> Option<R
                 let m2 = m.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(800)).await;
-                    let at = m2.blocks.lock().unwrap().get("nfc").and_then(|b| b["observed_at"].as_u64()).unwrap_or(0);
-                    m2.publish("nfc", json!({"switch": on}), at + 1, false);
+                    publish_nfc(&m2, json!(on), false);
                 });
             }
             Some(axum::Json(json!({"ok": true, "action": action, "result": {"result": "success"}})).into_response())
@@ -274,6 +353,7 @@ async fn set_wifi(State(m): State<Arc<Mock>>, body: Bytes) -> StatusCode {
     if q["reset"].as_bool() == Some(true) {
         *hooks().lock().unwrap() = Hooks::default();
         publish_keys(&m, &defaults());
+        publish_nfc(&m, json!(1), false);
     }
     {
         let mut h = hooks().lock().unwrap();
@@ -285,6 +365,15 @@ async fn set_wifi(State(m): State<Arc<Mock>>, body: Bytes) -> StatusCode {
         }
         if let Some(ms) = q["ms"].as_u64() {
             h.ms = ms;
+        }
+        if let Some(v) = q["psm"].get("saved") {
+            h.psm_saved = v.as_bool();
+        }
+        if let Some(v) = q["psm"].get("live") {
+            h.psm_live = v.as_bool();
+        }
+        if let Some(mode) = q["psm"]["write"].as_str() {
+            h.psm_write = mode.into();
         }
     }
     if q["set"].is_object() {
@@ -300,10 +389,15 @@ async fn set_wifi(State(m): State<Arc<Mock>>, body: Bytes) -> StatusCode {
             m.publish("wifi", b["data"].clone(), at, s);
         }
     }
+    if let Some(switch) = q["nfc"].get("switch") {
+        publish_nfc(&m, switch.clone(), q["nfc"]["stale"] == true);
+    }
     StatusCode::NO_CONTENT
 }
 
 /// This page's `/mock/*` test hooks.
 pub(super) fn routes(r: Router<Arc<Mock>>) -> Router<Arc<Mock>> {
     r.route("/mock/wifi", post(set_wifi))
+        .route("/v2/api/wifi/status", get(status))
+        .route("/v2/api/wifi/power-save", get(power_save))
 }

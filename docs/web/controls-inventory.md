@@ -38,7 +38,7 @@
   CHILL 部分也属第一档：切 CHILL 节点、切地区组、出口「代理 / 全局 / 直连·AI 不动」、CHILL 档位。
 - 其余一切**至少第二档**。
 - 现在每个 `window.confirm()` 的地方都是**第三档**。另外这些也是第三档：选网方式、锁频/锁小区（含恢复默认）、重启、定时重启开启、恢复出厂、eSIM 切换/启用/删除、APN 修改/切换/删除、USB 模式、STC 白名单重置、结束进程/一键结束、开 ADB、AT 危险命令、删除短信、删除短信转发规则、清空转发日志。
-- **二·远程三**（本地第二档，远程访问时第三档）：Wi-Fi 开关、Wi-Fi 名称/密码、LAN/DHCP 地址、关 Tailscale、防火墙规则增删改、VPN 直通开关。
+- **二·远程三**（本地第二档，远程访问时第三档）：Wi-Fi 开关、Wi-Fi 名称/密码、LAN/DHCP 地址、防火墙规则增删改、VPN 直通开关。
 - **始终第二档**：情景固定/取消固定。
   CHILL 部分也始终第二档：出口「全部直连」、关 CHILL。
 - 纯页面内的操作（展开/收起、筛选、切标签、只改表单草稿、复制到剪贴板、跳转链接）不写设备，档位写「—（本地）」。
@@ -63,7 +63,6 @@
 |---|---|---|---|---|
 | 顶栏状态条·移动网络图标（已连接/制式/信号弱/WAN 断开） | `/api/public/status` | `network.connected`、`network.type`、`network.rsrp`（≤ −110 算信号弱） | 10000 | 是：各 ubus 调用失败时 `unwrap_or(json!({}))`，照样回 ok，连接状态会显示成「断开」而不是「读不到」 |
 | 顶栏状态条·Wi-Fi 图标 | `/api/public/status` | `wifi.on` | 10000 | 是：`zwrt_wlan report` 失败时当作关 |
-| 顶栏状态条·Tailscale 图标 | `/api/public/status` | `services.tailscale.installed`、`services.tailscale.running` | 10000 | 否（本地 `pidof`/文件存在判断） |
 | 顶栏状态条·CHILL 图标 | `/api/public/status` | `services.chill.state`（running/direct/其他） | 10000 | 否（读 `/tmp/chill.state`，读不到为 unknown） |
 | 顶栏状态条·短信图标 + 未读角标 | `/api/public/status` | `sms.unread` | 10000 | 是：容量查询失败时未读数为 0 |
 | 顶栏页面标题 | 无（按当前路由查 NAV 的 `tKey`） | — | — | — |
@@ -80,7 +79,7 @@
 | 底部标签栏「更多」（小屏，打开侧栏抽屉） | button「更多」 〔现名：link「功能」（原 button「更多」打开侧栏抽屉；现在底部标签栏是 首页 / 图表 / 功能 / 系统，「功能」「系统」枢纽页列出全部页面）〕 | 无 | — | — | 无 | —（本地） |
 | 语言切换「中 / EN」 | group「Language」内 button「中」、button「EN」（`aria-pressed`；建议 group 名改「语言」） 〔现名：radiogroup「语言」内 radio「中」「EN」（按了就切换的单选组；设置页里也有同名的一组）〕 | 无（`setLang`，写 localStorage `u60_lang`） | — | `<html lang>` / localStorage `u60_lang` | 无 | 一（界面设置·语言） |
 | 退出登录 | button「退出登录」（小屏只剩图标，`title`=「退出登录」） | 无（清 localStorage `u60.token`，不调接口） | — | 跳到 `/login` | 无 | —（本地） |
-| 状态条 5 个图标（跳到 信号 / Wi-Fi / Tailscale / CHILL / 短信 页） | link，名称=当前状态文字，如「移动数据已通 · SA」「Wi-Fi 已开启」「Tailscale 运行中」「CHILL 已停止」「无未读短信」 | 无（导航） | — | — | 无 | —（本地） |
+| 状态条 4 个图标（跳到 信号 / Wi-Fi / CHILL / 短信 页） | link，名称=当前状态文字，如「移动数据已通 · SA」「Wi-Fi 已开启」「CHILL 已停止」「无未读短信」 | 无（导航） | — | — | 无 | —（本地） |
 | 事务横条「详情 ›」 | link「详情 ›」 〔交互后：有进行中的改动或没点「知道了」的结果时〕 | 无（导航到该项的页，如 `/router/network-mode`） | — | — | 无 | —（本地） |
 | 告警横幅「知道了」 | button「知道了」 | POST `/api/alerts/read` `{seq: events[0].seq}` | 1 个写请求；之后重拉 `/api/alerts`，并让 `/api/public/status` 失效重拉 | `/api/alerts` `unread` = 0 | 无 | 一（告警标为已读） |
 | 告警横幅「查看」 | link「查看」→ `/alerts` | 无（导航） | — | — | 无 | —（本地） |
@@ -104,7 +103,6 @@
 | 网络·网络制式 + 运营商 | `/api/public/status` | `network.type`、`network.operator` | `setInterval` 10000 | 是：|
 | 设备·Wi-Fi（SSID 或「关」） | `/api/public/status` | `wifi.on`、`wifi.ssid` | `setInterval` 10000 | 是：|
 | 设备·电池（% + 充电中） | `/api/public/status` | `battery.percent`（<0 显示「—」）、`battery.charging` | `setInterval` 10000 | 否（sysfs，读不到为 −1） |
-| 服务·Tailscale（节点名/已停止/未安装） | `/api/public/status` | `services.tailscale.running/installed/node` | `setInterval` 10000 | 否 |
 | 服务·CHILL（运行中/直连/未启动） | `/api/public/status` | `services.chill.state` | `setInterval` 10000 | 否 |
 | 服务·短信（N 条未读 / 无未读） | `/api/public/status` | `sms.unread` | `setInterval` 10000 | 是：|
 | 登录失败提示 | `/api/auth/login` 的错误 | `error`（如 `invalid password`） | — | — |
@@ -141,7 +139,6 @@
 | 已连设备数 | `/api/wifi/status` | `clients_total` | 10000 | 是：wifi.rs:55-67 `iw station dump` 失败时计 0 |
 | Wi-Fi 开/关 + 5G 加密方式 | `/api/wifi/status` | `wifi_onoff`（"1" 为开）、`encryption_5g` | 10000 | 是：wifi.rs:84-103 读不到时 `wifi_onoff` 兜底为 "1"（显示为开） |
 | 运行时间 | `/api/device/system` | `uptime` | 5000 | 否·透传 |
-| 服务·Tailscale（节点名/已停止/未安装） | `/api/public/status` | `services.tailscale.running/node/installed` | 10000 | 否 |
 | 服务·CHILL（运行中/直连/未启动） | `/api/public/status` | `services.chill.state` | 10000 | 否 |
 | 服务·短信（N 条未读/无，可点） | `/api/public/status` | `sms.unread` | 10000 | 是：|
 | 小区卡：Cell ID / PCI / EARFCN / Band / Bandwidth / Net Select | `/api/network/signal` | `nr5g_cell_id`、`nr5g_pci`、`nr5g_action_channel`、`nr5g_action_band`、`nr5g_bandwidth`（加 MHz）、`net_select_mode` | 2000 | 否·透传 |
@@ -1190,39 +1187,6 @@
 
 ---
 
-## /services/tailscale Tailscale
-
-文件：`crates/luyaz-web/src/tailscale.rs`。**只读**：agent 的 `/api/services/tailscale` 只有 GET。**关 Tailscale：当前无控件**（档位规则里的「关 Tailscale（二·远程三）」在现有页面上没有对应控件，改版若新增要按新功能处理）。
-
-#### 数据项
-
-| 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
-|---|---|---|---|---|
-| 页头状态（未安装 / 已停止 / 需要认证 / 运行中 / 需要登录 / 原始 backend_state） | `/api/services/tailscale` | `installed`、`running`（socket 存在 + `pidof tailscaled`）、`auth_url`、`backend_state` | 5000 | 是：`tailscale status --json` 执行失败或解析失败时仍回 ok，只多一个 `error` 字段（页面会显示成红条） |
-| 「Tailscale 未安装」卡 | 同上 | `installed === false` | 5000 | 否 |
-| 「Tailscale: {错误}」红条 | 同上 | `error` | 5000 | 同上 |
-| 需要登录卡 + 认证链接 | 同上 | `auth_url` | 5000 | 否 |
-| 本节点：主机名 / Tailscale 名称 / 状态 / IP (v4) / IP (v6) / DERP 中继 / 版本 / 提供出口节点 | 同上 | `self.hostname`、`self.dns_name`、`backend_state`、`self.ips[]`（按是否含 `:` 分 v4/v6）、`self.relay`、`version`、`self.exit_node_option` | 5000 | 否 |
-| 网格：对等节点数 / 在线数 | 同上 | `peer_count`、`peer_online` | 5000 | 否 |
-| 正在使用的出口节点：主机名 · IP · 在线/离线（无则「没走出口节点，直接上网。」） | 同上 | `exit_node.hostname/ips[0]/online` | 5000 | 否 |
-| 对等节点列表：主机名 +「exit node」标记 · IP · 系统 · ↑发送 ↓接收 · 最近握手（相对时间）· 在线/离线（最多 32 个） | 同上 | `peers[].hostname/exit_node/ips[0]/os/tx_bytes/rx_bytes/last_handshake/online` | 5000 | 否 |
-| tailscaled 日志（末 200 行） | `/api/services/tailscale/log?lines=200` | `lines[]`（`/data/tailscaled.log`） | 4000（可暂停） | 否 |
-| 加载错误横幅 | `/api/services/tailscale` | SWR `error` | — | — |
-
-接口里有、页面没显示：`peers[].dns_name`、`peers[].last_seen`、`peers[].id`（作 key）。
-
-#### 控件
-
-| 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
-|---|---|---|---|---|---|---|
-| 页头「刷新」 | button「刷新」（与日志卡同名） | 重拉 `/api/services/tailscale` | — | — | 无 | —（本地，只读） |
-| 错误横幅「Retry」 | button「Retry」 〔现名：button「重试」〕〔交互后：读取失败时（错误状态）；场景 down〕 | 同上 | — | — | 无 | —（本地，只读） |
-| 认证链接 | link「{auth_url}」（新窗口） | 无（导航到 Tailscale 登录） | — | — | 无 | —（本地） |
-| 日志「暂停」/「继续」 | button「暂停」/「继续」 | 无 | — | — | 无 | —（本地） |
-| 日志「刷新」 | button「刷新」 | GET `/api/services/tailscale/log?lines=200` | — | — | 无 | —（本地，只读） |
-
----
-
 ## /settings 设置
 
 文件：`crates/luyaz-web/src/settings.rs`。全部是浏览器本地设置，只有「测试连通性」会发请求。
@@ -1546,7 +1510,7 @@ agent 分层检查（Wi-Fi、信号、限速、蜂窝链路、基站负载，开
 | 「加测速度 · 约 5 秒、最多 30 MB」（漫游时第一下变「走漫游流量，再按一次」，5 秒不按还原） | button「加测速度 · 约 5 秒、最多 30 MB」 〔交互后：检查完成后才有〕 | POST `/api/diagnose/speed` `{id}`（只测下载，≤30 MB；正在测速等情况回 409 + `error`/`error_en`） | 1（漫游时按两下） | `/api/diagnose` `speed` | 漫游时两段（同一按钮第二下） | 二（消耗蜂窝流量） |
 | 「对」「不对」（这次判断对不对，每次只问一回） | button「对」/「不对」 〔交互后：检查完成后才有〕 | POST `/api/diagnose/feedback` `{id, right}` | 1 | `/api/diagnose` `feedback` | 无 | 一 |
 | 「忽略」（「未解决的问题」区，2026-10-17 T6：核心有开着的 Finding 时才有；这张卡 24 小时内不再提示） | button「忽略」 〔交互后：场景 finding〕 | POST `/api/diagnose/dismiss` `{kind, iccid_tail}`（没有对应的开着的 Finding 回 404，网页按已关闭处理） | 1 | `/api/diagnose` `finding` 变 null | 无 | 一（只关提示，不改设置） |
-| 「恢复…」（「恢复上次能用的设置」区；这张卡在这个国家有记录、和现在不一样、没有事务和守护会话时才可按；有 APN 一项时要先勾「也改 APN（改了不会自动退回）」） | button「恢复…」 〔交互后：场景 verified〕 | POST `/control` `{action:"verified.restore", source:"web"}`（核心只认 source 和 approved_by 都是 screen/web；逐项一个普通事务：解锁小区 → 频段 → 制式 → 锁小区 → APN，每步 `expect_iccid`、过会话闸） | 每项一次事务，哪一步没确认就停 | `/api/verified` `progress`；各事务在 `/changes` | 对话框（会断网、远程时有 Tailscale 警告） | 三 |
+| 「恢复…」（「恢复上次能用的设置」区；这张卡在这个国家有记录、和现在不一样、没有事务和守护会话时才可按；有 APN 一项时要先勾「也改 APN（改了不会自动退回）」） | button「恢复…」 〔交互后：场景 verified〕 | POST `/control` `{action:"verified.restore", source:"web"}`（核心只认 source 和 approved_by 都是 screen/web；逐项一个普通事务：解锁小区 → 频段 → 制式 → 锁小区 → APN，每步 `expect_iccid`、过会话闸） | 每项一次事务，哪一步没确认就停 | `/api/verified` `progress`；各事务在 `/changes` | 对话框（会断网、远程时有远程操作警告） | 三 |
 | 动作「去换节点 →」（主因是代理时） | link「去换节点 →」 〔交互后：主因是代理层时〕 | 无（导航到 `/services/chill`） | — | — | 无 | —（本地） |
 
 写接口假成功风险：否（三个写都只动 agent 内存里的这一次检查，结果就是 GET 读回的那一份）。「恢复…」例外：它改蜂窝设置，结果按每一项事务自己的读回确认；结尾再跑一次绑蜂窝 HTTPS + DNS 检查，只报告通没通，不再改别的。
@@ -1703,7 +1667,6 @@ agent 分层检查（Wi-Fi、信号、限速、蜂窝链路、基站负载，开
 | GET `/api/device/charge-control` | — | 充电器读不到当「未停充」、电量 0 |
 | GET `/api/services/chill` | chill.rs:122-139 | mihomo 不通时 `version/groups/region/ai_exit/exit` 为空 |
 | GET `/api/services/chill/providers` | chill.rs:160-169 | mihomo 不通时回空列表 |
-| GET `/api/services/tailscale` | — | 执行/解析失败时 ok + `error` 字段（页面会显示） |
 
 **页面层面的假成功（agent 正常报错或没问题，但页面没反映出来）**
 
@@ -1762,7 +1725,7 @@ agent 分层检查（Wi-Fi、信号、限速、蜂窝链路、基站负载，开
 
 以下按规则落在第二档，但风险接近第三档，建议定档时再看：`/router/mobile-network` 移动数据开关（远程时关掉会断开自己）、运营商扫描；`/router/sim` PUK 验证与 NCK 网络解锁（页面自称不可逆）；`/router/esim` 下载新配置；`/scheduler` 任意接口的定时任务（本文按「目标接口的档位」处理）；`/sms/forward`「转发后删除」；`/router/stc` 启用/关闭（按锁小区记为三）；`/router/scenario` 每个情景的 Wi-Fi 开关（已按二·远程三）。
 /router/dns「应用」按第一档（DNS/DoH 上游）记录，但它同时会调 POST `/api/doh/enable` 或 `/api/doh/disable`——这两个会改写 dnsmasq 配置（drop-in 文件、`uci delete dhcp.lan_dns.*` + commit）并重启 dnsmasq，全局 DNS 会短暂中断。如果安全白名单按接口定档，这两个接口需要单独决定（本文倾向第二档）。
-另：第一档里的「界面设置·深浅色」「关 Tailscale（二·远程三）」目前没有任何对应控件。
+另：第一档里的「界面设置·深浅色」目前没有任何对应控件。
 
 ### 9. 没能确定的
 

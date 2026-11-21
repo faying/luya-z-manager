@@ -556,100 +556,44 @@ eq "perf 渲染" "$(cat "$CONFIG")" "$(printf 'tcp-concurrent: true\nkeep-alive-
 rm -f "$PROFILE_FILE"
 
 # ─────────────────────────────────────────────────────────────────────────────
-sec "家里出口：真实模板的标签行（E3 T2）"
+sec "默认模板保留通用分流"
 
-# 用仓库里真实的 template.yaml：小样本模板测不出标签行漏删、规则顺序这类问题。
 TEMPLATE="$HERE/../template.yaml"
-HOME_IP_LIST="$CHILL_DIR/home_ip.list"; rm -f "$HOME_IP_LIST"
-unset CHILL_HOME_EXIT CHILL_HOME_MEDIA CHILL_HOME_IP CHILL_HOME_REST CHILL_HOME_PROBE_URL
-# 行号（找不到给 0），用来比规则先后
-ln_of() { n=$(grep -nF -- "$2" "$1" | head -1 | cut -d: -f1); echo "${n:-0}"; }
-# 去掉整行注释（模板头和说明里本来就写着标签名、占位符名）
-body() { grep -v '^[[:space:]]*#' "$CONFIG"; }
-no_home() { # no_home <名称>：渲染结果里没有任何家里出口的东西
-  b=$(body)
-  case "$b" in *'家里'*|*media_*|*home_ip*|*'#@'*) ng "$1" ;; *) ok "$1" ;; esac
-}
-
-render; eq "没配家里出口：渲染成功" "$?" "0"
-no_home "没配家里出口：一行家里的都没有"
-has "fake-ip-filter 是 rule 模式" "$(cat "$CONFIG")" 'fake-ip-filter-mode: rule'
-has "fake-ip-filter 末尾 MATCH,fake-ip" "$(cat "$CONFIG")" '- MATCH,fake-ip'
-if body | grep -q '\${[A-Z_]*}'; then ng "仍有未替换占位符"; else ok "占位符全部替换"; fi
-
-CHILL_HOME_MEDIA=1; CHILL_HOME_IP=1; CHILL_HOME_REST=1
-render; no_home "只开开关、没有 CHILL_HOME_EXIT：照样一行都没有"
-
-for bad in '10.0.0.1' '10.0.0.1:' ':1080' '1.2.3.4:70000' '1.2.3.4:0' '1.2.3.256:80' '1.2.3:80' 'a.b.c.d:1' '1.2.3.4:80:1' "1.2.3.4:1080'"; do
-  CHILL_HOME_EXIT="$bad"
-  if render; then no_home "坏地址 [$bad]：不渲染、render 不失败"; else ng "坏地址 [$bad] 让 render 失败了"; fi
-done
-unset CHILL_HOME_MEDIA CHILL_HOME_IP CHILL_HOME_REST
-
+# 升级后现存 chill.env 仍可能带这些变量。渲染不读取它们。
 CHILL_HOME_EXIT='192.0.2.10:1080'
-render; b=$(body)
-has "配了地址：有 家里" "$b" '{name: 家里, type: socks5, server: 192.0.2.10, port: 1080, udp: false, interface-name: tailscale0}'
-has "配了地址：版权组" "$b" '{name: 家里出口, type: fallback, proxies: [家里, DIRECT], url: '"'"'http://connect.rom.miui.com/generate_204'"'"''
-has "配了地址：家里 IP 组退回 🐟" "$b" 'proxies: [家里, 🐟 漏网之鱼]'
-has "配了地址：版权规则集先下好" "$b" 'media_iqiyi:'
-case "$b" in *'#@'*) ng "标签没去掉" ;; *) ok "标签都去掉了" ;; esac
-case "$b" in *'RULE-SET,media_cn,'*|*'MATCH,家里IP'*|*home_ip*) ng "开关都关着却有家里的规则" ;; *) ok "开关都关着：没有家里的规则" ;; esac
+CHILL_HOME_MEDIA=1 CHILL_HOME_IP=1 CHILL_HOME_REST=1
+CHILL_API_LAN=0
+rm -f "$CONFIG"
+render || { ng "默认模板未能渲染"; exit 1; }
+body=$(grep -v '^[[:space:]]*#' "$CONFIG")
+case "$body" in
+  *tailscale0*|*ts.net*|*192.0.2.10*|*家里出口*|*home_ip*) ng "退休的家里出口仍出现在配置" ;;
+  *) ok "不渲染家里出口，也不设置 tailnet DNS" ;;
+esac
+has "默认控制端口只监听本机" "$body" "external-controller: '127.0.0.1:9999'"
+has "AI 独立分流" "$body" 'RULE-SET,ai_domain,🤖 AI'
+has "国内域名仍然直连" "$body" 'RULE-SET,cn_domain,DIRECT'
+has "其余流量仍按漏网之鱼分流" "$(tail -1 "$CONFIG")" '- MATCH,🐟 漏网之鱼'
+unset CHILL_HOME_EXIT CHILL_HOME_MEDIA CHILL_HOME_IP CHILL_HOME_REST
 
-CHILL_HOME_PROBE_URL='http://example.cn/204'
-render; has "探测地址来自 env" "$(cat "$CONFIG")" "url: 'http://example.cn/204'"
-CHILL_HOME_PROBE_URL="http://x/'a"
-render; has "探测地址含单引号：用默认" "$(cat "$CONFIG")" "url: 'http://connect.rom.miui.com/generate_204'"
-unset CHILL_HOME_PROBE_URL
+sec "CHILL API 白名单只用于 LAN"
 
-CHILL_HOME_MEDIA=1
-render
-fm=$(ln_of "$CONFIG" '- RULE-SET,media_iqiyi,fake-ip'); fc=$(ln_of "$CONFIG" '- RULE-SET,cn_domain,real-ip')
-[ "$fm" -gt 0 ] && [ "$fm" -lt "$fc" ] && ok "版权 fake-ip 在 cn_domain real-ip 之前" || ng "版权 fake-ip 位置不对（${fm} / ${fc}）"
-rq=$(ln_of "$CONFIG" '- AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,media_cn)),REJECT')
-rm_=$(ln_of "$CONFIG" '- RULE-SET,media_cn,家里出口')
-rc=$(ln_of "$CONFIG" '- RULE-SET,cn_domain,DIRECT')
-rp=$(ln_of "$CONFIG" '- DOMAIN,detectportal.firefox.com,DIRECT')
-[ "$rp" -gt 0 ] && [ "$rp" -lt "$rq" ] && [ "$rq" -lt "$rm_" ] && [ "$rm_" -lt "$rc" ] \
-  && ok "门户检测 < 拒绝 QUIC < 版权规则 < cn_domain" || ng "版权规则位置不对（${rp} ${rq} ${rm_} ${rc}）"
-eq "VoWiFi 仍是第一条规则" "$(grep -A1 '^rules:' "$CONFIG" | tail -1; grep -m1 '^  - DOMAIN-SUFFIX,3gppnetwork.org' "$CONFIG")" "$(printf '\n  - DOMAIN-SUFFIX,3gppnetwork.org,📞 VoWiFi')"
-case "$(cat "$CONFIG")" in *home_ip*|*'MATCH,家里IP'*) ng "只开版权却带出了别的" ;; *) ok "只开版权：没有家里 IP 和其余" ;; esac
-unset CHILL_HOME_MEDIA
+nft() {
+  case "$*" in
+    'delete table inet chill') : ;;
+    '-f -') cat > "$CHILL_DIR/api-guard.nft" ;;
+  esac
+}
+CHILL_API_ALLOW_IP=192.0.2.20
+rebuild_api_guard
+rules=$(cat "$CHILL_DIR/api-guard.nft")
+has "本机可访问" "$rules" 'tcp dport 9999 iifname "lo" accept'
+has "白名单须从 br-lan 进入" "$rules" 'tcp dport 9999 iifname "br-lan" ip saddr { 192.0.2.20 } accept'
+has "拒绝其他来源" "$rules" 'tcp dport 9999 drop'
+eq "只有两条允许规则" "$(grep -c ' accept$' "$CHILL_DIR/api-guard.nft")" 2
+unset -f nft
+CHILL_API_ALLOW_IP=''
 
-CHILL_HOME_IP=1
-render; case "$(cat "$CONFIG")" in *home_ip*) ng "表不存在却渲染了 home_ip" ;; *) ok "表不存在：家里 IP 不渲染" ;; esac
-printf '\n  \n' > "$HOME_IP_LIST"
-render; case "$(cat "$CONFIG")" in *home_ip*) ng "表只有空白却渲染了 home_ip" ;; *) ok "表只有空白：不渲染" ;; esac
-printf '+.example-bank.cn\n' > "$HOME_IP_LIST"
-render; b=$(cat "$CONFIG")
-has "表有内容：home_ip provider" "$b" 'home_ip:        {type: file, behavior: domain, format: text, path: ./home_ip.list}'
-fi_=$(ln_of "$CONFIG" '- RULE-SET,home_ip,fake-ip')
-ri=$(ln_of "$CONFIG" '- RULE-SET,home_ip,家里IP')
-[ "$fi_" -gt 0 ] && [ "$fi_" -lt "$fc" ] && [ "$ri" -gt 0 ] && [ "$ri" -lt "$rc" ] \
-  && ok "家里 IP 的 fake-ip 和规则都在 cn_domain 之前" || ng "家里 IP 位置不对（${fi_} ${ri}）"
-unset CHILL_HOME_IP; rm -f "$HOME_IP_LIST"
-
-CHILL_HOME_REST=1
-render
-ra=$(ln_of "$CONFIG" '- RULE-SET,ai_domain,🤖 AI'); rr=$(ln_of "$CONFIG" '- MATCH,家里IP')
-eq "其余：ai_domain 后面第一条规则就是 MATCH" "$(sed -n "$((ra + 1)),\$p" "$CONFIG" | grep -v '^[[:space:]]*#' | head -1)" '  - MATCH,家里IP'
-[ "$rr" -gt "$ra" ] && ok "其余：MATCH 在 ai_domain 之后" || ng "其余：MATCH 位置不对（${ra} / ${rr}）"
-has "其余：原来的 MATCH 还在最后" "$(tail -1 "$CONFIG")" '- MATCH,🐟 漏网之鱼'
-unset CHILL_HOME_REST CHILL_HOME_EXIT
-
-# 常驻的 chill.sh run 只在启动时 source 过 env；agent 改了 env 以后，它自己再渲染也要用新值。
-ENV_FILE="$CHILL_DIR/chill.env"
-printf "SUB_URL='https://ok.example/a'\nCHILL_HOME_EXIT='192.0.2.10:1080'\nCHILL_HOME_MEDIA=1\n" > "$ENV_FILE"
-render; has "env 文件里开了版权：渲染出来" "$(body)" '- RULE-SET,media_cn,家里出口'
-printf "SUB_URL='https://ok.example/a'\nCHILL_HOME_EXIT='192.0.2.10:1080'\n" > "$ENV_FILE"
-render; case "$(body)" in *'RULE-SET,media_cn,家里出口'*) ng "env 里关了，渲染却还开着（用的是旧变量）" ;; *) ok "env 里关了：下次渲染就关" ;; esac
-eq "env 现读不改别的变量" "$SUB_URL" 'https://ok.example/a'
-: > "$ENV_FILE"
-render; no_home "env 里删掉地址：整个不出现"
-CHILL_HOME_EXIT='192.0.2.10:1080'; CHILL_HOME_MEDIA=1
-printf 'if then\n' > "$ENV_FILE"
-render; has "env 文件坏了：沿用现在的设置" "$(body)" '- RULE-SET,media_cn,家里出口'
-rm -f "$ENV_FILE"; ENV_FILE=/nonexistent/chill.env
-unset CHILL_HOME_EXIT CHILL_HOME_MEDIA
 
 # ─────────────────────────────────────────────────────────────────────────────
 sec "出口模式：记下与恢复"
@@ -903,7 +847,7 @@ sec "strip_egress：订阅不许指定出口网卡（ext-1030 第 14 条）"
 
 cat > "$CHILL_DIR/template.yaml" <<'YAML'
 proxies:
-  - {name: 家里, type: socks5, server: 192.0.2.10, port: 1080, interface-name: tailscale0}
+  - {name: local, type: socks5, server: 192.0.2.10, port: 1080, interface-name: br-lan}
 proxy-providers:
   # 注释
   sub:
@@ -926,12 +870,12 @@ proxy-providers:
 proxy-groups:
   - {name: g, type: select, use: [sub, snap2]}
 YAML
-TEMPLATE="$CHILL_DIR/template.yaml"; CHILL_HOME_EXIT=''
+TEMPLATE="$CHILL_DIR/template.yaml"
 render >/dev/null 2>&1; eq "带 interface-name 的订阅照样渲染成功" "$?" "0"
 body=$(cat "$CONFIG")
 case "$body" in *rmnet_data0*) ng "渲染结果里还有 interface-name: rmnet_data0" ;; *) ok "订阅里的 interface-name: rmnet_data0 去掉了" ;; esac
 case "$body" in *6666*) ng "routing-mark 还在" ;; *) ok "订阅里的 routing-mark 去掉了" ;; esac
-has "模板自己的家里出口不动" "$body" 'interface-name: tailscale0}'
+has "模板主动指定的出口不动" "$body" 'interface-name: br-lan}'
 has "流式节点其余字段还在" "$body" '{name: a, type: ss, server: 1.2.3.4, port: 1, cipher: aes-128-gcm}'
 has "块写法节点其余字段还在" "$body" "$(printf '        type: ss\n        server: 1.2.3.5')"
 has "没有 override 的 provider 补上清空" "$body" "$(printf '        server: 1.2.3.5\n    override: {interface-name: %s, routing-mark: 0}' '""')"
@@ -949,7 +893,7 @@ printf '%s\n' "$HDR" > "$CHILL_PROC/net/tcp6"; printf '%s\n' "$HDR" > "$CHILL_PR
 printf '%s\n   0: 0142000A:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 1\n' "$HDR" > "$CHILL_PROC/net/udp"
 printf '%s\n   0: 0100007F:C350 0100007F:270F 01 00000000:00000000 00:00000000 00000000 0 0 2\n' "$HDR" > "$CHILL_PROC/net/tcp"
 CHILL_BUSY_RECHECK=0; CHILL_API_LAN=0
-kill_core() { :; }; restore_dns() { :; }; ip() { :; }
+kill_core() { :; }; restore_dns() { :; }; ip() { :; }; check_rules_drift() { :; }
 if core_slots_busy >/dev/null; then ng "空闲时误报被占"; else ok "dnsmasq 的 192.168.0.1:53、已建立连接都不算被占"; fi
 
 printf '   1: 0100007F:270F 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 3\n' >> "$CHILL_PROC/net/tcp"
@@ -968,7 +912,51 @@ mkdir -p "$SYS_NET/chill0"
 rm -f "$STATE"; start_blocked; has "TUN 名被占：理由是 tun_busy" "$(cat "$STATE")" '"reason":"tun_busy"'
 rm -rf "$SYS_NET/chill0"
 if start_blocked; then ng "都空着却不起核心"; else ok "都空着：照常起核心"; fi
-unset -f kill_core restore_dns ip
+unset -f kill_core restore_dns ip check_rules_drift
+
+sec "配置档案：运行中刷新失败，恢复原件、运行副本和模式"
+(
+  p="$CHILL_DIR/profiles/p-active"
+  mkdir -p "$p/run"
+  printf 'p-active\n' > "$CHILL_DIR/active-profile"
+  printf 'rule\n' > "$MODE_FILE"
+  printf 'original-source\n' > "$p/source.yaml"
+  printf 'original-config\n' > "$p/run/config.yaml"
+  printf 'candidate-source\n' > "$p/source.next.yaml"
+  printf 'candidate-config\n' > "$p/run/config.next.yaml"
+  printf '101\n' > "$CORE_PID"
+  DISABLED="$CHILL_DIR/disabled"; RESTART_FLAG="$CHILL_DIR/restart"
+  profile_field() { case "$2" in kind) echo full_url ;; name) echo 'Home "QA"' ;; esac; }
+  api_mode() { echo global; }
+  supervisor_alive() { return 0; }
+  sync() { :; }
+  wait_profile() {
+    if [ -e "$CHILL_DIR/active-profile.prev" ]; then
+      [ "$(cat "$p/run/config.yaml")" = candidate-config ] && touch "$CHILL_DIR/attempted"
+      return 1
+    fi
+    [ "$(cat "$p/run/config.yaml")" = original-config ] && touch "$CHILL_DIR/recovered"
+  }
+  if profile_switch p-active 1 >/dev/null 2>&1; then exit 2; fi
+  [ "$(marker_id)" = p-active ] && [ "$(cat "$MODE_FILE")" = global ] &&
+    [ "$(cat "$p/source.yaml")" = original-source ] &&
+    [ -f "$CHILL_DIR/attempted" ] && [ -f "$CHILL_DIR/recovered" ] &&
+    [ ! -e "$CHILL_DIR/active-profile.prev" ]
+)
+eq '完整刷新失败后恢复上一份可用配置' "$?" 0
+
+sec "IPv6 与绕行 DNS 锁定范围"
+ipv6_rules=$(
+  nft() { cat; }
+  block_ipv6
+)
+has 'IPv6 只过滤来自 br-lan 的公网流量' "$ipv6_rules" 'iifname "br-lan" ip6 daddr != { fc00::/7, fe80::/10, ff00::/8 } counter reject'
+nft() { return 1; }
+dns_rules=$(bypass_dns_rules '192.168.0.10 192.168.0.21' '02:00:00:00:00:01')
+has 'IPv4 DNS 按绕行地址匹配' "$dns_rules" 'elements = { 192.168.0.10, 192.168.0.21 }'
+has 'IPv6 DNS 按同一客户端的 MAC 匹配' "$dns_rules" 'ether saddr { 02:00:00:00:00:01 } meta nfproto ipv6'
+has 'TCP 和 UDP DNS 都重定向' "$dns_rules" 'meta l4proto { tcp, udp } th dport 53 redirect to :1054'
+unset -f nft
 
 # ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== 结果：%d 通过 / %d 失败\n' "$PASS" "$FAIL"

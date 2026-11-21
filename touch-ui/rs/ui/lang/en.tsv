@@ -44,16 +44,15 @@ NFC 碰一碰	NFC tap
 SIM 与 eSIM	SIM & eSIM
 SIM 卡	SIM
 SIM 卡 · %s	SIM · %s
+Wi-Fi 关	Wi-Fi off
+Wi-Fi 开	Wi-Fi on
 Wi-Fi 已关 · 	Wi-Fi off · 
+Wi-Fi 更改未确认	Wi-Fi change not confirmed
 Wi-Fi 开着	Wi-Fi stays on
 Wi-Fi 看门狗接管中，固定暂时不生效，先按「外出」	Wi-Fi watchdog in charge; the pin is paused, acting as Away
 WiFi 总开关	Wi-Fi
 eSIM 配置	eSIM profiles
 eSIM 配置（现在没在用）	eSIM profiles (not in use)
-tailscale|出口	Exit node
-tailscale|子网	Subnets
-tailscale|本机	This device
-tailscale|节点	Peers
 ■ %d 项异常	■ %d problem|■ %d problems
 ■ 体检：异常	■ Health check: problem
 ▲ %d 项注意	▲ %d warning|▲ %d warnings
@@ -62,7 +61,9 @@ tailscale|节点	Peers
 ● %d 项检查都正常	● All %d checks OK
 ● 一切正常	● All good
 上传中…	Uploading…
+上行	Upload
 下一步	Next
+下行	Download
 下载中…	Downloading…
 不过期	Never expires
 中国广电	China Broadnet
@@ -150,6 +151,9 @@ tailscale|节点	Peers
 号码没写在卡里	No number on SIM
 卡 2 不提供号码	SIM 2 reports no number
 后台数据服务不可用	Data service unavailable
+从下半屏向上滑动解锁	Swipe up from the lower half
+继续上滑	Keep swiping up
+松手解锁	Release to unlock
 告警 · %s	Alert · %s
 告警 · 开机后 %ld 分钟	Alert · %ld min after boot
 告警记录	Alert log
@@ -158,7 +162,6 @@ tailscale|节点	Peers
 回到自动选网，可能短暂断网，再点一次确认。	Back to automatic selection, may cut data briefly; tap again to confirm
 回到自动：按 SIM 卡选 APN，会断网几秒	Back to Auto: APN picked by SIM; offline for a few seconds
 固件	Build
-在 Tailscale 后台批准这台设备	Approve this device in the Tailscale admin console
 在用	In use
 在管理网页打开登录链接	Log in from the web admin
 在线	Online
@@ -277,6 +280,8 @@ tailscale|节点	Peers
 正在切换，等它做完	Switch in progress
 正在切换，等设备确认…	Switching; waiting for the device…
 正在回到自动选网…	Going back to automatic selection…
+正在处理，等设备确认 Wi-Fi	Waiting for Wi-Fi confirmation
+正在开启…	Turning on…
 正在忙	Busy
 正在恢复自动…	Going back to auto…
 正在恢复自动判断…	Going back to automatic…
@@ -320,6 +325,7 @@ tailscale|节点	Peers
 热点	Hotspot
 版本	Version
 状态栏网速用 Mbps	Status bar speed in Mbps
+状态暂不可用	Status unavailable
 现在	Now
 现在就在 %s 上	Already on %s
 现在已经是自动 · 按位置和 SIM 判断为「%s」	Already automatic · decided as \"%s\" by place and SIM
@@ -554,11 +560,6 @@ CHILL 开着，但不经过它	CHILL on, but bypassed
 进出省电断网约 10 秒	Power saving on/off drops the network ~10 s
 连接	Connections
 默认	Default
-# 家里出口（E3，manager docs/designs/home-exit.md §10）
-家里出口	Home exit
-国内版权走家里	CN media via home
-家里 IP 网站	Home IP sites
-其余都走家里 · 2 小时	Rest via home · 2h
 爱奇艺、优酷、B 站等	iQIYI, Youku, bilibili, …
 %d 个网站	%d site|%d sites
 表里还没有网站 · 见 /data/chill/home_ip.list	No sites yet · see /data/chill/home_ip.list
@@ -568,9 +569,6 @@ AI、VoWiFi、国内直连照旧	AI, VoWiFi, China direct unchanged
 正在测家里…	Checking home…
 正在打开…	Turning on…
 正在关闭…	Turning off…
-家里不通，暂走直连	Home down · direct for now
-▲ 家里不通，暂走 %s	▲ Home down · via %s for now
-家里不通，暂走原出口	Home down · usual exit for now
 会断一下（约 5 秒）	Drops for ~5 s
 会断一下，走漫游流量	Drops ~5 s · uses roaming data
 正在切换，稍等	Switching, one moment
@@ -578,13 +576,10 @@ AI、VoWiFi、国内直连照旧	AI, VoWiFi, China direct unchanged
 过热暂停中，降温后自动恢复	Paused while hot · resumes when cool
 全局模式下不生效 · 换成代理或直连 · AI 不动	Not used in Global mode · Switch to Proxy or Direct · AI kept
 全部直连下不生效	Not used in All direct
-家里出口没配置	Home exit not set up
 没成功，稍后再试	Didn't work; try later
 读不到所在国家，版权和其余暂不显示	Can't tell the country; media and rest hidden
 连不上家里	Can't reach home
 经中继，视频可能卡	Via relay · video may stutter
-● 经 Tailscale · 直连 %d ms	● Via Tailscale · direct %d ms
-经 Tailscale · 直连	Via Tailscale · direct
 10 分钟后关 · 再开 2 小时 ›	Off in 10 min · Extend 2h ›
 已延长到 %s	Extended to %s
 没延长成，稍后再试	Couldn't extend; try later
@@ -824,7 +819,6 @@ route|节点	Node
 ▲ 家里 不通	▲ Home down
 家里 直连	Home direct
 ▲ 家里 中继	▲ Home relay
-无家里出口	No home exit
 直连 %d · 中继 %d	Direct %d · relay %d
 关	Off
 情景关的	By scenario
@@ -834,8 +828,6 @@ route|节点	Node
 约 %s	About %s
 尽快充电	Charge soon
 ▲ 偏热 %d°C	▲ Warm %d°C
-Tailscale 要登录：在管理网页打开登录链接	Tailscale needs a login: open the link in the admin web
-Tailscale 等批准：在 Tailscale 后台批准这台设备	Tailscale waits for approval: approve this device in its admin console
 去看	Open
 没连上	Not connected
 
@@ -1093,3 +1085,9 @@ CHILL 没在运行	CHILL not running
 完整	Full
 设备上保存最近 30 次；管理网页「负载体检记录」能看全部、对比和导出。	The device keeps the last 30. The admin web's Load Check Runs page lists them all, compares and exports.
 返回	Back
+保留当前状态，不扫描，不自动控制 Wi-Fi 和 CHILL	Keep current settings; no scans or automatic Wi-Fi and CHILL control
+情景模式已经关闭，当前状态保持不变	Scenarios are already off; current settings are unchanged
+情景模式已关闭，当前状态保持不变	Scenarios are off; current settings are unchanged
+正在关闭情景模式，保留当前状态…	Turning scenarios off; keeping current settings…
+关闭后保留当前状态，不扫描，不自动控制 Wi-Fi 和 CHILL	Keep current settings; stop scans and automatic Wi-Fi and CHILL control
+情景模式已关闭，点「自动」或具体情景可重新启用	Scenarios are off; tap Auto or a scenario to turn them on

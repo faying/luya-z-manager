@@ -10,6 +10,7 @@ use super::util::{find, jget, jstr, mono_ms32, text, trunc, wall};
 use crate::json;
 use crate::lang::tr;
 use crate::logic::{self, Ctl};
+use crate::source::WifiReply;
 use ui_model::{data_notice_t, core_snapshot_t, display_t, lan_client_t, regress_item_t, regress_t, sms_entry_t, sim_dual_t, sim_slot_t};
 use std::os::fd::{AsRawFd, OwnedFd};
 
@@ -27,6 +28,11 @@ const CONTROL_SLOTS: usize = 8;
 const CONTROL_LINGER_MS: u32 = 5000;
 const CONTROL_REPLY_MAX: usize = 2048;
 const USB_CONTROL_REPLY_MAX: usize = 8192; // includes Core's bounded capability explanation
+const WIFI_CONTROL_REPLY_MAX: usize = 8192; // includes the transaction view
+
+fn wifi_control(action: &str) -> bool {
+    matches!(action, "wifi.settings" | "wifi.power_save")
+}
 
 fn usb_refusal(body: &[u8]) -> Option<(&'static str, &'static str)> {
     let error = json::get(body, "error", USB_CONTROL_REPLY_MAX)?;
@@ -90,9 +96,10 @@ const B_REGRESS: usize = 15;
 const B_DISPLAY: usize = 16;
 const B_HEAT: usize = 17;
 const B_WIFI_DFS: usize = 18;
-const B_COUNT: usize = 19;
+const B_WIFI: usize = 19;
+const B_COUNT: usize = 20;
 const V2_NAMES: [&str; B_COUNT] =
-    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat", "wifi_dfs"];
+    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat", "wifi_dfs", "wifi"];
 
 #[derive(Default, Clone)]
 struct Blk {
@@ -110,6 +117,7 @@ struct Slot {
     fd: OwnedFd,
     t: u32,
     action: String,
+    op_seq: u32,
     reply: Vec<u8>,
 }
 
@@ -141,6 +149,9 @@ pub struct CoreLink {
     pub resync: bool,
     blk: Vec<Blk>,
     ctl: Vec<Slot>,
+    wifi_request: Option<(u32, String)>,
+    wifi_reply: Option<WifiReply>,
+    wifi_fallback: Option<super::background::Task<bool>>,
     notice: data_notice_t,
     op_seq: u32,
     /// the interval last asked for; -1 = unknown
@@ -452,8 +463,24 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
         d.ap_auth = jget(&s, "enc", 24);
         d.ap_on = num(&s, "enabled", 1) as i32;
     }
+    if let Some(wifi) = section("wifi") {
+        // wlan.enabled is the configured AP flag; the module can be off while it is set.
+        // A known module_on is the running truth, an older core sends only on, and an
+        // explicit null (module unread) leaves the wlan flag as read above.
+        let bit = json::get(&wifi, "module_on", 8).or_else(|| json::get(&wifi, "on", 8));
+        match bit.as_deref() {
+            Some(b"true") => d.ap_on = 1,
+            Some(b"false") => d.ap_on = 0,
+            _ => {}
+        }
+    }
     if let Some(s) = section("nfc") {
-        d.nfc_on = small(&s, "switch");
+        // only a real 0/1 is a state; a missing, null or unusable value is unknown, not "off"
+        d.nfc_on = match json::get(&s, "switch", 8).as_deref().and_then(json::strtol) {
+            Some(0) => 0,
+            Some(1) => 1,
+            _ => -1,
+        };
     }
     if let Some(s) = section("typec") {
         d.usb_cc = num(&s, "cc_attch_state", -1) as i32;
@@ -635,6 +662,7 @@ fn sim_dual(o: &[u8]) -> Option<sim_dual_t> {
 fn empty() -> core_snapshot_t {
     core_snapshot_t {
         cpu_pct: -1,
+        nfc_on: -1,
         lan: vec![lan_client_t::default(); 16],
         inbox: vec![sms_entry_t::default(); INBOX_CAP],
         ..Default::default()
@@ -728,6 +756,9 @@ impl CoreLink {
             resync: false,
             blk: vec![Blk::default(); B_COUNT],
             ctl: Vec::new(),
+            wifi_request: None,
+            wifi_reply: None,
+            wifi_fallback: None,
             notice: data_notice_t::default(),
             op_seq: 0,
             pace_sent: -1,
@@ -858,6 +889,19 @@ impl CoreLink {
         for (b, key) in SAME {
             if self.blk[b].fresh {
                 cat(&[b",\"", key.as_bytes(), b"\":", &self.blk[b].data]);
+            }
+        }
+        if self.blk[B_WIFI].fresh {
+            // both bits into the old-/state shape: on is the saved switch, module_on the
+            // running module; the decode lets a known module_on win over both
+            let on = json::get(&self.blk[B_WIFI].data, "on", 8);
+            let module = json::get(&self.blk[B_WIFI].data, "module_on", 8);
+            if on.is_some() || module.is_some() {
+                cat(&[b",\"wifi\":{\"on\":", on.as_deref().unwrap_or(b"null")]);
+                if let Some(m) = module.as_deref() {
+                    cat(&[b",\"module_on\":", m]);
+                }
+                cat(&[b"}"]);
             }
         }
         if self.blk[B_LIVE].fresh {
@@ -1273,14 +1317,44 @@ impl CoreLink {
     /// nothing here (the transaction row shows how it ends).
     fn control_judge(&mut self, s: &Slot) {
         let k = logic::control_reply(&s.reply);
-        if k == Ctl::Ok {
-            return;
-        }
         if k == Ctl::NoReply {
             eprintln!("ui: control {}: closed without an answer", s.action);
             return;
         }
-        let body = find(&s.reply, b"\r\n\r\n", 0).map_or(&b""[..], |p| &s.reply[p + 4..]);
+        let body = find(&s.reply, b"\r\n\r\n", 0).map(|p| s.reply[p + 4..].trim_ascii());
+        if wifi_control(&s.action) {
+            let Some((_, op_id)) = self.wifi_request.as_ref().filter(|(seq, _)| *seq == s.op_seq) else {
+                return; // a view may have finished this request before its HTTP reply arrived
+            };
+            let Some(body) = body.filter(|b| !b.starts_with(b"{") || b.ends_with(b"}")) else { return };
+            if s.action == "wifi.settings" {
+                if s.reply.len() >= WIFI_CONTROL_REPLY_MAX - 1 {
+                    return; // a cut response leaves /v2/screen as the authority
+                }
+                let op = json::get(body, "op", WIFI_CONTROL_REPLY_MAX);
+                if let Some(op) = op.as_ref().filter(|op| {
+                    json::get(op, "op_id", 72).is_some_and(|id| id.as_slice() == op_id.as_bytes())
+                }) {
+                    self.wifi_reply = WifiReply::from_op(&crate::op_view::item(op), op_id);
+                    return; // a matching nonterminal op is followed on /v2/screen
+                }
+                if k != Ctl::Ok {
+                    self.wifi_reply = Some(WifiReply::Failed);
+                } else if matches!(op.as_deref(), None | Some(b"null"))
+                    && json::get(body, "result", WIFI_CONTROL_REPLY_MAX).is_some_and(|result| {
+                        json::get(&result, "note", 32).is_some_and(|note| note == b"no changes")
+                    })
+                {
+                    self.wifi_reply = Some(WifiReply::CoreDone);
+                }
+            } else {
+                self.wifi_reply = Some(if k == Ctl::Ok { WifiReply::CoreDone } else { WifiReply::Failed });
+            }
+        }
+        if k == Ctl::Ok {
+            return;
+        }
+        let body = body.unwrap_or_default();
         if k == Ctl::Failed && find(body, b"\"op\":{", 0).is_some() {
             return;
         }
@@ -1306,15 +1380,29 @@ impl CoreLink {
         eprintln!("ui: control {}: core said {}", s.action, text(&s.reply[..s.reply.len().min(12)]));
     }
 
-    /// Close the parked requests whose answer is in, or that waited CONTROL_LINGER_MS.
+    /// Close parked requests after a reply or their action's reply deadline.
     fn control_reap(&mut self, now: u32) {
+        if let Some(task) = &self.wifi_fallback {
+            match task.take() {
+                Ok(true) => self.wifi_reply = Some(WifiReply::EmergencyDone),
+                Ok(false) | Err(std::sync::mpsc::TryRecvError::Disconnected) => self.wifi_reply = Some(WifiReply::Failed),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            if self.wifi_reply.is_some() {
+                self.wifi_fallback = None;
+            }
+        }
         let mut i = 0;
         while i < self.ctl.len() {
             let fd = self.ctl[i].fd.as_raw_fd();
             let mut done = false;
             while wait(fd, false, 0) > 0 {
                 let s = &mut self.ctl[i];
-                let max_reply = if s.action == "usb.attach_mode" { USB_CONTROL_REPLY_MAX } else { CONTROL_REPLY_MAX };
+                let max_reply = match s.action.as_str() {
+                    "usb.attach_mode" => USB_CONTROL_REPLY_MAX,
+                    "wifi.settings" => WIFI_CONTROL_REPLY_MAX,
+                    _ => CONTROL_REPLY_MAX,
+                };
                 let room = max_reply - 1 - s.reply.len();
                 let at = s.reply.len();
                 s.reply.resize(at + room, 0);
@@ -1341,7 +1429,12 @@ impl CoreLink {
                 continue;
             }
             // USB's final Core preflight and readback run after its existing write lock.
-            let linger_ms = if self.ctl[i].action == "usb.attach_mode" { 75_000 } else { CONTROL_LINGER_MS };
+            let action = self.ctl[i].action.as_str();
+            let linger_ms = match action {
+                "usb.attach_mode" => 75_000,
+                a if wifi_control(a) => 45_000,
+                _ => CONTROL_LINGER_MS,
+            };
             if now.wrapping_sub(self.ctl[i].t) >= linger_ms {
                 // no answer yet: core may still be doing it; nothing runs directly (twice could
                 // register the modem twice)
@@ -1356,26 +1449,32 @@ impl CoreLink {
     fn control_park(&mut self, fd: OwnedFd, action: &str) {
         if self.ctl.len() >= CONTROL_SLOTS {
             // all busy: the oldest has had its chance
-            let mut oldest = 0;
-            for (i, s) in self.ctl.iter().enumerate() {
-                if (s.t.wrapping_sub(self.ctl[oldest].t) as i32) < 0 {
-                    oldest = i;
-                }
+            let now = mono_ms32();
+            if let Some((oldest, _)) = self.ctl.iter().enumerate().filter(|(_, s)| !wifi_control(&s.action))
+                .max_by_key(|(_, s)| now.wrapping_sub(s.t))
+            {
+                self.ctl.remove(oldest);
+            } else {
+                return;
             }
-            self.ctl.remove(oldest);
         }
-        self.ctl.push(Slot { fd, t: mono_ms32(), action: trunc(action, 40), reply: Vec::new() });
+        self.ctl.push(Slot { fd, t: mono_ms32(), action: trunc(action, 40), op_seq: self.op_seq, reply: Vec::new() });
     }
 
-    /// POST /control from the screen (source, op_id); true = it reached core (parked).
+    /// POST /control from the screen (source, op_id); true = the entire request was sent.
     pub fn control_send_ex(&mut self, action: &str, params: &str, undo: bool) -> bool {
+        let wifi = wifi_control(action);
+        if wifi {
+            self.wifi_request = None;
+            self.wifi_reply = None;
+            self.wifi_fallback = None;
+        }
         let Some(fd) = http::connect_tcp(&self.cfg.host, self.cfg.port, 800) else { return false };
-        self.op_seq += 1;
+        self.op_seq = self.op_seq.wrapping_add(1);
+        let (pid, seq) = (std::process::id(), self.op_seq);
         let body = trunc(
             &format!(
-                "{{\"action\":\"{action}\",\"source\":\"screen\",\"op_id\":\"screen-{}-{}\",{}\"params\":{params}}}",
-                std::process::id(),
-                self.op_seq,
+                "{{\"action\":\"{action}\",\"source\":\"screen\",\"op_id\":\"screen-{pid}-{seq}\",{}\"params\":{params}}}",
                 if undo { "\"undo\":true," } else { "" }
             ),
             INBOX_CAP * 12 + 160,
@@ -1392,6 +1491,9 @@ impl CoreLink {
         if !http::send(fd.as_raw_fd(), req.as_bytes()) {
             return false;
         }
+        if wifi {
+            self.wifi_request = Some((seq, format!("screen-{pid}-{seq}")));
+        }
         self.control_park(fd, action);
         true
     }
@@ -1401,6 +1503,19 @@ impl CoreLink {
     pub fn control_fb(&mut self, action: &str, params: &str, fb_action: &str, fb_args: Option<&str>) -> bool {
         if self.control_send_ex(action, params, false) {
             return true;
+        }
+        if wifi_control(action) {
+            self.wifi_fallback = logic::control_fallback_cmd(FALLBACK_SCRIPT, fb_action, fb_args, 512)
+                .and_then(|cmd| super::background::Task::start_notify(move || {
+                    // The normal fallback helper detaches the shell command. This
+                    // worker needs the script's actual exit status for readback.
+                    let foreground = cmd.strip_suffix(" &").unwrap_or(&cmd);
+                    std::process::Command::new("/bin/sh").arg("-c").arg(foreground).status().is_ok_and(|s| s.success())
+                }, |_| true));
+            if self.wifi_fallback.is_none() {
+                self.wifi_reply = Some(WifiReply::Failed);
+            }
+            return false;
         }
         if fb_args.is_none() {
             return false;
@@ -1413,6 +1528,14 @@ impl CoreLink {
             None => eprintln!("ui: control {action}: core unreachable, bad emergency arguments"),
         }
         false
+    }
+
+    pub fn wifi_reply(&self) -> Option<WifiReply> {
+        self.wifi_reply
+    }
+
+    pub fn wifi_op_id(&self) -> Option<&str> {
+        self.wifi_request.as_ref().map(|(_, id)| id.as_str())
     }
 
     /// The last write core turned down, if younger than max_age_ms.

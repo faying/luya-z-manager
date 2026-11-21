@@ -11,7 +11,6 @@ pub mod action;
 pub mod apn_pick;
 pub mod battery_eta;
 pub mod charge_policy;
-pub mod home_exit;
 pub mod manual_first;
 pub mod scenario;
 pub mod scheduler;

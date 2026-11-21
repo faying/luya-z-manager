@@ -7,7 +7,6 @@ pub(crate) mod chill_ai_gate;
 pub(crate) mod chill_idle;
 pub(crate) mod chill_probe;
 pub(crate) mod guard_duties;
-pub(crate) mod home_exit;
 pub(crate) mod manual_first;
 pub(crate) mod scenario;
 pub(crate) mod scheduler;

@@ -80,10 +80,8 @@ check "rebuilt chill0 tuned again, still one record" '[ "$(rps chill0)" = e ] &&
 run apply rmnet_data0
 check "apply rmnet_data0 refused (usage)" '[ $RC = 2 ] && [ "$(rps rmnet_data0)" = 6 ]'
 iface tailscale0 rx-0
-rm -f "$T/want"
 run apply tailscale0
-check "apply tailscale0 with tuning off: nothing" '[ "$(rps tailscale0)" = 0 ] && ! grep -q tailscale0 "$T/baseline"'
-touch "$T/want"
+check "retired interface refused" '[ $RC = 2 ] && [ "$(rps tailscale0)" = 0 ] && ! grep -q tailscale0 "$T/baseline"'
 
 echo "## restore"
 run restore

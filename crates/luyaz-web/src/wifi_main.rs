@@ -14,19 +14,20 @@
 //!   `actual_bw_*`, from iw) and the devices per band (`clients_*`). Without them the page can't
 //!   say "switched on but not broadcasting". The reply also carries both passwords in plain text:
 //!   [`Live::of`] keeps only those six fields, nothing else is stored or rendered.
-//! - Power save: the agent's `GET /api/wifi/power-save` (u60d has no block for it); NFC: u60d's
-//!   `nfc` block (`switch`).
+//! - Power save: `GET /v2/api/wifi/power-save` supplies the chosen value (`preferred`) and the
+//!   driver read (`live`) separately. NFC comes from a current `nfc` block (`switch`); a write is
+//!   confirmed by a newer current read.
 //!
 //! Writes, only through u60d `/control`:
 //! - `wifi.settings` with the agent's PUT /api/wifi/settings keys, **only the keys the user
 //!   changed** (the form posts its draft and the seed it was opened with; the diff is taken against
 //!   that seed, so an untouched field is never rewritten). u60d runs it as a transaction on item
 //!   `wifi.main` (reply `op`): followed in the `op` block (follow.rs, up to u60d's 90 s); `note: "no
-//!   changes"` = nothing to do; no `op` (older u60d) = read back from the `wifi` block. Busy (409 with
+//!   changes"` = nothing to do after fresh readback; a missing transaction is not proof of success. Busy (409 with
 //!   `doing`, or 503 for the Wi-Fi lock) and refusals are shown, not hidden.
 //! - Tiers: anything that reloads Wi-Fi is tier 3 (dialog, also on the LAN: devices on this Wi-Fi
-//!   drop for ~10–60 s; Tailscale goes over the mobile link and is not affected, so no Tailscale
-//!   warning); transmit power alone is applied hot by u60d: tier 2.
+//!   drop for ~10–60 s, and a remote path may also be interrupted); transmit power alone is
+//!   applied hot by u60d: tier 2.
 //! - The Wi-Fi 6 switch stays, but a change is refused before sending (the firmware changes it
 //!   together with the radio mode; u60d refuses it too).
 //! - Power save `wifi.power_save {enabled}` (read back from the agent) and NFC `nfc.set {enabled,
@@ -113,8 +114,8 @@ pub fn routes() -> Router<Shared> {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Band {
-    pub ap_on: bool,
-    pub radio_on: bool,
+    pub ap_on: Option<bool>,
+    pub radio_on: Option<bool>,
     pub ssid: String,
     pub encryption: String,
     pub has_password: bool,
@@ -127,8 +128,8 @@ pub struct Band {
 impl Band {
     fn of(v: &Value) -> Option<Band> {
         v.is_object().then(|| Band {
-            ap_on: v["ap_on"].as_bool().unwrap_or(true),
-            radio_on: v["radio_on"].as_bool().unwrap_or(true),
+            ap_on: v["ap_on"].as_bool(),
+            radio_on: v["radio_on"].as_bool(),
             ssid: text(&v["ssid"]),
             encryption: text(&v["encryption"]),
             has_password: v["has_password"].as_bool().unwrap_or(false),
@@ -140,23 +141,17 @@ impl Band {
     }
     /// The AP and its radio are both on.
     pub fn up(&self) -> bool {
-        self.ap_on && self.radio_on
+        self.ap_on == Some(true) && self.radio_on == Some(true)
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Guest {
-    pub ssid: String,
-    pub on: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Wifi {
-    pub on: bool,
+    pub on: Option<bool>,
+    pub module_on: Option<bool>,
     pub wifi6: bool,
     pub country: String,
     pub bands: [Band; 2],
-    pub guest: Option<Guest>,
 }
 
 fn text(v: &Value) -> String {
@@ -177,16 +172,12 @@ fn block(st: &St) -> Option<(&Value, bool)> {
 pub fn wifi_of(d: &Value) -> Option<Wifi> {
     let b2 = Band::of(&d["band_2g"])?;
     let b5 = Band::of(&d["band_5g"])?;
-    let g = &d["guest"];
     Some(Wifi {
-        on: d["on"].as_bool().unwrap_or(true),
+        on: d["on"].as_bool(),
+        module_on: d["module_on"].as_bool(),
         wifi6: d["wifi6"].as_bool().unwrap_or(true),
         country: text(&d["country"]).to_ascii_uppercase(),
         bands: [b2, b5],
-        guest: g.is_object().then(|| Guest {
-            ssid: text(&g["ssid"]),
-            on: g["on_2g"].as_bool() == Some(true) || g["on_5g"].as_bool() == Some(true),
-        }),
     })
 }
 
@@ -199,15 +190,24 @@ fn fresh(st: &St) -> bool {
     block(st).is_some_and(|(_, s)| !s) && !st.stuck
 }
 
+fn editable(st: &St) -> Option<Wifi> {
+    let w = wifi(st).filter(|_| fresh(st))?;
+    (w.on.is_some() && w.bands.iter().all(|b| b.radio_on.is_some())).then_some(w)
+}
+
 /// Devices on Wi-Fi (u60d `clients.wifi`).
 fn on_wifi(st: &St) -> Option<i64> {
     st.blocks.get("clients")?.data["wifi"].as_i64()
 }
 
-/// NFC switch from u60d's `nfc` block: None = no block (no NFC, or not read), Some(None) = unknown.
-fn nfc(st: &St) -> Option<Option<bool>> {
-    let b = st.blocks.get("nfc")?;
-    Some(b.data["switch"].as_i64().map(|n| n != 0))
+/// The NFC switch and revision, only from a current read of a valid switch value.
+fn nfc(st: &St) -> Option<(bool, u64)> {
+    let b = st.blocks.get("nfc").filter(|b| !b.stale && st.link == Link::Live)?;
+    match b.data["switch"].as_i64()? {
+        0 => Some((false, b.revision)),
+        1 => Some((true, b.revision)),
+        _ => None,
+    }
 }
 
 // ---- what the agent says (tab's session) ----
@@ -239,17 +239,29 @@ impl Live {
 /// Power save from the agent's `/api/wifi/power-save`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Psm {
-    /// Live (iw) when Wi-Fi is up, else the saved choice; None = unknown.
-    pub enabled: Option<bool>,
+    /// The hotplug setting when present, otherwise the driver read.
+    pub preferred: Option<bool>,
     pub live: Option<bool>,
+    pub saved: Option<bool>,
 }
 
 impl Psm {
     pub fn of(v: &Value) -> Psm {
+        let live = v["live"].as_bool();
+        let saved = v["saved"].as_bool();
         Psm {
-            enabled: v["enabled"].as_bool(),
-            live: v["live"].as_bool(),
+            preferred: v["preferred"].as_bool(),
+            live,
+            saved,
         }
+    }
+
+    fn holds(self, on: bool, deferred: bool) -> bool {
+        self.saved == Some(on) && self.live.map_or(deferred, |active| active == on)
+    }
+
+    fn mismatch(self) -> bool {
+        matches!((self.saved, self.live), (Some(saved), Some(active)) if saved != active)
     }
 }
 
@@ -271,6 +283,7 @@ pub struct BandF {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Fields {
     pub on: bool,
+    pub module: Option<bool>,
     pub w6: bool,
     pub cc: String,
     pub b: [BandF; 2],
@@ -296,7 +309,7 @@ fn norm_ht(s: &str) -> String {
 impl Fields {
     pub fn seed(w: &Wifi) -> Fields {
         let band = |b: &Band| BandF {
-            radio: b.radio_on,
+            radio: b.radio_on.unwrap_or(false),
             ssid: b.ssid.clone(),
             enc: b.encryption.clone(),
             ch: norm_ch(&b.channel),
@@ -305,7 +318,8 @@ impl Fields {
             hidden: b.hidden,
         };
         Fields {
-            on: w.on,
+            on: w.on.unwrap_or(false),
+            module: w.module_on,
             w6: w.wifi6,
             cc: w.country.clone(),
             b: [band(&w.bands[0]), band(&w.bands[1])],
@@ -315,6 +329,7 @@ impl Fields {
     /// As page-local signals (`_{p}on`, `_{p}s2`…).
     pub fn signals(&self, p: char, out: &mut Map<String, Value>) {
         out.insert(format!("_{p}on"), json!(self.on));
+        out.insert(format!("_{p}module"), json!(self.module));
         out.insert(format!("_{p}w6"), json!(self.w6));
         out.insert(format!("_{p}cc"), json!(self.cc));
         for (i, s) in ["2", "5"].iter().enumerate() {
@@ -346,6 +361,7 @@ impl Fields {
         };
         Some(Fields {
             on: b("on")?,
+            module: v.get(format!("_{p}module"))?.as_bool(),
             w6: b("w6")?,
             cc: s("cc")?,
             b: [band("2")?, band("5")?],
@@ -370,7 +386,7 @@ fn flag(b: bool) -> Value {
 impl Change {
     /// Only the transmit power changes: u60d applies it hot, Wi-Fi does not reload.
     pub fn txpower_only(&self) -> bool {
-        self.params.keys().all(|k| k.starts_with("txpower_"))
+        self.params.keys().filter(|k| k.as_str() != "expect").all(|k| k.starts_with("txpower_"))
     }
     pub fn master_off(&self) -> bool {
         self.params.get("wifi_onoff") == Some(&json!("0"))
@@ -455,6 +471,16 @@ fn not_read(l: Lang) -> write::Outcome {
     )
 }
 
+fn write_gate(st: &St, l: Lang) -> Option<write::Outcome> {
+    if editable(st).is_none() {
+        Some(not_read(l))
+    } else if crate::follow::running(st, &[ITEM], l).is_some() {
+        Some(write::Outcome::NotYet(l.pick("A Wi-Fi change is still in progress; wait for it to end", "Wi-Fi 设置还在改，等它结束再改").into()))
+    } else {
+        None
+    }
+}
+
 pub fn wifi6_refused(l: Lang) -> String {
     l.pick(
         "Wi-Fi 6 can't be switched here: this firmware changes it together with the radio mode. Switch it back and apply again.",
@@ -475,8 +501,24 @@ pub fn check(
     let Some(cur) = cur else {
         return Err(not_read(l));
     };
+    if cur.on.is_none() || cur.bands.iter().any(|b| b.radio_on.is_none()) {
+        return Err(not_read(l));
+    }
     if draft.w6 != seed.w6 {
         return Err(write::Outcome::NotYet(wifi6_refused(l)));
+    }
+    let master_changed = draft.on != seed.on;
+    let radio_changed = [draft.b[0].radio != seed.b[0].radio, draft.b[1].radio != seed.b[1].radio];
+    if (master_changed && (cur.on != Some(seed.on) || (seed.module.is_some() && cur.module_on != seed.module)))
+        || (0..2).any(|i| radio_changed[i] && cur.bands[i].radio_on != Some(seed.b[i].radio))
+    {
+        return Err(write::Outcome::NotYet(u60d_words("Wi-Fi settings changed since the form was opened", l)));
+    }
+    if master_changed && radio_changed.iter().any(|changed| *changed) {
+        return Err(write::Outcome::NotYet(u60d_words("apply the Wi-Fi switch and band changes separately", l)));
+    }
+    if radio_changed.iter().any(|changed| *changed) && (cur.on != Some(true) || cur.module_on != Some(true)) {
+        return Err(write::Outcome::NotYet(u60d_words("turn Wi-Fi on before changing its bands", l)));
     }
     let mut p = Map::new();
     let mut errs = Vec::new();
@@ -566,12 +608,9 @@ pub fn check(
             "2.4 GHz：美国不允许 12、13 信道；换一个或选自动",
         ).into());
     }
-    // 2.4 GHz off with 5 GHz still up: the firmware runs no Wi-Fi at all (luyaz_wifi::layout; the
-    // core refuses it too — said here before the dialog, in the page's language)
-    let up = |i: usize| draft.b[i].radio && cur.bands[i].ap_on;
-    if draft.on && (draft.b[0].radio != seed.b[0].radio || draft.b[1].radio != seed.b[1].radio) && up(1) && !up(0) {
-        errs.push(l.pick(LAYOUT_WORDS[0].1, LAYOUT_WORDS[0].2).trim_start_matches("Not applied: ").trim_start_matches("没有生效：").to_owned());
-    }
+    // 2.4 GHz off with 5 GHz up used to be refused here (the AP-flag layout the firmware cannot
+    // run); the page's band switch is the 2.4 GHz radio, which is the supported way (CN B11,
+    // measured 2026-11-18) — it goes to the dialog, and the core takes it.
     if !errs.is_empty() {
         return Err(write::Outcome::NotYet(errs.join(l.pick("; ", "；"))));
     }
@@ -583,6 +622,21 @@ pub fn check(
             )
             .into(),
         ));
+    }
+    let mut expect = Map::new();
+    if master_changed {
+        expect.insert("on".into(), json!(seed.on));
+        if let Some(module) = seed.module {
+            expect.insert("module_on".into(), json!(module));
+        }
+    }
+    for i in 0..2 {
+        if radio_changed[i] {
+            expect.insert(format!("band_{}.radio_on", SUFFIX[i]), json!(seed.b[i].radio));
+        }
+    }
+    if !expect.is_empty() {
+        p.insert("expect".into(), Value::Object(expect));
     }
     Ok(Change {
         params: p,
@@ -599,9 +653,9 @@ pub fn holds(c: &Change, w: &Wifi) -> bool {
         let band = |x: &str| if x.ends_with("2g") || x == "radio2_disabled" { 0 } else { 1 };
         let b = &w.bands[band(k)];
         match k.split('_').next().unwrap_or_default() {
-            "wifi" => (v != "0") == w.on,
+            "wifi" => Some(v != "0") == w.on && Some(v != "0") == w.module_on,
             "country" => w.country.eq_ignore_ascii_case(v),
-            "radio2" | "radio5" => b.radio_on == (v == "0"),
+            "radio2" | "radio5" => b.radio_on == Some(v == "0"),
             "ssid" => b.ssid == v,
             "key" => b.has_password,
             "encryption" => b.encryption == v,
@@ -702,7 +756,7 @@ pub fn what(c: &Change, l: Lang) -> String {
         lines.push(if v == "0" {
             l.pick("All Wi-Fi goes off: every device on the U60's Wi-Fi drops.", "所有 Wi-Fi 都会关掉：连着 U60 Wi-Fi 的设备全部断开。").into()
         } else {
-            l.pick("Wi-Fi comes on.", "Wi-Fi 打开。").into()
+            l.pick("Wi-Fi comes on; bands you switched off stay off.", "Wi-Fi 打开；单独关掉的频段保持关着。").into()
         });
     }
     for i in 0..2 {
@@ -808,33 +862,26 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
         )
         .to_string()
     };
-    let not_ts = l.pick(
-        " Over a cable, USB or Tailscale (which goes over the mobile link) the page is not affected.",
-        "经网线、USB 或 Tailscale（走移动网络）打开的这个页面不受影响。",
-    );
     let recovery = if c.master_off() {
         l.pick(
-            "Turn Wi-Fi back on from the touchscreen, or open this page over a cable, USB or Tailscale and turn it on here.",
-            "在触屏上把 Wi-Fi 打开，或经网线、USB 或 Tailscale 打开这个页面再打开。",
+            "Turn Wi-Fi back on from the touchscreen, or open this page over a working cable or USB connection and turn it on here.",
+            "在触屏上把 Wi-Fi 打开，或经可用的网线、USB 连接打开这个页面再打开。",
         )
         .to_string()
     } else if c.rejoin() {
         let n = names(c, l);
         let key = c.keys.iter().any(|k| *k);
         match (l, key) {
-            (Lang::En, true) => format!("Devices on the U60's Wi-Fi (this browser too, if it is on it) must join {n} again with the new password; then open this page again.{not_ts}"),
-            (Lang::En, false) => format!("Devices on the U60's Wi-Fi (this browser too, if it is on it) must join {n} again; then open this page again.{not_ts}"),
-            (Lang::Zh, true) => format!("连着 U60 Wi-Fi 的设备（包括这个浏览器，如果它也连着）要用新密码重新连到{n}，再打开这个页面。{not_ts}"),
-            (Lang::Zh, false) => format!("连着 U60 Wi-Fi 的设备（包括这个浏览器，如果它也连着）要重新连到{n}，再打开这个页面。{not_ts}"),
+            (Lang::En, true) => format!("Devices on the U60's Wi-Fi (this browser too, if it is on it) must join {n} again with the new password; then open this page again."),
+            (Lang::En, false) => format!("Devices on the U60's Wi-Fi (this browser too, if it is on it) must join {n} again; then open this page again."),
+            (Lang::Zh, true) => format!("连着 U60 Wi-Fi 的设备（包括这个浏览器，如果它也连着）要用新密码重新连到{n}，再打开这个页面。"),
+            (Lang::Zh, false) => format!("连着 U60 Wi-Fi 的设备（包括这个浏览器，如果它也连着）要重新连到{n}，再打开这个页面。"),
         }
     } else {
-        format!(
-            "{}{not_ts}",
-            l.pick(
-                "If this browser is on the U60's Wi-Fi, the page loses its connection, reconnects by itself when Wi-Fi is back and shows the result.",
-                "如果这个浏览器连的是 U60 的 Wi-Fi，页面会断开，Wi-Fi 回来后自己重连并显示结果。",
-            )
-        )
+        l.pick(
+            "If this browser is on the U60's Wi-Fi, the page loses its connection, reconnects by itself when Wi-Fi is back and shows the result.",
+            "如果这个浏览器连的是 U60 的 Wi-Fi，页面会断开，Wi-Fi 回来后自己重连并显示结果。",
+        ).to_string()
     };
     write::Confirm {
         tier: write::Tier::Dialog,
@@ -843,8 +890,7 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
         downtime: Some(downtime),
         recovery: Some(recovery),
         action,
-        // Tailscale goes over the mobile link: no "someone has to be at the device" warning
-        cuts_uplink: false,
+        cuts_uplink: true,
         word: None,
         danger: false,
         revert: crate::write::Revert::No,
@@ -854,9 +900,9 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
 /// The core's AP layout refusals (`luyaz_wifi::layout`), matched by their start.
 const LAYOUT_WORDS: [(&str, &str, &str); 3] = [
     (
-        "turning 2.4 GHz off while 5 GHz stays on",
-        "Not applied: turning 2.4 GHz off while 5 GHz stays on stops all Wi-Fi on this device; turn both off, or only 5 GHz",
-        "没有生效：只关 2.4 GHz、5 GHz 还开着，这台设备的 Wi-Fi 会整个断掉；请两个都关，或只关 5 GHz",
+        "turning the 2.4 GHz network off with its AP flag",
+        "Not applied: turning the 2.4 GHz network off with its AP flag while 5 GHz stays on stops all Wi-Fi on this device; switch the 2.4 GHz radio off instead, or turn both bands off",
+        "没有生效：只关 2.4 GHz 主网络、5 GHz 还开着，这台设备的 Wi-Fi 会整个断掉；请改关 2.4 GHz 的射频开关，或两个频段都关",
     ),
     (
         "a guest network needs the main network",
@@ -872,6 +918,12 @@ const LAYOUT_WORDS: [(&str, &str, &str); 3] = [
 
 /// u60d's English-only messages in the page's language.
 pub(crate) fn u60d_words(m: &str, l: Lang) -> String {
+    match m {
+        "turn Wi-Fi on before changing its bands" => return l.pick("turn Wi-Fi on before changing its bands", "请先打开 Wi-Fi，再更改频段").into(),
+        "apply the Wi-Fi switch and band changes separately" => return l.pick("apply the Wi-Fi switch and band changes separately", "请分别应用 Wi-Fi 总开关和频段更改").into(),
+        "Wi-Fi settings changed since the form was opened" => return l.pick("Wi-Fi settings changed since the form was opened; reopen the form", "Wi-Fi 设置在打开表单后已更改，请重新打开表单").into(),
+        _ => {}
+    }
     if let Some((_, en, zh)) = LAYOUT_WORDS.iter().find(|(p, ..)| m.starts_with(p)) {
         return l.pick(en, zh).into();
     }
@@ -947,7 +999,8 @@ pub struct View {
     pub global: Vec<Row>,
     pub bands: Vec<BandView>,
     pub psm: Option<Psm>,
-    pub nfc: Option<Option<bool>>,
+    pub nfc: Option<bool>,
+    broadcasting: bool,
 }
 
 impl View {
@@ -960,22 +1013,39 @@ impl View {
     }
     pub fn psm_sub(&self) -> Option<&'static str> {
         let p = self.psm?;
-        match (p.enabled, p.live) {
-            (None, _) => Some(self.l.pick(
-                "Not read yet (Wi-Fi off and never set here)",
-                "还没读到（Wi-Fi 关着，也没在这里设过）",
+        if p.mismatch() {
+            return Some(psm_inactive(self.l));
+        }
+        match (p.saved, p.live) {
+            (None, None) => Some(self.l.pick(
+                "Power-save setting unknown",
+                "节能状态未知",
             )),
-            (Some(_), None) => Some(self.l.pick(
-                "Saved; applies when Wi-Fi is on",
-                "已保存；Wi-Fi 打开时生效",
-            )),
+            (Some(_), None) if self.broadcasting => Some(psm_driver_unknown(self.l)),
+            (Some(_), None) => Some(psm_deferred(self.l)),
             _ => None,
         }
     }
 }
 
+fn psm_inactive(l: Lang) -> &'static str {
+    l.pick("Saved, but not active", "已保存，当前未生效")
+}
+
+fn psm_deferred(l: Lang) -> &'static str {
+    l.pick("Saved; applies the next time a Wi-Fi interface starts", "已保存，下次 Wi-Fi 接口启动时生效")
+}
+
+fn psm_driver_unknown(l: Lang) -> &'static str {
+    l.pick("Saved, but driver state is unknown", "已保存，当前驱动状态未知")
+}
+
 fn on_off(l: Lang, v: bool) -> String {
     if v { l.pick("On", "开") } else { l.pick("Off", "关") }.into()
+}
+
+fn optional_on_off(l: Lang, v: Option<bool>) -> String {
+    v.map(|v| on_off(l, v)).unwrap_or_else(|| "—".into())
 }
 
 fn row(label: &str, value: String) -> Row {
@@ -1023,6 +1093,10 @@ pub fn dfs_line(st: &St, l: Lang) -> Option<String> {
 
 pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
     let w = wifi(st);
+    // This tab may receive the new module bit before its next live channel poll.
+    let live = live.filter(|v| {
+        w.as_ref().and_then(|w| w.module_on) != Some(false) || v.ch.iter().all(String::is_empty)
+    });
     let rb = block(st);
     let stale = rb.is_some_and(|(_, s)| s);
     let known = matches!(st.link, Link::Live | Link::Down);
@@ -1048,25 +1122,28 @@ pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
             None,
             false,
         ),
-        Some(w) if !w.on => (
+        Some(w) if w.module_on == Some(false) => (
             "neutral",
             l.pick("Wi-Fi off", "Wi-Fi 已关闭").into(),
             Some(l.pick(
-                "The master switch is off. Devices reach the U60 by cable, USB or Tailscale only.",
-                "总开关关着。设备只能经网线、USB 或 Tailscale 连 U60。",
+                "The Wi-Fi module is off. Use another available connection, such as cable or USB, to reach the U60.",
+                "Wi-Fi 模块关着。请通过其他可用连接（如网线或 USB）连接 U60。",
             ).into()),
             false,
         ),
-        Some(w) if !w.bands.iter().any(Band::up) => (
+        Some(w) if w.module_on.is_none() => (
             "neutral",
-            l.pick("Both bands off", "两个频段都关着").into(),
-            Some(l.pick(
-                "The 2.4 GHz and 5 GHz radios are both switched off.",
-                "2.4 GHz 和 5 GHz 都关着。",
-            ).into()),
+            l.pick("Wi-Fi module status unknown", "Wi-Fi 模块状态未知").into(),
+            None,
             false,
         ),
-        Some(w) if live.is_some_and(|v| (0..2).all(|i| !w.bands[i].up() || v.ch[i].is_empty())) => (
+        Some(_) if live.is_none() => (
+            "neutral",
+            l.pick("Broadcast status not read", "广播状态未读取").into(),
+            None,
+            false,
+        ),
+        Some(_) if live.is_some_and(|v| v.ch.iter().all(String::is_empty)) => (
             "warn",
             l.pick("Wi-Fi not broadcasting", "Wi-Fi 没在广播").into(),
             Some(l.pick(
@@ -1085,18 +1162,16 @@ pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
             false,
         ),
     };
-    if let Some(w) = w.as_ref().filter(|w| w.on) {
+    if let Some(w) = w.as_ref() {
+        match (w.on, w.module_on) {
+            (Some(false), Some(true)) => meta.push(l.pick("Master switch set to off; module currently on", "总开关设置为关，模块当前开启").into()),
+            (Some(true), Some(false)) => meta.push(l.pick("Master switch set to on; module currently off", "总开关设置为开，模块当前关闭").into()),
+            _ => {}
+        }
         for i in 0..2 {
             let b = BANDS[i];
-            let line = if !w.bands[i].up() {
-                format!("{b}{}", l.pick(": off", "：已关"))
-            } else {
-                match live {
-                    None => format!("{b}{}", l.pick(": on", "：开")),
-                    Some(v) if v.ch[i].is_empty() => {
-                        format!("{b}{}", l.pick(": not broadcasting", "：没在广播"))
-                    }
-                    Some(v) => {
+            let line = match live {
+                    Some(v) if !v.ch[i].is_empty() => {
                         let bw = if v.bw[i].is_empty() { "—" } else { &v.bw[i] };
                         let dev = v.n[i].map(|n| match l {
                             Lang::En => format!(" · {n} device(s)"),
@@ -1106,13 +1181,16 @@ pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
                             Lang::En => format!("{b}: channel {} · {bw}{}", v.ch[i], dev.unwrap_or_default()),
                             Lang::Zh => format!("{b}：信道 {} · {bw}{}", v.ch[i], dev.unwrap_or_default()),
                         }
-                    }
-                }
+                    },
+                    _ if w.bands[i].radio_on == Some(true) && w.bands[i].ap_on == Some(false) =>
+                        format!("{b}{}", l.pick(": main network not enabled", "：主网络未启用")),
+                    None => format!("{b}{}", l.pick(": broadcast status not read", "：广播状态未读取")),
+                    Some(_) => format!("{b}{}", l.pick(": not broadcasting", "：没在广播")),
             };
             meta.push(line);
         }
     }
-    if let Some(t) = w.as_ref().filter(|w| w.on).and_then(|_| dfs_line(st, l)) {
+    if let Some(t) = w.as_ref().filter(|w| w.module_on == Some(true)).and_then(|_| dfs_line(st, l)) {
         meta.push(t);
     }
     if w.is_some() && stale {
@@ -1144,11 +1222,11 @@ pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
             })
         }),
     };
-    let guest = w.as_ref().and_then(|w| w.guest.clone()).map(|g| (g.ssid, on_off(l, g.on)));
+    let guest = crate::wifi_guest::summary(st, l);
     let global = match &w {
         None => Vec::new(),
         Some(w) => vec![
-            row(l.pick("Wi-Fi", "Wi-Fi"), on_off(l, w.on)),
+            row(l.pick("Wi-Fi", "Wi-Fi"), optional_on_off(l, w.on)),
             row(
                 "Wi-Fi 6",
                 if w.wifi6 { l.pick("Enabled", "已启用") } else { l.pick("Disabled", "已停用") }.into(),
@@ -1169,7 +1247,11 @@ pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
                         l.pick("Faster speeds and less congestion — shorter range.", "速度更快、干扰更少，覆盖较近。")
                     },
                     rows: vec![
-                        row(l.pick("Radio", "无线电"), on_off(l, b.radio_on)),
+                        row(l.pick("Radio", "无线电"), if b.radio_on == Some(true) && b.ap_on == Some(false) {
+                            l.pick("On · Main network not enabled", "开 · 主网络未启用").into()
+                        } else {
+                            optional_on_off(l, b.radio_on)
+                        }),
                         Row {
                             label: l.pick("Network name (SSID)", "网络名称（SSID）").into(),
                             value: if b.ssid.is_empty() { "—".into() } else { b.ssid.clone() },
@@ -1205,7 +1287,8 @@ pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
         global,
         bands,
         psm,
-        nfc: nfc(st),
+        nfc: nfc(st).map(|(on, _)| on),
+        broadcasting: !stale && live.is_some_and(|v| v.ch.iter().any(|ch| !ch.is_empty())),
     }
 }
 
@@ -1282,6 +1365,7 @@ struct Form {
     l: Lang,
     open: bool,
     on: bool,
+    bands_enabled: bool,
     w6: bool,
     sigs: String,
     regions: Vec<Opt>,
@@ -1290,7 +1374,7 @@ struct Form {
 
 /// The 「更改设置」 button and the form container, open or closed, as two leaves.
 fn form_leaves(open: bool, st: &St, l: Lang) -> String {
-    let w = if open { wifi(st) } else { None };
+    let w = if open { editable(st) } else { None };
     let mut sigs = Map::new();
     let (mut regions, mut bands) = (Vec::new(), Vec::new());
     if let Some(w) = &w {
@@ -1326,7 +1410,8 @@ fn form_leaves(open: bool, st: &St, l: Lang) -> String {
     Form {
         l,
         open: w.is_some(),
-        on: w.as_ref().is_some_and(|w| w.on),
+        on: w.as_ref().is_some_and(|w| w.on == Some(true)),
+        bands_enabled: w.as_ref().is_some_and(|w| w.on == Some(true) && w.module_on == Some(true)),
         w6: w.as_ref().is_some_and(|w| w.wifi6),
         sigs: Value::Object(sigs).to_string(),
         regions,
@@ -1392,7 +1477,7 @@ impl Polled for Poll {
         (render(app, self.live.as_ref(), self.psm, self.l), AGENT_POLL)
     }
     fn watches(&self, block: &str) -> bool {
-        matches!(block, "wifi" | "clients" | "nfc" | "op" | "exec")
+        matches!(block, "wifi" | "wifi_dfs" | "clients" | "nfc" | "op" | "exec")
     }
     fn render(&mut self, app: &Shared) -> Option<Vec<(String, String)>> {
         Some(render(app, self.live.as_ref(), self.psm, self.l))
@@ -1503,7 +1588,7 @@ pub async fn form_open(State(app): State<Shared>, req: axum::extract::Request) -
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
     let clear = area("wf-main", l, Via::Local, "", "", &write::Phase::Idle);
     let html = app.hub.read(|st| {
-        if wifi(st).is_none() {
+        if editable(st).is_none() {
             format!(
                 "{}\n{}",
                 form(false, st, l),
@@ -1620,6 +1705,10 @@ fn applied(l: Lang) -> String {
     l.pick("Wi-Fi settings applied", "Wi-Fi 设置已改好").into()
 }
 
+fn explicit_no_changes(reply: &Value) -> bool {
+    reply["result"]["note"].as_str() == Some("no changes") && reply.get("op").is_none_or(Value::is_null)
+}
+
 /// Send the change and follow it to its end; the area's last words.
 async fn run_main(
     app: &Shared,
@@ -1635,17 +1724,10 @@ async fn run_main(
         Ok(r) => r,
         Err(o) => return Some(o),
     };
-    if reply["result"]["note"].as_str() == Some("no changes") && !reply["op"].is_object() {
-        return Some(write::Outcome::Applied(
-            l.pick(
-                "The device already has these settings; nothing to change",
-                "设备上已经是这些设置，不用改",
-            )
-            .into(),
-        ));
-    }
-    // a transaction (or no reply: there may be one) is followed for up to u60d's 90 s
-    let txn = reply["op"]["op_id"].is_string() || sent == write::Sent::NoReply;
+    let no_changes = explicit_no_changes(&reply);
+    // Missing or malformed transaction replies may still have started an operation; follow the
+    // request ID, but only an explicit no-op may succeed on configuration readback alone.
+    let matching_op = reply["op"]["op_id"].as_str() == Some(h.op_id.as_str());
     let c = h.change.clone();
     let pending = |t: String| area("wf-main", l, Via::Local, "", &h.op_id, &write::Phase::Pending(t));
     let f = crate::follow::follow(
@@ -1653,14 +1735,21 @@ async fn run_main(
         tx,
         &h.op_id,
         changes,
-        if txn { FOLLOW } else { write::READBACK },
+        if no_changes { write::READBACK } else { FOLLOW },
         Duration::ZERO,
         l,
         pending,
-        move |st| wifi(st).is_some_and(|w| holds(&c, &w)),
+        move |st| no_changes && fresh(st) && wifi(st).is_some_and(|w| holds(&c, &w)),
     )
     .await?;
-    Some(crate::follow::outcome(&f, sent, applied(l), l))
+    let sent = if matching_op || no_changes { sent } else { write::Sent::NoReply };
+    let outcome = crate::follow::outcome(&f, sent, applied(l), l);
+    if matches!(outcome, write::Outcome::Applied(_))
+        || matches!(&outcome, write::Outcome::Ended(_, tone) if *tone == "ok")
+    {
+        let _ = app.kick.send(PATH);
+    }
+    Some(outcome)
 }
 
 fn done_html(app: &Shared, o: write::Outcome, op: &str, l: Lang) -> String {
@@ -1691,13 +1780,7 @@ pub async fn main_set(
             return;
         };
         // checked again at the send: still readable, nothing running
-        let gate = app.hub.read(|st| {
-            if !fresh(st) || wifi(st).is_none() {
-                Some(not_read(l))
-            } else {
-                None
-            }
-        });
+        let gate = app.hub.read(|st| write_gate(st, l));
         if let Some(o) = gate {
             let _ = tx.send(patch(&area("wf-main", l, Via::Local, "", "", &write::Phase::Done(o)))).await;
             return;
@@ -1812,21 +1895,40 @@ pub async fn psm_set(
     write::respond(pending, async move {
         let body = json!({"action": "wifi.power_save", "params": {"enabled": on}, "source": "web", "op_id": write::next_op_id()});
         let o = match write::send_body_reply(&app.http, &app.control_url, &body, None, l).await {
+            Err(write::Outcome::Failed(e)) if e == "Wi-Fi power save saved, but not active" => {
+                write::Outcome::Ended(psm_inactive(l).into(), "bad")
+            }
+            Err(write::Outcome::Failed(e)) if e == "Wi-Fi power save saved, but driver state is unknown" => {
+                write::Outcome::Ended(psm_driver_unknown(l).into(), "bad")
+            }
             Err(o) => o,
-            Ok((sent, _)) => {
+            Ok((sent, reply)) => {
+                // Core proves that Wi-Fi is not running before accepting a null live read.
+                let result = &reply["result"];
+                let deferred = result["enabled"].as_bool() == Some(on)
+                    && result["saved"].as_bool() == Some(true)
+                    && result.get("live").is_some_and(Value::is_null);
+                let observed = std::sync::Mutex::new(None);
                 let read = write::read_back(&app.hub, write::READBACK, Duration::from_secs(2), Duration::from_secs(3), || {
                     let (app, who) = (app.clone(), who.clone());
+                    let observed = &observed;
                     async move {
-                        crate::agent::get(&app, &who, "/api/wifi/power-save")
-                            .await
-                            .is_ok_and(|v| Psm::of(&v).enabled == Some(on))
+                        let Ok(v) = crate::agent::get(&app, &who, "/api/wifi/power-save").await else {
+                            return false;
+                        };
+                        let p = Psm::of(&v);
+                        *observed.lock().unwrap() = Some(p);
+                        p.holds(on, deferred)
                     }
                 })
                 .await;
-                if read {
-                    write::Outcome::Applied(said(l, on, "Wi-Fi power save", "Wi-Fi 节能"))
-                } else {
-                    sent.not_read()
+                match (read, observed.into_inner().unwrap()) {
+                    (true, Some(p)) if p.live.is_none() => write::Outcome::Applied(psm_deferred(l).into()),
+                    (true, _) => write::Outcome::Applied(said(l, on, "Wi-Fi power save", "Wi-Fi 节能")),
+                    (false, Some(p)) if p.saved == Some(on) && p.mismatch() => {
+                        write::Outcome::Ended(psm_inactive(l).into(), "bad")
+                    }
+                    _ => sent.not_read(),
                 }
             }
         };
@@ -1843,6 +1945,22 @@ pub async fn psm_cancel(
     one(area("wf-psm", ctx.lang, ctx.remote, "", "", &write::cancel_phase(&q)))
 }
 
+fn nfc_start(st: &St, wanted: bool, l: Lang) -> Result<(String, u64), write::Outcome> {
+    let (current, revision) = nfc(st).ok_or_else(|| write::Outcome::NotYet(
+        l.pick("NFC state unknown; refresh and try again", "NFC 状态未知，刷新后再试").into(),
+    ))?;
+    if current == wanted {
+        return Err(write::Outcome::AcceptedSaid(l.pick(
+            "The device already has this setting", "设备已是这个设置",
+        ).into()));
+    }
+    Ok((st.epoch.clone(), revision))
+}
+
+fn nfc_readback(st: &St, epoch: &str, revision: u64, wanted: bool) -> bool {
+    nfc(st).is_some_and(|(on, r)| on == wanted && (st.epoch != epoch || r > revision))
+}
+
 /// NFC: `nfc.set {enabled, flag: 2}` (the touch screen's flag), read back from the `nfc` block.
 pub async fn nfc_set(
     State(app): State<Shared>,
@@ -1851,17 +1969,21 @@ pub async fn nfc_set(
 ) -> impl IntoResponse {
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
     let on = q.on;
-    let w = write::Write {
-        action: "nfc.set",
-        params: json!({"enabled": i64::from(on), "flag": 2}),
-        readback: Some(Box::new(move |st| nfc(st) == Some(Some(on)))),
-        applied: said(l, on, "NFC tap to join", "NFC 碰一碰"),
-        timeout: write::READBACK,
-        typed: None,
-        request_timeout: None,
-    };
     let pending = area("wf-nfc", l, Via::Local, "", "", &write::Phase::Pending(String::new()));
     write::respond(pending, async move {
+        let (epoch, revision) = match app.hub.read(|st| nfc_start(st, on, l)) {
+            Ok(start) => start,
+            Err(o) => return area("wf-nfc", l, Via::Local, "", "", &write::Phase::Done(o)),
+        };
+        let w = write::Write {
+            action: "nfc.set",
+            params: json!({"enabled": i64::from(on), "flag": 2}),
+            readback: Some(Box::new(move |st| nfc_readback(st, &epoch, revision, on))),
+            applied: said(l, on, "NFC tap to join", "NFC 碰一碰"),
+            timeout: write::READBACK,
+            typed: None,
+            request_timeout: None,
+        };
         let o = write::execute(&app.http, &app.control_url, &app.hub, &w, l).await;
         area("wf-nfc", l, Via::Local, "", "", &write::Phase::Done(o))
     })

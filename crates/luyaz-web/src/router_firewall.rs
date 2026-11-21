@@ -15,7 +15,7 @@
 //!
 //! Writes (controls-inventory.md §/router/firewall, user decision for NAT off and DMZ), all
 //! `vendor.call` `zwrt_router.api` with the agent's bodies (it passed the page's JSON through):
-//! - tier 2, tier 3 over Tailscale: firewall `router_set_firewall_switch {firewall_switch}`, level
+//! - tier 2, tier 3 remotely: firewall `router_set_firewall_switch {firewall_switch}`, level
 //!   `router_set_firewall_level {firewall_level}`, NAT on `router_set_nat_switch {nat_switch}`, UPnP
 //!   `router_set_upnp_switch {enable_upnp, notify_interval, ttl, natpmp}` (the numbers sent back as
 //!   read; a null one left out), port forwarding `router_set_portforward_switch

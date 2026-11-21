@@ -107,9 +107,6 @@ pub struct Scenario {
     mf_at: i64,
     mf_seen: i64,
     mf_stale: bool,
-    home_on: i32,
-    home_until: i64,
-    home_fallback: bool,
     ai_gate: i32,
     ai_region: String,
     /// services.chill as last read (C keeps the buffer: a reply without it reads the old one)
@@ -202,16 +199,6 @@ impl Scenario {
                 self.mf_kind = jstr(ch, "notice_kind", 12);
                 self.mf_at = json::get_int(ch, "notice_at", 0);
             }
-            self.home_on = 0;
-            self.home_fallback = false;
-            self.home_until = 0;
-            if let Some(he) = json::get(&self.ch, "home_exit", 256)
-                && he.first() == Some(&b'{')
-            {
-                self.home_on = jtrue(&he, "media") as i32 | (jtrue(&he, "ip") as i32) << 1 | (jtrue(&he, "rest") as i32) << 2;
-                self.home_until = json::get_int(&he, "rest_until", 0);
-                self.home_fallback = jtrue(&he, "fallback");
-            }
             // the AI gate (luyaz-core engines/chill_ai_gate.rs): null when off
             self.ai_gate = 0;
             self.ai_region.clear();
@@ -250,7 +237,10 @@ impl Scenario {
 
         // the logged-in read: on a lit Home only, once a minute or when the summary moved
         let pub_sig = fnv(fnv(FNV0, self.name.as_bytes()), format!("{}/{}/{}", self.last_switch, self.pin, self.enabled as i32).as_bytes());
-        if active && lit && self.ok && (just_shown || just_lit || pub_sig != self.detail_sig || self.detail_ms == 0 || t - self.detail_ms >= SC_DETAIL_MS) {
+        if self.ok && !self.enabled {
+            self.detail = None;
+            self.detail_ms = 0;
+        } else if active && lit && self.ok && self.enabled && (just_shown || just_lit || pub_sig != self.detail_sig || self.detail_ms == 0 || t - self.detail_ms >= SC_DETAIL_MS) {
             self.detail_sig = pub_sig;
             self.detail_ms = t;
             let (code, b) = agent.api_ms("GET", "/api/scenario", None, SC_DETAIL_MAX, SC_IO_MS);
@@ -288,7 +278,6 @@ impl Scenario {
         h = fnv(h, self.mf_notice.as_bytes());
         h = fnv(h, self.mf_kind.as_bytes());
         h = fnv(h, if self.mf_stale { b"stale" } else { b"live" });
-        h = fnv(h, format!("{}/{}/{}", self.home_on, self.home_until, self.home_fallback as i32).as_bytes());
         h = fnv(h, format!("{}/{}", self.ai_gate, self.ai_region).as_bytes());
         if let Some(d) = &self.detail {
             h = fnv(h, format!("{}/{}/{}/{}/{}/{}/{}", d.current, d.candidate, d.hits, d.enter_hits, d.matched_id, d.matched_ssid, d.matched_since).as_bytes());
@@ -318,9 +307,6 @@ impl Scenario {
             mf_at: self.mf_at,
             mf_seen: self.mf_seen,
             mf_stale: self.mf_stale as i32,
-            home_on: self.home_on,
-            home_until: self.home_until,
-            home_fallback: self.home_fallback as i32,
             ai_gate: self.ai_gate,
             ai_region: self.ai_region.clone(),
             ..self.detail_status()
@@ -390,6 +376,35 @@ impl Scenario {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_public_status_clears_detail_and_skips_private_request() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let len = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..len]).starts_with("GET /v2/api/public/status "));
+            let body = r#"{"data":{"scenario":{"configured":true,"enabled":false}}}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            listener
+        });
+        let mut agent = CoreApi::default();
+        agent.config(port);
+        let mut scenario = Scenario::new();
+        scenario.detail = Some(Detail { candidate: "away".into(), matched_ssid: "old".into(), enter_hits: 2, ..Default::default() });
+        scenario.poll(&mut agent, true, true);
+        let status = scenario.status();
+        assert_eq!((status.available, status.enabled, status.detail), (1, 0, 0));
+        assert!(status.candidate.is_empty() && status.matched_ssid.is_empty() && status.enter_hits == 0);
+        let listener = server.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+    }
 
     #[test]
     fn reads_the_detail() {

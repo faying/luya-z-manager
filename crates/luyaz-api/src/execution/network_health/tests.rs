@@ -10,7 +10,7 @@ fn finding(layer: &str) -> Option<Finding> {
 }
 
 fn held(released: bool) -> Vec<Paused> {
-    vec![Paused { who: "home-exit".into(), reason: "lower", layer: Some("internet".into()), since: 1, released }]
+    vec![Paused { who: "manual-first".into(), reason: "lower", layer: Some("internet".into()), since: 1, released }]
 }
 
 /// Both devices' `/proc` on 10-22 (u60 with CHILL running, u60g without), addresses replaced:
@@ -51,7 +51,7 @@ fn unread_bearer_is_unknown_and_quiet() {
 
 #[test]
 fn no_bearer_says_the_proxy_is_paused() {
-    let p = vec![Paused { who: "home-exit".into(), reason: "no_bearer", layer: None, since: 1, released: false }];
+    let p = vec![Paused { who: "manual-first".into(), reason: "no_bearer", layer: None, since: 1, released: false }];
     let v = build(&Input { bearer: Some(false), paused: p, ..Input::default() });
     assert_eq!(v["state"], "down");
     assert_eq!(v["next"], "wait");

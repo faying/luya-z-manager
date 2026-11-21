@@ -4,8 +4,8 @@
 //!
 //! Where each value comes from (the old page read the agent's `/api/wifi/guest` every 30 s):
 //! - u60d's `wifi` block: `guest{ssid, encryption, has_password, on_2g, on_5g, hidden, isolate,
-//!   active_time, left_s}` and `on` (the master switch: with Wi-Fi off the guest network can't
-//!   broadcast). `left_s` is only read while the guest network is on; the page counts it down
+//!   active_time, left_s}`, `module_on`, and the corresponding radio and main AP settings.
+//!   `left_s` is only read while the guest network is on; the page counts it down
 //!   locally (a page-local signal), as the old page did.
 //! - Passwords never come back (user decision): the page says only 已设密码 / 没有密码; the form's
 //!   password is write-only (empty = keep, else 8–64 characters). The old eye toggle is gone.
@@ -13,7 +13,8 @@
 //! The one write: u60d `/control {"action":"wifi.guest","source":"web","params":{…}}`, params the
 //! agent's PUT /api/wifi/guest keys (u60-api `wifi::guest_set`: `guest_ssid`, `guest_key`,
 //! `guest_encryption`, `guest_disabled_2g`, `guest_disabled_5g`, `guest_hidden`, `guest_isolate`,
-//! `guest_active_time`), only the changed ones. u60d runs it as a transaction on item `wifi.guest`
+//! `guest_active_time`), only the keys changed from the form seed, and `expect` for those keys
+//! other than the password. u60d runs it as a transaction on item `wifi.guest`
 //! (reply `op`; confirmed within 90 s: readback + APs up), or answers `note:"no changes"` (plain).
 //! 409 busy carries `doing` (said as is), 503 busy = the Wi-Fi lock is held elsewhere, 409 refused
 //! and 400 carry u60d's message. Tier 3 for every change: the reload drops the main network too.
@@ -97,31 +98,48 @@ pub struct Guest {
 
 impl Guest {
     fn of(v: &Value) -> Option<Guest> {
-        if !v.is_object() {
-            return None;
-        }
-        let b = |k: &str| v[k].as_bool().unwrap_or(false);
+        let b = |k: &str| v[k].as_bool();
         Some(Guest {
-            ssid: v["ssid"].as_str().unwrap_or("").to_owned(),
-            encryption: v["encryption"].as_str().unwrap_or("").to_owned(),
-            has_password: b("has_password"),
-            on_2g: b("on_2g"),
-            on_5g: b("on_5g"),
-            hidden: b("hidden"),
-            isolate: b("isolate"),
-            active_time: v["active_time"].as_i64().unwrap_or(0),
+            ssid: v["ssid"].as_str()?.to_owned(),
+            encryption: v["encryption"].as_str()?.to_owned(),
+            has_password: b("has_password")?,
+            on_2g: b("on_2g")?,
+            on_5g: b("on_5g")?,
+            hidden: b("hidden")?,
+            isolate: b("isolate")?,
+            active_time: v["active_time"].as_i64()?,
             left_s: v["left_s"].as_i64(),
         })
     }
     pub fn on(&self) -> bool {
         self.on_2g || self.on_5g
     }
+
+    fn signals(&self) -> Value {
+        let mut signals = Map::new();
+        for (key, value) in [
+            ("on2", json!(self.on_2g)),
+            ("on5", json!(self.on_5g)),
+            ("ssid", json!(self.ssid)),
+            ("enc", json!(self.encryption)),
+            ("hid", json!(self.hidden)),
+            ("iso", json!(self.isolate)),
+            ("time", json!(self.active_time.to_string())),
+        ] {
+            signals.insert(format!("_wg{key}"), value.clone());
+            signals.insert(format!("_wgs_{key}"), value);
+        }
+        signals.insert("_wgpw".into(), json!(""));
+        Value::Object(signals)
+    }
 }
 
-/// What the block says: (guest part, master switch, current). None: no block yet.
+/// Guest settings and the Wi-Fi configuration that allows them to run.
 pub struct Read {
     pub guest: Option<Guest>,
-    pub main_on: Option<bool>,
+    pub module_on: Option<bool>,
+    pub radios: [Option<bool>; 2],
+    pub main_aps: [Option<bool>; 2],
     pub current: bool,
 }
 
@@ -129,9 +147,88 @@ pub fn read(st: &St) -> Option<Read> {
     let b = st.blocks.get("wifi")?;
     Some(Read {
         guest: Guest::of(&b.data["guest"]),
-        main_on: b.data["on"].as_bool(),
+        module_on: b.data["module_on"].as_bool(),
+        radios: [b.data["band_2g"]["radio_on"].as_bool(), b.data["band_5g"]["radio_on"].as_bool()],
+        main_aps: [b.data["band_2g"]["ap_on"].as_bool(), b.data["band_5g"]["ap_on"].as_bool()],
         current: !b.stale && st.link == Link::Live,
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Availability {
+    Eligible,
+    ModuleOff,
+    RadioOff,
+    MainOff,
+    Unknown,
+}
+
+impl Read {
+    fn availability(&self, band: usize) -> Availability {
+        use Availability::*;
+        if !self.current {
+            return Unknown;
+        }
+        match (self.module_on, self.radios[band], self.main_aps[band]) {
+            (Some(false), _, _) => ModuleOff,
+            (_, Some(false), _) => RadioOff,
+            (_, _, Some(false)) => MainOff,
+            (Some(true), Some(true), Some(true)) => Eligible,
+            _ => Unknown,
+        }
+    }
+
+    fn configured(&self, g: &Guest) -> impl Iterator<Item = (&'static str, Availability)> + '_ {
+        [("2.4 GHz", g.on_2g), ("5 GHz", g.on_5g)]
+            .into_iter()
+            .enumerate()
+            .filter(|(_, (_, on))| *on)
+            .map(|(i, (band, _))| (band, self.availability(i)))
+    }
+
+    fn notes(&self, g: &Guest, l: Lang) -> Option<String> {
+        use Availability::*;
+        if !self.current {
+            return Some(l.pick("Availability unknown", "可用性未知").into());
+        }
+        if self.module_on == Some(false) {
+            return Some(l.pick("Wi-Fi module off", "Wi-Fi 模块关闭").into());
+        }
+        let mut notes = String::new();
+        for (band, a) in self.configured(g) {
+            let reason = match a {
+                Eligible | ModuleOff => continue,
+                RadioOff => l.pick("radio off", "射频关闭"),
+                MainOff => l.pick("main network off", "主网络关闭"),
+                Unknown => l.pick("availability unknown", "可用性未知"),
+            };
+            if !notes.is_empty() {
+                notes.push_str(l.pick("; ", "；"));
+            }
+            notes.push_str(band);
+            notes.push_str(l.pick(": ", "："));
+            notes.push_str(reason);
+        }
+        (!notes.is_empty()).then_some(notes)
+    }
+}
+
+/// Short status shared by both links to the guest settings. Configuration doesn't prove broadcast.
+pub(crate) fn summary(st: &St, l: Lang) -> Option<(String, String)> {
+    let mut r = read(st)?;
+    let g = r.guest.take()?;
+    let state = if g.on() {
+        let on = l.pick("Set to on", "已设置开启");
+        match r.notes(&g, l) {
+            Some(reason) => format!("{on} · {reason}"),
+            None => on.into(),
+        }
+    } else if r.current {
+        l.pick("Off", "关").into()
+    } else {
+        l.pick("Availability unknown", "可用性未知").into()
+    };
+    Some((g.ssid, state))
 }
 
 /// The guest part, only when current (a write needs it).
@@ -248,7 +345,7 @@ pub fn view(st: &St, l: Lang) -> View {
         rows: Vec::new(),
         busy,
     };
-    let g = match &r {
+    let (r, g) = match &r {
         None if !known => return v,
         None => {
             v.tone = "bad";
@@ -289,9 +386,8 @@ pub fn view(st: &St, l: Lang) -> View {
             v.retry = true;
             return v;
         }
-        Some(Read { guest: Some(g), .. }) => g.clone(),
+        Some(r @ Read { guest: Some(g), .. }) => (r, g),
     };
-    let main_on = r.as_ref().and_then(|r| r.main_on);
     if g.ssid.is_empty() && !g.on() {
         v.tone = "warn";
         v.state = l.pick("No guest network found", "没有找到访客网络").into();
@@ -311,24 +407,22 @@ pub fn view(st: &St, l: Lang) -> View {
             )
             .into(),
         );
-    } else if main_on == Some(false) {
-        v.tone = "warn";
-        v.state = l
-            .pick(
-                "Guest Wi-Fi set on, but Wi-Fi is off",
-                "访客 Wi-Fi 设为开，但 Wi-Fi 已关闭",
-            )
-            .into();
-        v.reason = Some(l.pick("With Wi-Fi off the guest network doesn't broadcast. Turn Wi-Fi on on the Wi-Fi page.", "Wi-Fi 关着时访客网络不会广播；到 Wi-Fi 页打开 Wi-Fi。").into());
     } else {
-        v.tone = "ok";
-        v.state = l.pick("Guest Wi-Fi on", "访客 Wi-Fi 已开启").into();
-        v.reason = Some(bands_text(&g).into());
-        if g.active_time == 0 {
-            v.meta = Some(l.pick("No time limit", "不限时").into());
-        } else if let Some(s) = g.left_s.filter(|s| *s > 0) {
-            v.meta = Some(left_text(l, s));
-            v.left = Some(s);
+        let notes = r.notes(g, l);
+        v.tone = if notes.is_some() { "warn" } else { "ok" };
+        v.state = l.pick("Guest Wi-Fi set to on", "访客 Wi-Fi 已设置开启").into();
+        let bands = bands_text(g);
+        v.reason = Some(match notes {
+            Some(reason) => format!("{bands} · {reason}"),
+            None => bands.into(),
+        });
+        if r.configured(g).any(|(_, a)| a == Availability::Eligible) {
+            if g.active_time == 0 {
+                v.meta = Some(l.pick("No time limit", "不限时").into());
+            } else if let Some(s) = g.left_s.filter(|s| *s > 0) {
+                v.meta = Some(left_text(l, s));
+                v.left = Some(s);
+            }
         }
     }
     if stale {
@@ -425,26 +519,6 @@ fn leaves(app: &Shared, l: Lang) -> Vec<(String, String)> {
 
 // ---- the form and its checks ----
 
-#[derive(Deserialize, Clone, Debug, Default)]
-pub struct FormIn {
-    #[serde(default, rename = "_wgon2")]
-    pub on_2g: bool,
-    #[serde(default, rename = "_wgon5")]
-    pub on_5g: bool,
-    #[serde(default, rename = "_wgssid")]
-    pub ssid: String,
-    #[serde(default, rename = "_wgpw")]
-    pub pw: String,
-    #[serde(default, rename = "_wgenc")]
-    pub enc: String,
-    #[serde(default, rename = "_wghid")]
-    pub hidden: bool,
-    #[serde(default, rename = "_wgiso")]
-    pub isolate: bool,
-    #[serde(default, rename = "_wgtime")]
-    pub time: Value,
-}
-
 /// A checked change: the `/control` params (may hold the password), what the guest part must read
 /// back as, and the dialog's words.
 #[derive(Clone, Debug, PartialEq)]
@@ -461,13 +535,14 @@ impl Save {
     /// The guest part shows this change.
     pub fn holds(&self, g: &Guest) -> bool {
         let w = &self.want;
-        g.ssid == w.ssid
-            && g.encryption == w.encryption
-            && g.on_2g == w.on_2g
-            && g.on_5g == w.on_5g
-            && g.hidden == w.hidden
-            && g.isolate == w.isolate
-            && g.active_time == w.active_time
+        let has = |key| self.params.contains_key(key);
+        (!has("guest_ssid") || g.ssid == w.ssid)
+            && (!has("guest_encryption") || g.encryption == w.encryption)
+            && (!has("guest_disabled_2g") || g.on_2g == w.on_2g)
+            && (!has("guest_disabled_5g") || g.on_5g == w.on_5g)
+            && (!has("guest_hidden") || g.hidden == w.hidden)
+            && (!has("guest_isolate") || g.isolate == w.isolate)
+            && (!has("guest_active_time") || g.active_time == w.active_time)
             && (!self.key_sent || g.has_password)
     }
 }
@@ -505,12 +580,46 @@ fn flag(on: bool) -> Value {
     json!(if on { "1" } else { "0" })
 }
 
-/// Check the form against the current guest part: the change, or why not (said in the area).
-pub fn check(f: &FormIn, cur: Option<&Guest>, l: Lang) -> Result<Save, write::Outcome> {
-    let Some(cur) = cur else {
-        return Err(not_read(l));
+/// Check changes from the form seed, preserving settings edited elsewhere.
+fn check(f: &Value, cur: &Guest, l: Lang) -> Result<Save, write::Outcome> {
+    let mut want = cur.clone();
+    let mut params = Map::new();
+    let mut expect = Map::new();
+    let incomplete = || {
+        bad(l.pick("Reopen the guest Wi-Fi form and try again", "请重新打开访客 Wi-Fi 表单再试"))
     };
-    let ssid = f.ssid.clone();
+    let conflict = || bad(&crate::wifi_main::u60d_words(
+        "Wi-Fi settings changed since the form was opened", l,
+    ));
+    let time = |v: &Value| time_of(v).ok_or_else(|| bad(l.pick(
+        "Active time must be a whole number of minutes from 0 to 1440",
+        "有效时长须为 0 到 1440 的整数分钟",
+    )));
+    macro_rules! edit {
+        ($field:ident, $sig:literal, $key:literal, $snapshot:literal, $reader:expr, $send:expr) => {{
+            let seed = ($reader)(&f[concat!("_wgs_", $sig)])?;
+            let draft = ($reader)(&f[concat!("_wg", $sig)])?;
+            if seed != draft {
+                if seed != cur.$field {
+                    return Err(conflict());
+                }
+                expect.insert(concat!("guest.", $snapshot).into(), json!(seed));
+                params.insert(concat!("guest_", $key).into(), ($send)(&draft));
+                want.$field = draft;
+            }
+        }};
+    }
+    let boolean = |v: &Value| v.as_bool().ok_or_else(incomplete);
+    let text = |v: &Value| v.as_str().map(str::to_owned).ok_or_else(incomplete);
+    edit!(ssid, "ssid", "ssid", "ssid", text, |v: &String| json!(v));
+    edit!(encryption, "enc", "encryption", "encryption", text, |v: &String| json!(v));
+    edit!(on_2g, "on2", "disabled_2g", "on_2g", boolean, |v: &bool| flag(!*v));
+    edit!(on_5g, "on5", "disabled_5g", "on_5g", boolean, |v: &bool| flag(!*v));
+    edit!(hidden, "hid", "hidden", "hidden", boolean, |v: &bool| flag(*v));
+    edit!(isolate, "iso", "isolate", "isolate", boolean, |v: &bool| flag(*v));
+    edit!(active_time, "time", "active_time", "active_time", time, |v: &i64| json!(v.to_string()));
+
+    let ssid = &want.ssid;
     if ssid.contains(STRIPPED) {
         return Err(bad(l.pick(
             "The guest network name can't contain ' \" ; $ ` \\ | < > & — the device would silently drop them",
@@ -528,17 +637,11 @@ pub fn check(f: &FormIn, cur: Option<&Guest>, l: Lang) -> Result<Save, write::Ou
             "访客网络名称超过 32 字节",
         )));
     }
-    if !ENCS.iter().any(|e| e.0 == f.enc) && f.enc != cur.encryption {
+    if !ENCS.iter().any(|e| e.0 == want.encryption) && want.encryption != cur.encryption {
         return Err(bad(l.pick("Pick a security type", "请选择加密方式")));
     }
-    let Some(time) = time_of(&f.time) else {
-        return Err(bad(l.pick(
-            "Active time must be a whole number of minutes from 0 to 1440",
-            "有效时长须为 0 到 1440 的整数分钟",
-        )));
-    };
-    let open = f.enc == "none";
-    let pw = if open { "" } else { f.pw.as_str() };
+    let open = want.encryption == "none";
+    let pw = if open { "" } else { f["_wgpw"].as_str().unwrap_or("") };
     if !pw.is_empty() {
         if pw.contains(STRIPPED) {
             return Err(bad(l.pick(
@@ -568,60 +671,27 @@ pub fn check(f: &FormIn, cur: Option<&Guest>, l: Lang) -> Result<Save, write::Ou
     // One band's guest beside both main networks makes exactly three APs, which this firmware
     // cannot run (luyaz_wifi::layout, upstream #181): Wi-Fi goes down. Both bands or neither, as
     // the stock page does; a layout already like that is left alone.
-    if f.on_2g != f.on_5g && (f.on_2g, f.on_5g) != (cur.on_2g, cur.on_5g) {
+    if want.on_2g != want.on_5g && (want.on_2g, want.on_5g) != (cur.on_2g, cur.on_5g) {
         return Err(bad(l.pick(
             "Turn the guest network on for both bands, or off: with one band only, this device runs three networks and Wi-Fi goes down",
             "访客网络请两个频段一起开或一起关：只开一个频段，设备就要跑三个网络，Wi-Fi 会整个断掉",
         )));
     }
-    let want = Guest {
-        ssid: ssid.clone(),
-        encryption: f.enc.clone(),
-        has_password: cur.has_password || !pw.is_empty(),
-        on_2g: f.on_2g,
-        on_5g: f.on_5g,
-        hidden: f.hidden,
-        isolate: f.isolate,
-        active_time: time,
-        left_s: None,
-    };
-    let mut p = Map::new();
-    if want.ssid != cur.ssid {
-        p.insert("guest_ssid".into(), json!(want.ssid));
-    }
     if !pw.is_empty() {
-        p.insert("guest_key".into(), json!(pw));
+        params.insert("guest_key".into(), json!(pw));
     }
-    if want.encryption != cur.encryption {
-        p.insert("guest_encryption".into(), json!(want.encryption));
-    }
-    if want.on_2g != cur.on_2g {
-        p.insert("guest_disabled_2g".into(), flag(!want.on_2g));
-    }
-    if want.on_5g != cur.on_5g {
-        p.insert("guest_disabled_5g".into(), flag(!want.on_5g));
-    }
-    if want.hidden != cur.hidden {
-        p.insert("guest_hidden".into(), flag(want.hidden));
-    }
-    if want.isolate != cur.isolate {
-        p.insert("guest_isolate".into(), flag(want.isolate));
-    }
-    if want.active_time != cur.active_time {
-        p.insert(
-            "guest_active_time".into(),
-            json!(want.active_time.to_string()),
-        );
-    }
-    if p.is_empty() {
+    if params.is_empty() {
         return Err(bad(l.pick(
             "No changes yet. Change a setting, then apply.",
             "还没有改动。改了设置再按「应用」。",
         )));
     }
+    if !expect.is_empty() {
+        params.insert("expect".into(), Value::Object(expect));
+    }
     let (what, reconnect) = describe(cur, &want, !pw.is_empty(), l);
     Ok(Save {
-        params: p,
+        params,
         want,
         key_sent: !pw.is_empty(),
         what,
@@ -639,10 +709,8 @@ fn describe(b: &Guest, f: &Guest, key: bool, l: Lang) -> (String, Option<String>
     let (was, is) = (b.on(), f.on());
     if !was && is {
         lines.push(match l {
-            Lang::En => {
-                format!("The guest network {name} comes on; anyone with the password can join.")
-            }
-            Lang::Zh => format!("访客网络{name}打开，知道密码的人都能连。"),
+            Lang::En => format!("The guest network {name} will be enabled in settings."),
+            Lang::Zh => format!("访客网络{name}将设置为开启。"),
         });
     } else if was && !is {
         lines.push(
@@ -670,8 +738,8 @@ fn describe(b: &Guest, f: &Guest, key: bool, l: Lang) -> (String, Option<String>
         name_or_key = true;
         lines.push(if f.encryption == "none" {
             l.pick(
-                "The guest network becomes open: anyone nearby can join without a password.",
-                "访客网络改为开放：附近任何人不用密码就能连。",
+                "The guest network becomes open: when it is available, anyone nearby can join without a password.",
+                "访客网络改为开放：网络可用时，附近任何人不用密码就能连。",
             )
             .into()
         } else {
@@ -755,8 +823,8 @@ fn confirm(s: &Save, l: Lang) -> write::Confirm {
         rec.push_str(if l == Lang::En { " " } else { "" });
     }
     rec.push_str(l.pick(
-        "If you are on the U60's Wi-Fi this page drops too: reconnect to the main Wi-Fi and it shows the result. Over a cable, USB or Tailscale it stays connected.",
-        "如果你连的是 U60 的 Wi-Fi，这个页面也会断开：重新连上主 Wi-Fi，页面会接着显示结果。经网线、USB 或 Tailscale 不受影响。",
+        "If you are on the U60's Wi-Fi this page drops too: reconnect to the main Wi-Fi and open the page again.",
+        "如果你连的是 U60 的 Wi-Fi，这个页面也会断开：重新连上主 Wi-Fi，再打开这个页面。",
     ));
     write::Confirm {
         tier: write::Tier::Dialog,
@@ -773,8 +841,7 @@ fn confirm(s: &Save, l: Lang) -> write::Confirm {
         ),
         recovery: Some(rec),
         action: l.pick("Apply", "应用").into(),
-        // Tailscale is not on Wi-Fi: no "someone has to be at the device" warning
-        cuts_uplink: false,
+        cuts_uplink: true,
         word: None,
         danger: false,
         revert: crate::write::Revert::No,
@@ -1124,12 +1191,7 @@ impl Form<'_> {
 /// The toggle button (`wg-btn`) and the form (`wg-form`), open (at the guest part's values) or
 /// closed, as two leaves (the page places them apart).
 fn form_leaves(open: bool, g: Option<&Guest>, l: Lang) -> String {
-    let d = Guest::default();
-    let q = g.unwrap_or(&d);
-    let sigs = json!({
-        "_wgon2": q.on_2g, "_wgon5": q.on_5g, "_wgssid": q.ssid, "_wgpw": "", "_wgenc": q.encryption,
-        "_wghid": q.hidden, "_wgiso": q.isolate, "_wgtime": q.active_time.to_string(),
-    });
+    let sigs = g.map_or_else(String::new, |g| g.signals().to_string());
     let odd_enc = g
         .filter(|g| !ENCS.iter().any(|e| e.0 == g.encryption))
         .map(|g| g.encryption.clone());
@@ -1137,7 +1199,7 @@ fn form_leaves(open: bool, g: Option<&Guest>, l: Lang) -> String {
         l,
         open: open && g.is_some(),
         g,
-        sigs: sigs.to_string(),
+        sigs,
         odd_enc,
     }
     .render()
@@ -1179,9 +1241,9 @@ pub async fn ask(State(app): State<Shared>, req: axum::extract::Request) -> impl
     let body = axum::body::to_bytes(req.into_body(), 16 * 1024)
         .await
         .unwrap_or_default();
-    let f: FormIn = serde_json::from_slice(&body).unwrap_or_default();
+    let f: Value = serde_json::from_slice(&body).unwrap_or_default();
     let html = app.hub.read(
-        |st| match gate(st, l).and_then(|g| check(&f, Some(&g), l)) {
+        |st| match gate(st, l).and_then(|g| check(&f, &g, l)) {
             Err(o) => area(l, ctx.remote, "", &write::Phase::Done(o)),
             Ok(s) => {
                 let mut c = confirm(&s, l);

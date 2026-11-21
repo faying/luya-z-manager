@@ -211,22 +211,21 @@ luyaz-recover.sh 只在「日志里的开机号 ≠ 现在的开机号」时动�
 |---|---|
 | `ssh` | 2222 或 22 端口在监听 |
 | `lan` | `br-lan` 已启用（`IFF_UP`，不看 `operstate`：没有客户端时它就是 down）且有 IPv4 |
-| `tailscale` | `tailscaled` 在跑且 `tailscale0` 有 IPv4 |
 | `route` | `ip route get 1.1.1.1` 有出口，不管走哪张网卡（蜂窝、Wi-Fi、隧道都算） |
 | `client-route` | 到发起这次 ship 的电脑（`SSH_CONNECTION`）有路由；不是经 SSH 发起就没有这一项 |
 
-- **只比基线**：基线里就不通的项不算这一版的错（没装 Tailscale、飞行中没路由，都照常上机）。
+- **只比基线**：基线里就不通的项不算这一版的错（例如原来就没路由）。
 - **一时断开不算**：不通的项每 10 秒再看，最多 7 次（约 60 秒），其间通过一次就过；试跑不过 = 中止，转正后不过 = 退回。
 - 原因写进事务日志的 `reason`，基线和对比写在 `ship.log`。基线只在这个执行器的内存里；执行器死了由恢复流程收尾，不再比。
 - **局限**：只证明这条路还在，不证明包真的走得通；基站正好断 60 秒以上，也会把无辜的版本退回（不隔离，可以重上）。
 
-**转正后继续比**：`ssh`、`lan`、`tailscale` 里基线通的项写进事务日志的 `conn_ok=`，随看守记录交给哨兵（`watch_conn`），比到这个版本证明过自己为止，只看转正那次开机。
+**转正后继续比**：`ssh`、`lan` 里基线通的项写进事务日志的 `conn_ok=`，随看守记录交给哨兵（`watch_conn`），比到这个版本证明过自己为止，只看转正那次开机。旧记录中的 `tailscale` 已退役并忽略，其他受支持项仍照常观察。
 
 - 一项连续坏 **10 分钟**（这时没人在等，比上机时的 60 秒长得多）→ 退回基线里有这一项的最新版本。`sentinel`、`scripts`、没有 `conn_ok` 的旧记录不比。
 - **不隔离，一次开机最多退一个**（`watch-conn-rolled` 记 boot_id）：断线不一定是版本的错，不能把一串无辜的版本都退掉。告警 `ship-conn-rollback`（发短信）。
 - 不比 `route`（基站能让好版本没路由）和 `client-route`（电脑可能只是走了）。
 - 有事务进行中不计时；有一项在坏时，什么都不算证明过自己。
-- 手工挡住：转正后 1 小时内要手动停 Tailscale 或 SSH，先建 `auto-rollback-off`。退回做到一半断电时，开机路径的旧 `luyaz-recover.sh` 不认这条原因，会把版本隔离，看原因后 `unquarantine`。
+- 手工挡住：转正后 1 小时内要手动停 SSH，先建 `auto-rollback-off`。旧版哨兵还可能观察 Tailscale：迁移旧设备前先检查观察记录。退回做到一半断电时，开机路径的旧 `luyaz-recover.sh` 不认这条原因，会把版本隔离，看原因后 `unquarantine`。
 - 测试用 `U60S_CONN_PROBE`、`U60S_CONN_ROUNDS`、`U60S_CONN_WAIT`。
 
 ## 转正后自动退回（OTA-01）
@@ -323,19 +322,16 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
   ```json
   {"v":1,"kind":"record","name":"rc.local","path":"/etc/rc.local","md5":"…","mac_time":1790000000,"boot_id":"…","uptime":5600,"why":"手工改了"}
   ```
-  名字固定：`tailscale-start.sh`、`tuning.env`、`tailscaled`、`tailscaled-nofight`；
-  `init.d/luyaz-core`、`init.d/tailscale`；`rc.local`；`luyaz-recover.sh`；目录 `ui-fonts`（`/data/luyaz/ui/fonts`）、`ui-logos`、`core-plugins`。
+  名字固定：`init.d/luyaz-core`；`rc.local`；`luyaz-recover.sh`；目录 `ui-fonts`（`/data/luyaz/ui/fonts`）、`ui-logos`、`core-plugins`。
   文件不存在记 `"md5":"-"`。
   私有版另有 CHILL 的 `chill.sh`、`template.yaml`；`chill.env` 是设置文件，不进清单。
 
-**CHILL、Tailscale 组件**：`tools/luyaz ship chill`（`chill.sh`、`template.yaml`、`VERSION`）、`ship tailscale`（`start.sh`、`apply.sh`、`VERSION`），都取自提交的 `scripts/<组件>/`，没有并行试跑。
+**CHILL 组件**：`tools/luyaz ship chill`（`chill.sh`、`template.yaml`、`VERSION`）取自提交的 `scripts/chill/`，没有并行试跑。Tailscale 组件已退役，旧清单保留历史；旧设备迁移见 `scripts/tailscale/README.zh-CN.md`。
 
-- 不进事务：`chill.env`（订阅）、`tuning.env`（每台不同）、`mihomo`、`tailscaled`、两个 init 脚本。这些仍手工改后 `record`。
-- 转正前：`chill.sh validate` 用这台的 `chill.env` 和 `cn.list` 渲染新模板并跑 `mihomo -t`；`start.sh check` 查 Tailscale。不过就中止，服务没停、文件没动。
+- 不进事务：`chill.env`（订阅）、`mihomo` 和 CHILL init 脚本。
+- 转正前：`chill.sh validate` 用这台的 `chill.env` 和 `cn.list` 渲染新模板并跑 `mihomo -t`。不过就中止，服务没停、文件没动。
 - 转正后 CHILL：在跑或因 `idle`、`paused`、`captive_wan`、`overheat`、`ruleset_missing` 停在直连都算过；`gaveup`、`render_failed`、窗口内核心被重启、其他原因都退回。息屏暂停时新核心不会启动，只有转正前的校验证明过模板。
-- 转正后 Tailscale：更新前通的，窗口结束时必须通且没被重启；更新前不通的只查文件。之后由连通看守比到版本证明过自己。
 - 开关：有 `disabled` 就不启动。
-- 全球版经 tailnet 连接，上 `tailscale` 时连接会断，执行器在设备上独立跑完；优先走 `u60b`。
   运行中会被正常改写的设置文件不进清单。原因去掉引号、反斜杠和控制字符，最长 120 字节。有事务在进行时拒绝。
   doctor.sh 里有同一张名字表，测试检查两边一致。
 - 只有 `done` 才写一条；试跑不过、转正后退回，清单都不变。

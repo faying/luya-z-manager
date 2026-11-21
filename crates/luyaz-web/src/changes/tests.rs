@@ -301,7 +301,7 @@ fn tier_per_action() {
     let a = write::Area {
         id: "ch-undo",
         l: Lang::Zh,
-        remote: Via::Tailnet,
+        remote: Via::Remote,
         set: "/changes/undo?op=web-20",
         cancel: "/changes/undo/cancel",
         phase: &write::Phase::Ask(confirm(&entries()[1], Lang::Zh)),
@@ -310,7 +310,7 @@ fn tier_per_action() {
     assert!(
         a.contains("<dialog")
             && a.contains("断开多久")
-            && a.contains("Tailscale")
+            && a.contains("远程操作")
             && a.contains("{retryMaxCount: 0}"),
         "{a}"
     );

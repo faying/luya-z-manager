@@ -3515,8 +3515,11 @@
           "description": "One main AP and its radio (uci `wireless`). The password never leaves the device.",
           "properties": {
             "ap_on": {
-              "description": "`main_*.disabled` is not \"1\"",
-              "type": "boolean",
+              "description": "Saved main AP setting, null if the section or its value is unreadable.",
+              "type": [
+                "boolean",
+                "null"
+              ],
               "x-u60-level": "normal"
             },
             "channel": {
@@ -3541,8 +3544,11 @@
               "x-u60-level": "normal"
             },
             "radio_on": {
-              "description": "`wifiN.disabled` is not \"1\"",
-              "type": "boolean",
+              "description": "Saved radio setting, including the vendor backup while the module is off.",
+              "type": [
+                "boolean",
+                "null"
+              ],
               "x-u60-level": "normal"
             },
             "ssid": {
@@ -3556,13 +3562,11 @@
             }
           },
           "required": [
-            "ap_on",
             "channel",
             "encryption",
             "has_password",
             "hidden",
             "htmode",
-            "radio_on",
             "ssid",
             "txpower"
           ],
@@ -3648,9 +3652,20 @@
           "$ref": "#/$defs/WifiGuest",
           "x-u60-level": "nested"
         },
+        "module_on": {
+          "description": "Actual vendor module switch (`wifi_onoff`).",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
         "on": {
-          "description": "master switch: vendor `wifi_onoff` not \"0\" and not both main APs disabled",
-          "type": "boolean",
+          "description": "Saved master switch (`wifi_onoff_by_user`, falling back to the module).",
+          "type": [
+            "boolean",
+            "null"
+          ],
           "x-u60-level": "normal"
         },
         "wifi6": {
@@ -3664,7 +3679,6 @@
         "band_5g",
         "country",
         "guest",
-        "on",
         "wifi6"
       ],
       "title": "Wifi",

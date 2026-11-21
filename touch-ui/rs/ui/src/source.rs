@@ -33,12 +33,6 @@ pub struct Activity {
     pub home: bool,
     /// netinfo_poll's mode (NI_*)
     pub ni_mode: i32,
-    /// Home, 出口 or the Tailscale page
-    pub tailscale: bool,
-    /// the CHILL page itself (家里出口)
-    pub chill_page: bool,
-    /// a 家里出口 switch is being sent from the screen
-    pub hx_sending: bool,
     /// Home, 出口 or a CHILL page
     pub chill: bool,
     /// the eSIM page
@@ -67,9 +61,7 @@ pub struct Polled {
     pub scenario: bool,
     pub netinfo: bool,
     pub screen: bool,
-    pub tailscale: bool,
     pub chill: bool,
-    pub chill_home: bool,
     pub esim: bool,
     pub speedtest: bool,
     pub servers: bool,
@@ -188,6 +180,7 @@ pub trait Source {
     /// open kept run `i` of the list
     fn ladder_open(&mut self, i: usize);
     fn scenario_kick(&mut self);
+    fn scenario_enable(&mut self, on: bool);
     fn netinfo_act(&mut self, a: NiAct);
     /// "" = back to automatic
     fn netinfo_pin(&mut self, id: &str);
@@ -204,12 +197,6 @@ pub trait Source {
     fn chill_select_group(&mut self, i: usize) -> bool;
     fn chill_set_profile(&mut self, p: &str) -> bool;
     fn chill_test_delay(&mut self) -> i32;
-    /// (HTTP status, the agent's code on 409)
-    fn chill_home_set(&mut self, item: usize, on: bool) -> (i32, String);
-    /// the new end of 其余, None = not extended
-    fn chill_home_extend(&mut self, m: &Model) -> Option<i64>;
-    /// chill_home_poll(1, 1) right after a switch
-    fn chill_home_read(&mut self);
 
     // ---- the process ----
     /// exec a fresh copy with these arguments; returns only on failure (-1)
@@ -230,8 +217,38 @@ pub trait Source {
     fn lang_hold(&mut self);
     /// the alert for automatic appearance switching paused
     fn alert_theme_paused(&mut self);
-    /// the Wi-Fi radios up (wlan0, wlan2) and Wi-Fi power save, None = not read here
-    fn aux_read(&mut self) -> Option<(i32, i32, i32)>;
+    /// Poll settings; `fresh` discards a read started before the write reply.
+    fn wifi_read(&mut self, fresh: bool) -> Option<WifiRead>;
+    /// A Wi-Fi verdict from the control reply or the emergency script.
+    fn wifi_reply(&self) -> Option<WifiReply>;
+    /// The ID of a fully sent Wi-Fi request, even if the reply never arrives.
+    fn wifi_op_id(&self) -> Option<&str> { None }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiReply {
+    CoreDone,
+    EmergencyDone,
+    Failed,
+}
+
+impl WifiReply {
+    pub(crate) fn from_op(op: &crate::op_view::OpItem, op_id: &str) -> Option<Self> {
+        if !op.have || op.op_id != op_id || !crate::op_view::phase_final(&op.phase) {
+            return None;
+        }
+        Some(if op.phase == "confirmed" && op.step_done[1] { Self::CoreDone } else { Self::Failed })
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct WifiRead {
+    pub master: Option<bool>,
+    pub radios: [Option<bool>; 2],
+    pub power_save: Option<bool>,
+    pub module: Option<bool>,
+    pub main: [Option<bool>; 2],
+    pub up: [bool; 2],
 }
 
 #[cfg(test)]

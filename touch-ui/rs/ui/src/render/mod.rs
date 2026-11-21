@@ -34,7 +34,7 @@ mod checks;
 
 use crate::conf::Conf;
 use crate::logic::{self, Launch};
-use crate::source::{self, Activity, NiAct, Polled, Source};
+use crate::source::{self, Activity, NiAct, Polled, Source, WifiRead, WifiReply};
 use crate::lv::{self, sys, Obj};
 use crate::ui::{self, Sub, SUBS, TABS};
 use checks::Checks;
@@ -69,11 +69,14 @@ static FX: AtomicI32 = AtomicI32::new(0);
 static FY: AtomicI32 = AtomicI32::new(0);
 static FDOWN: AtomicBool = AtomicBool::new(false);
 
-unsafe extern "C" fn finger_cb(_in: *mut sys::lv_indev_t, d: *mut sys::lv_indev_data_t) {
+unsafe extern "C" fn finger_cb(ind: *mut sys::lv_indev_t, d: *mut sys::lv_indev_data_t) {
     let (x, y, down) = (FX.load(Ordering::Relaxed), FY.load(Ordering::Relaxed), FDOWN.load(Ordering::Relaxed));
-    let pressed = ui::with(|u| u.touch_filter(down, x, y));
+    let (pressed, cancel) = ui::with(|u| u.touch_filter(down, x, y));
     // SAFETY: LVGL's read buffer for this call
     unsafe {
+        if cancel {
+            sys::lv_indev_reset(ind, std::ptr::null_mut());
+        }
         (*d).point = sys::lv_point_t { x, y };
         (*d).state = if pressed { sys::lv_indev_state_t::LV_INDEV_STATE_PRESSED } else { sys::lv_indev_state_t::LV_INDEV_STATE_RELEASED };
     }
@@ -176,6 +179,20 @@ struct Replay {
     /// the hash of the model last handed out
     cur: Rc<RefCell<String>>,
     next: Option<Rc<Model>>,
+    #[cfg(test)]
+    wifi_test: Option<Rc<RefCell<WifiTest>>>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct WifiTest {
+    read: WifiRead,
+    reply: Option<WifiReply>,
+    op_id: Option<&'static str>,
+    emergency: bool,
+    block_readback: bool,
+    writes: Vec<(String, String)>,
+    fresh_reads: usize,
 }
 
 impl Replay {
@@ -205,9 +222,7 @@ impl Source for Replay {
             scenario: true,
             netinfo: true,
             screen: false,
-            tailscale: true,
             chill: true,
-            chill_home: false,
             esim: true,
             speedtest: true,
             servers: true,
@@ -284,8 +299,22 @@ impl Source for Replay {
     fn data_set_pace(&mut self, _panel_lit: bool) {}
     fn data_release_pace(&mut self) {}
     fn data_control_fb(&mut self, _a: &str, _p: &str, _fa: &str, _fb: Option<&str>) -> bool {
+        let sent = true;
+        #[cfg(test)]
+        let sent = if let Some(wifi) = &self.wifi_test {
+            let mut wifi = wifi.borrow_mut();
+            wifi.reply = None;
+            wifi.writes.push((_a.into(), _p.into()));
+            wifi.op_id = if wifi.emergency { None } else {
+                ["screen-1-1", "screen-1-2", "screen-1-3", "screen-1-4", "screen-1-5"]
+                    .get(wifi.writes.len() - 1).copied()
+            };
+            !wifi.emergency
+        } else {
+            sent
+        };
         self.acted();
-        true
+        sent
     }
     fn data_control_undo(&mut self, _a: &str, _p: &str) -> bool {
         self.acted();
@@ -350,6 +379,9 @@ impl Source for Replay {
     fn scenario_kick(&mut self) {
         self.acted();
     }
+    fn scenario_enable(&mut self, _on: bool) {
+        self.acted();
+    }
     fn netinfo_act(&mut self, _a: NiAct) {
         self.acted();
     }
@@ -402,18 +434,6 @@ impl Source for Replay {
         self.acted();
         1
     }
-    fn chill_home_set(&mut self, _item: usize, _on: bool) -> (i32, String) {
-        self.acted();
-        (202, String::new())
-    }
-    /// two hours from now
-    fn chill_home_extend(&mut self, m: &Model) -> Option<i64> {
-        self.acted();
-        Some(m.now + 7200)
-    }
-    fn chill_home_read(&mut self) {
-        self.acted();
-    }
     /// the harness stays in this process
     fn exec(&mut self, _l: &Launch) -> i32 {
         self.acted();
@@ -430,15 +450,38 @@ impl Source for Replay {
     }
     fn lang_hold(&mut self) {}
     fn alert_theme_paused(&mut self) {}
-    /// None, as C's render test had it (the switches read off); LUYAZ_RENDER_AUX="w24,w5,psm"
-    /// (e.g. "1,1,0", the screenshots) gives the radios and power save instead.
-    fn aux_read(&mut self) -> Option<(i32, i32, i32)> {
-        let v = std::env::var("LUYAZ_RENDER_AUX").ok()?;
-        let n: Vec<i32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-        match n[..] {
-            [a, b, c] => Some((a, b, c)),
-            _ => None,
+    /// `LUYAZ_RENDER_AUX="w24,w5,psm"` gives the screenshot fixture's settings.
+    fn wifi_read(&mut self, _fresh: bool) -> Option<WifiRead> {
+        #[cfg(test)]
+        if let Some(wifi) = &self.wifi_test {
+            let mut wifi = wifi.borrow_mut();
+            if _fresh {
+                wifi.fresh_reads += 1;
+                return None; // a pre-write sample cannot complete the operation
+            }
+            return (!wifi.block_readback).then_some(wifi.read);
         }
+        let v = std::env::var("LUYAZ_RENDER_AUX").unwrap_or_else(|_| "0,0,0".into());
+        let mut flags = v.split(',').map(|x| x.trim() == "1");
+        let up = [flags.next()?, flags.next()?];
+        let on = up[0] || up[1];
+        Some(WifiRead { master: Some(on), radios: up.map(Some), power_save: flags.next(), module: Some(on), main: [Some(true); 2], up })
+    }
+
+    fn wifi_reply(&self) -> Option<WifiReply> {
+        #[cfg(test)]
+        if let Some(wifi) = &self.wifi_test {
+            return wifi.borrow().reply;
+        }
+        Some(WifiReply::CoreDone)
+    }
+
+    fn wifi_op_id(&self) -> Option<&str> {
+        #[cfg(test)]
+        if let Some(wifi) = &self.wifi_test {
+            return wifi.borrow().op_id;
+        }
+        None
     }
 }
 
@@ -614,6 +657,663 @@ fn arg(args: &[String], k: &str) -> Option<String> {
     args.iter().find_map(|a| a.strip_prefix(k).map(String::from))
 }
 
+#[cfg(test)]
+fn isolated_render(test: &str, variants: &[&'static str]) -> Option<&'static str> {
+    // Theme and FreeType font pointers have process lifetime, like the device UI.
+    const VARIANT: &str = "LUYAZ_TEST_RENDER_VARIANT";
+    if let Ok(active) = std::env::var(VARIANT) {
+        return Some(variants.iter().copied().find(|&v| v == active).unwrap());
+    }
+    let exe = std::env::current_exe().unwrap();
+    for &variant in variants {
+        let out = std::process::Command::new(&exe)
+            .args(["--exact", test, "--nocapture"])
+            .env(VARIANT, variant)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success() && out.stdout.starts_with(b"\nrunning 1 test"),
+            "{test} ({variant}): {}\n{}\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+    }
+    None
+}
+
+#[cfg(test)]
+fn init_render_test() {
+    // SAFETY: this test is the sole LVGL user in the process; FB outlives the display.
+    unsafe {
+        sys::lv_init();
+        sys::lv_tick_set_cb(Some(tick_cb));
+        let disp = sys::lv_display_create(W as i32, H as i32);
+        sys::lv_display_set_flush_cb(disp, Some(flush_cb));
+        sys::lv_display_set_buffers(disp, (&raw mut FB).cast(), std::ptr::null_mut(),
+            (W * H * 2) as u32, sys::lv_display_render_mode_t::LV_DISPLAY_RENDER_MODE_DIRECT);
+        let finger = sys::lv_indev_create();
+        sys::lv_indev_set_type(finger, sys::lv_indev_type_t::LV_INDEV_TYPE_POINTER);
+        sys::lv_indev_set_read_cb(finger, Some(finger_cb));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn mihomo_home_card_render_and_navigation() {
+    let Some(variant) = isolated_render("render::mihomo_home_card_render_and_navigation", &["light-zh", "dark-zh", "light-en", "dark-en"]) else { return };
+    init_render_test();
+    let en = variant.ends_with("-en");
+    let theme = if variant.starts_with("dark") { "dark" } else { "light" };
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: None,
+    });
+    let mut model = Model { data_ok: 1, bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    model.chill_online = 1;
+    model.chill_profile = Some("SG2HOME very long profile name with a long ending".into());
+    model.chill_mode_raw = Some("rule".into());
+    model.chill_node = Some("SG2HOME".into());
+    model.chill_speed = Some("↓1M/s ↑2K/s".into());
+    model.chill_traffic = Some("↓3G ↑4M".into());
+    ui::create(Conf::parse(&format!("appearance={theme}\nautooff=0\n{}", if en { "lang=en\n" } else { "" })), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model.clone()), src, "luyaz-ui");
+    settle(1200);
+    let labels = || {
+        let mut out = Vec::new();
+        lock_test_labels(Obj::screen_active(), &mut out);
+        out
+    };
+    let text = || labels().into_iter().map(|(s, _)| s).collect::<Vec<_>>().join(" ");
+    assert!(text().contains("Mihomo"));
+    assert!(text().contains(if en { "Running" } else { "运行中" }));
+    assert!(text().contains("SG2HOME"));
+    for (s, a) in labels().into_iter().filter(|(s, _)| s.starts_with("SG2HOME") || s == "Mihomo") {
+        assert!(a.x1 >= 0 && a.x2 < W as i32 && a.y1 >= 0 && a.y2 < H as i32, "{variant}: {s:?}");
+    }
+    model.chill_mode_raw = Some("direct".into());
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(100);
+    assert!(text().contains(if en { "Direct" } else { "直连" }));
+    model.chill_online = 0;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(100);
+    assert!(text().contains(if en { "Unavailable" } else { "服务不可用" }));
+    model.chill_profile = Some(String::new());
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(100);
+    assert!(text().contains(if en { "Not configured" } else { "未配置" }));
+    model.chill_absent = 1;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(100);
+    assert!(!text().contains("Mihomo"));
+    model.chill_absent = 0;
+    ui::set_model(Rc::new(model));
+    ui::with(|u| u.refresh());
+    settle(100);
+    let a = ui::with(|u| u.home.sn.card.coords());
+    FX.store((a.x1 + a.x2) / 2, Ordering::Relaxed);
+    FY.store(a.y1 + 80, Ordering::Relaxed);
+    FDOWN.store(true, Ordering::Relaxed);
+    settle(100);
+    FDOWN.store(false, Ordering::Relaxed);
+    settle(500);
+    assert!(ui::with(|u| u.sub_visible(Sub::Chill)), "{variant}: one tap opens CHILL");
+}
+
+#[cfg(test)]
+#[test]
+fn wifi_switch_waits_for_readback_and_blocks_touch() {
+    if isolated_render("render::wifi_switch_waits_for_readback_and_blocks_touch", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let initial = WifiRead {
+        master: Some(false), module: Some(false), radios: [Some(false), Some(true)],
+        main: [Some(true); 2], power_save: Some(true), up: [false; 2],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read: initial, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let model = Model { bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+
+    let finger = |x, y, down| {
+        FX.store(x, Ordering::Relaxed);
+        FY.store(y, Ordering::Relaxed);
+        FDOWN.store(down, Ordering::Relaxed);
+        settle(100);
+    };
+    let tap_switch = |i: usize| {
+        let a = ui::with(|u| u.wifi.sw[i].coords());
+        let (x, y) = ((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+        finger(x, y, true);
+        finger(x, y, false);
+    };
+    let checked = || ui::with(|u| std::array::from_fn(|i| u.wifi.sw[i].has_state(lv::LV_STATE_CHECKED)));
+    fn has_text(o: Obj, text: &[u8]) -> bool {
+        !o.hidden() && ((checks::is_label(o) && o.text() == text)
+            || (0..o.child_count() as i32).any(|i| has_text(o.child(i), text)))
+    }
+    let overlay_has = |text: &str| has_text(Obj::layer_top(), text.as_bytes());
+    let pending = || overlay_has("正在处理，等设备确认 Wi-Fi");
+    let warned = || overlay_has("Wi-Fi 更改未确认");
+    let show_op = |slot: &str, id: &str, phase: &str, registered: bool| {
+        let mut model = ui::with(|u| (*u.model).clone());
+        model.screen_op = Some(format!(r#"{{"{slot}":{{"op_id":"{id}","phase":"{phase}","steps":[{{"key":"applied","done":true}},{{"key":"registered","done":{registered}}}]}}}}"#));
+        ui::set_model(Rc::new(model));
+        ui::with(|u| u.refresh());
+    };
+    assert_eq!(checked(), [false, false, true, true]);
+    tap_switch(2); // band controls are disabled with the module off
+    assert!(wifi.borrow().writes.is_empty());
+    tap_switch(0);
+    assert_eq!(wifi.borrow().writes, [("wifi.settings".into(), r#"{"wifi_onoff":"1"}"#.into())]);
+    assert!(pending());
+
+    tap_switch(0);
+    tap_switch(2);
+    show_op("active", "screen-1-1", "accepted", false);
+    finger(35, 450, true); // a tab tap started under the overlay
+    wifi.borrow_mut().read = WifiRead { master: Some(true), module: Some(true), ..initial };
+    show_op("active", "screen-1-1", "verifying", true);
+    show_op("last", "screen-9-1", "confirmed", true);
+    settle(1100);
+    assert_eq!(wifi.borrow().writes.len(), 1);
+    assert_eq!(checked(), [false, false, true, true]);
+    assert_eq!(wifi.borrow().fresh_reads, 0);
+    assert!(pending());
+
+    // The HTTP reply was lost. The matching Core verdict starts one fresh read.
+    wifi.borrow_mut().block_readback = true;
+    show_op("last", "screen-1-1", "confirmed", true);
+    assert_eq!(wifi.borrow().fresh_reads, 1);
+    assert!(pending());
+    show_op("last", "screen-9-2", "confirmed", true); // the verdict must survive this overwrite
+    wifi.borrow_mut().block_readback = false;
+    settle(1200);
+    assert!(!pending());
+    finger(35, 450, false);
+    assert_eq!(ui::with(|u| u.cur_tab()), ui::TAB_WIFI);
+    assert_eq!(checked(), [true, false, true, true]);
+    assert!(!warned());
+
+    tap_switch(1);
+    assert_eq!(wifi.borrow().writes[1], ("wifi.settings".into(), r#"{"radio2_disabled":"0"}"#.into()));
+    show_op("last", "screen-1-2", "confirmed", false); // terminal without Core's layout confirmation
+    settle(1200);
+    assert!(!pending());
+    assert!(warned());
+    assert_eq!(checked(), [true, false, true, true]);
+
+    // Known saved preference but no running module: preserve display and reject a band tap.
+    wifi.borrow_mut().read.module = Some(false);
+    settle(6100);
+    tap_switch(2);
+    assert_eq!(wifi.borrow().writes.len(), 2);
+    wifi.borrow_mut().read.module = Some(true);
+    wifi.borrow_mut().read.radios[1] = None;
+    settle(6100);
+    assert_eq!(checked(), [true, false, true, true]);
+    assert!(ui::with(|u| u.wifi.sw[2].has_state(lv::LV_STATE_DISABLED)));
+    tap_switch(2);
+    assert_eq!(wifi.borrow().writes.len(), 2);
+    wifi.borrow_mut().read.radios[1] = Some(true);
+    settle(6100);
+    tap_switch(2);
+    assert_eq!(wifi.borrow().writes[2], ("wifi.settings".into(), r#"{"radio5_disabled":"1"}"#.into()));
+    wifi.borrow_mut().reply = Some(WifiReply::Failed);
+    settle(2200);
+    assert!(warned());
+    assert!(!pending());
+    assert_eq!(checked(), [true, false, true, true]);
+
+    // A missing HTTP response and missing outcome must never send the request twice.
+    tap_switch(0);
+    assert_eq!(wifi.borrow().writes[3].1, r#"{"wifi_onoff":"0"}"#);
+    TICK.fetch_add(75_000, Ordering::Relaxed);
+    ui::with(|u| u.refresh());
+    assert!(pending(), "a sent transaction gets longer than the emergency deadline");
+    TICK.fetch_add(70_000, Ordering::Relaxed);
+    ui::with(|u| u.refresh());
+    assert!(!pending());
+    assert!(warned());
+    assert_eq!(wifi.borrow().writes.len(), 4);
+    settle(1200);
+    assert_eq!(checked(), [true, false, true, true]);
+
+    wifi.borrow_mut().emergency = true;
+    tap_switch(0);
+    wifi.borrow_mut().reply = Some(WifiReply::EmergencyDone);
+    wifi.borrow_mut().read = WifiRead { up: [false, true], ..initial };
+    settle(2200);
+    assert!(pending(), "the emergency script still needs a running-layout readback");
+    wifi.borrow_mut().read = initial;
+    settle(1200);
+    assert!(!pending());
+    assert_eq!(checked(), [false, false, true, true]);
+}
+
+#[cfg(test)]
+#[test]
+fn wifi_channel_waits_for_live_readback_after_a_switch() {
+    if isolated_render("render::wifi_channel_waits_for_live_readback_after_a_switch", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let read = WifiRead {
+        master: Some(true), module: Some(true), radios: [Some(false), Some(true)],
+        main: [Some(true); 2], power_save: None, up: [false, true],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let mut model = Model { data_ok: 1, bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    model.data.ap_on = 1;
+    model.data.ap5_dfs = 0;
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model.clone()), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+    let channel = || ui::with(|u| u.wifi.ch5.text());
+    assert_eq!(channel(), "—".as_bytes());
+
+    model.data.ap5_dfs = 1;
+    model.data.ap5_ch = 36;
+    model.data.ap5_width = 160;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    assert_eq!(channel(), "36 · 160 MHz · DFS".as_bytes());
+
+    wifi.borrow_mut().read = WifiRead { master: Some(false), module: Some(false), up: [false; 2], ..read };
+    model.data.ap_on = 0;
+    ui::set_model(Rc::new(model));
+    settle(6100);
+    assert_eq!(channel(), "未开".as_bytes(), "the old channel cannot outlive the link");
+}
+
+/// Unavailable NFC data disables writes while the handle keeps its last known position.
+#[cfg(test)]
+#[test]
+fn wifi_nfc_row_shows_only_a_live_known_value() {
+    if isolated_render("render::wifi_nfc_row_shows_only_a_live_known_value", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let initial = WifiRead {
+        master: Some(true), module: Some(true), radios: [Some(true), Some(true)],
+        main: [Some(true); 2], power_save: Some(true), up: [true, true],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read: initial, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let mut model = Model { bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model.clone()), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+
+    let finger = |x, y, down| {
+        FX.store(x, Ordering::Relaxed);
+        FY.store(y, Ordering::Relaxed);
+        FDOWN.store(down, Ordering::Relaxed);
+        settle(100);
+    };
+    let tap_nfc = || {
+        let a = ui::with(|u| u.wifi.sw[4].coords());
+        let (x, y) = ((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+        finger(x, y, true);
+        finger(x, y, false);
+    };
+    let nfc = || {
+        ui::with(|u| {
+            (
+                u.wifi.sw[4].has_state(lv::LV_STATE_CHECKED),
+                u.wifi.sw[4].has_state(lv::LV_STATE_DISABLED),
+                u.wifi.sw_st[4].text(),
+            )
+        })
+    };
+
+    // no data at all: unknown, disabled, nothing to send
+    assert_eq!(nfc(), (false, true, "—".into()));
+    tap_nfc();
+    assert!(wifi.borrow().writes.is_empty());
+
+    // a live model with the switch on: the row is a real control again
+    model.data_ok = 1;
+    model.data.nfc_on = 1;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(1100);
+    assert_eq!(nfc(), (true, false, "已开启".into()));
+    tap_nfc();
+    assert_eq!(wifi.borrow().writes, [("nfc.set".into(), r#"{"enabled":0,"flag":2}"#.into())]);
+    assert_eq!(nfc().0, false, "the flip shows until the core says otherwise");
+    model.data.nfc_on = 0;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(1100);
+    assert_eq!(nfc(), (false, false, "已关闭".into()));
+
+    // the core goes silent: unknown again, the handle keeps its word, no second write
+    model.backend_silent = 1;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(1100);
+    assert_eq!(nfc(), (false, true, "—".into()));
+    tap_nfc();
+    assert_eq!(wifi.borrow().writes.len(), 1);
+
+    // and back: the value the model carries, not the one the handle held
+    model.backend_silent = 0;
+    model.data.nfc_on = 1;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(1100);
+    assert_eq!(nfc(), (true, false, "已开启".into()));
+}
+
+/// 节能模式 through the core: CoreDone alone is not the saved selection — the fresh read
+/// must carry it; an explicit failure warns and leaves the row on the last known value.
+#[cfg(test)]
+#[test]
+fn wifi_power_save_confirms_on_the_fresh_saved_selection() {
+    if isolated_render("render::wifi_power_save_confirms_on_the_fresh_saved_selection", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let initial = WifiRead {
+        master: Some(true), module: Some(true), radios: [Some(true), Some(true)],
+        main: [Some(true); 2], power_save: Some(true), up: [true, true],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read: initial, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let model = Model { bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+
+    let finger = |x, y, down| {
+        FX.store(x, Ordering::Relaxed);
+        FY.store(y, Ordering::Relaxed);
+        FDOWN.store(down, Ordering::Relaxed);
+        settle(100);
+    };
+    let tap = |i: usize| {
+        let a = ui::with(|u| u.wifi.sw[i].coords());
+        let (x, y) = ((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+        finger(x, y, true);
+        finger(x, y, false);
+    };
+    let psm_checked = || ui::with(|u| u.wifi.sw[3].has_state(lv::LV_STATE_CHECKED));
+    fn has_text(o: Obj, text: &[u8]) -> bool {
+        !o.hidden() && ((checks::is_label(o) && o.text() == text)
+            || (0..o.child_count() as i32).any(|i| has_text(o.child(i), text)))
+    }
+    let overlay_has = |text: &str| has_text(Obj::layer_top(), text.as_bytes());
+    let pending = || overlay_has("正在处理，等设备确认 Wi-Fi");
+    let warned = || overlay_has("Wi-Fi 更改未确认");
+
+    assert!(psm_checked());
+    tap(3);
+    assert_eq!(wifi.borrow().writes, [("wifi.power_save".into(), r#"{"enabled":0}"#.into())]);
+    assert!(pending());
+
+    // core said done but the read still carries the old selection: not confirmed
+    wifi.borrow_mut().reply = Some(WifiReply::CoreDone);
+    settle(1100);
+    assert!(pending(), "CoreDone alone does not confirm the power-save write");
+    assert!(psm_checked(), "the handle stays on the confirmed value");
+
+    // the fresh read carries the saved selection: done
+    wifi.borrow_mut().read.power_save = Some(false);
+    settle(1200);
+    assert!(!pending());
+    assert!(!warned());
+    assert!(!psm_checked());
+
+    // an explicit failure warns without claiming the change
+    tap(3);
+    assert_eq!(wifi.borrow().writes[1], ("wifi.power_save".into(), r#"{"enabled":1}"#.into()));
+    wifi.borrow_mut().reply = Some(WifiReply::Failed);
+    settle(2200);
+    assert!(!pending());
+    assert!(warned());
+    assert!(!psm_checked(), "a refused write does not flip the row");
+}
+
+#[cfg(test)]
+#[test]
+fn swipe_unlock_blocks_underlying_controls() {
+    if isolated_render("render::swipe_unlock_blocks_underlying_controls", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let initial = WifiRead {
+        master: Some(false), module: Some(false), radios: [Some(false), Some(true)],
+        main: [Some(true); 2], power_save: Some(true), up: [false; 2],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read: initial, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let model = Model { bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+    let a = ui::with(|u| u.wifi.sw[0].coords());
+    let (x, y) = ((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+    assert!(y <= 345, "the actual Wi-Fi switch must be within reach of a bottom swipe: {y}");
+    let finger = |x, y, down, ms| {
+        FX.store(x, Ordering::Relaxed);
+        FY.store(y, Ordering::Relaxed);
+        FDOWN.store(down, Ordering::Relaxed);
+        settle(ms);
+    };
+    ui::with(|u| { u.init_screen_lock(); u.prepare_screen_wake(); });
+    finger(x, 445, true, 40);
+    finger(x, y, false, 40);
+    assert!(ui::with(|u| u.screen_locked()), "wake-suppressed contact unlocked the screen");
+    assert!(wifi.borrow().writes.is_empty());
+    settle(400);
+    finger(x, y, true, 100);
+    finger(x, y, false, 100);
+    assert!(ui::with(|u| u.screen_locked()));
+    assert!(wifi.borrow().writes.is_empty());
+    let guide = |expected: &str| {
+        let mut labels = Vec::new();
+        let layer = Obj(unsafe { sys::lv_layer_sys() });
+        lock_test_labels(layer, &mut labels);
+        assert!(labels.iter().any(|(s, _)| s == expected), "{labels:?}");
+    };
+    let start_y = y + 92;
+    finger(x - 64, start_y, true, 100);
+    guide("继续上滑");
+    finger(x - 40, start_y - 36, true, 100);
+    assert!(ui::with(|u| u.lock_needs_touch_samples()));
+    lock_test_capture("dark-swipe-partial");
+    guide("继续上滑");
+    finger(x, y, true, 100);
+    assert!(ui::with(|u| u.screen_locked()));
+    assert!(wifi.borrow().writes.is_empty());
+    guide("松手解锁");
+    lock_test_capture("dark-swipe-ready");
+    finger(x, y, false, 100); // release over the real write-producing switch
+    assert!(!ui::with(|u| u.screen_locked()));
+    assert!(!ui::with(|u| u.lock_needs_touch_samples()));
+    assert_eq!(ui::with(|u| u.cur_tab()), ui::TAB_WIFI);
+    assert!(wifi.borrow().writes.is_empty());
+
+    // A previously forwarded press must be cancelled even if the blocking sample is its release.
+    finger(x, y, true, 100);
+    ui::with(|u| u.engage_screen_lock());
+    finger(x, y, false, 100);
+    assert!(wifi.borrow().writes.is_empty());
+    assert!(ui::with(|u| u.screen_locked()));
+    finger(x, 295, true, 100);
+    finger(x, 265, true, 100);
+    guide("继续上滑");
+    finger(x, 265, false, 100);
+    guide("从下半屏向上滑动解锁");
+    assert!(!ui::with(|u| u.lock_needs_touch_samples()));
+    finger(x, 445, true, 100);
+    finger(x, y, true, 100);
+    finger(x, y, false, 100);
+    assert!(!ui::with(|u| u.screen_locked()));
+    finger(x, y, true, 100);
+    finger(x, y, false, 100);
+    assert_eq!(wifi.borrow().writes, [("wifi.settings".into(), r#"{"wifi_onoff":"1"}"#.into())]);
+}
+
+#[cfg(test)]
+fn lock_test_labels(o: Obj, out: &mut Vec<(String, sys::lv_area_t)>) {
+    if o.is_null() || o.hidden() {
+        return;
+    }
+    if checks::is_label(o) {
+        out.push((String::from_utf8_lossy(&o.text()).into_owned(), o.coords()));
+    }
+    for i in 0..o.child_count() as i32 {
+        lock_test_labels(o.child(i), out);
+    }
+}
+
+#[cfg(test)]
+fn lock_test_capture(name: &str) {
+    // SAFETY: the test owns the default display and framebuffer.
+    unsafe { sys::lv_refr_now(std::ptr::null_mut()) };
+    if let Some(dir) = std::env::var_os("LUYAZ_LOCK_TEST_PNG_DIR") {
+        let path = std::path::PathBuf::from(dir).join(format!("lock-{name}.png"));
+        let fb = unsafe { std::slice::from_raw_parts((&raw const FB).cast::<u16>(), W * H) };
+        std::fs::write(&path, plat::png_rgb565(W as u32, H as u32, fb))
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn swipe_unlock_render_themes_and_data() {
+    if let Some(theme) = isolated_render("render::swipe_unlock_render_themes_and_data", &["light", "dark"]) {
+        render_lock_theme(theme);
+    }
+}
+
+#[cfg(test)]
+fn render_lock_theme(theme: &str) {
+    init_render_test();
+    let now = 1_790_250_112;
+    let tm = crate::clock::local(now);
+    let time = format!("{:02}:{:02}", tm.hour, tm.min);
+    let date = format!("{:02}-{:02}", tm.mon, tm.mday);
+    {
+        let src = Box::new(Replay {
+            feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+            next: None, wifi_test: None,
+        });
+        let mut model = Model { now, bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+        ui::create(Conf::parse(&format!("appearance={theme}\nautooff=0\nspeed_bits=0\n")), logic::launch_parse(&["luyaz-ui"]),
+            Rc::new(model.clone()), src, "luyaz-ui");
+        ui::with(|u| u.init_screen_lock());
+        settle(1200);
+        let labels = || {
+            // SAFETY: this test owns the default display.
+            let root = Obj(unsafe { sys::lv_display_get_layer_sys(std::ptr::null_mut()) });
+            let mut labels = Vec::new();
+            lock_test_labels(root, &mut labels);
+            labels
+        };
+        let text = || labels().into_iter().map(|(s, _)| s).collect::<Vec<_>>().join(" ");
+        let unavailable = text();
+        assert!(unavailable.contains(&time), "{theme}: {unavailable}");
+        assert!(unavailable.contains(&date), "{theme}: {unavailable}");
+        assert!(unavailable.contains("状态暂不可用"), "{theme}: {unavailable}");
+        assert!(unavailable.matches('—').count() >= 2, "{theme}: {unavailable}");
+        for (s, a) in labels().into_iter().filter(|(s, _)| !s.is_empty()) {
+            assert!(a.x1 >= 0 && a.y1 >= 0 && a.x2 < W as i32 && a.y2 < H as i32,
+                "{theme}: label {s:?} out of bounds: {},{}-{},{}", a.x1, a.y1, a.x2, a.y2);
+        }
+        let check_geometry = || {
+            let root = Obj(unsafe { sys::lv_display_get_layer_sys(std::ptr::null_mut()) });
+            let mut checks = Checks::default();
+            checks.collect(root);
+            checks.geo_walk(root);
+            checks.page_done("lock");
+            assert!(checks.fails.is_empty(), "{theme}: {:?}", checks.fails);
+            assert_eq!(checks.ntrunc, 0, "{theme}: truncated lock text");
+        };
+        check_geometry();
+        lock_test_capture(&format!("{theme}-unavailable"));
+
+        model.data_ok = 1;
+        model.data.populated = 1;
+        model.data.radio = "LTE".into();
+        model.data.ap_on = 0;
+        model.data.batt_pct = 75;
+        ui::set_model(Rc::new(model.clone()));
+        ui::with(|u| u.refresh());
+        settle(100);
+        let zero = text();
+        assert!(!zero.contains("状态暂不可用"), "{theme}: {zero}");
+        assert!(zero.contains("Wi-Fi 关"), "{theme}: {zero}");
+        assert_eq!(zero.matches("0 B/s").count(), 2, "{theme}: {zero}");
+        lock_test_capture(&format!("{theme}-zero-bytes"));
+
+        // Repeat the paint with exactly the same input; unchanged labels must not invalidate.
+        STILL.lock().unwrap().clear();
+        let disp = unsafe { sys::lv_display_get_default() };
+        unsafe { sys::lv_display_add_event_cb(disp, Some(still_cb), sys::lv_event_code_t::LV_EVENT_INVALIDATE_AREA, std::ptr::null_mut()) };
+        ui::with(|u| u.paint_screen_lock());
+        unsafe { sys::lv_display_remove_event_cb_with_user_data(disp, Some(still_cb), std::ptr::null_mut()) };
+        assert!(STILL.lock().unwrap().is_empty(), "{theme}: identical lock frame invalidated");
+
+        model.data.down_bps = 1024;
+        model.data.up_bps = 2048;
+        model.data.ap_on = 1;
+        model.now += 1;
+        ui::set_model(Rc::new(model.clone()));
+        ui::with(|u| u.refresh());
+        settle(100);
+        let bytes = text();
+        assert!(bytes.contains("1 KB/s") && bytes.contains("2 KB/s"), "{theme}: {bytes}");
+        assert!(bytes.contains("Wi-Fi 开"), "{theme}: {bytes}");
+        check_geometry();
+        lock_test_capture(&format!("{theme}-bytes"));
+        ui::with(|u| { u.conf.speed_bits = true; u.paint_screen_lock(); });
+        settle(100);
+        let bits = text();
+        assert!(bits.contains("8 Kbps") && bits.contains("16 Kbps"), "{theme}: {bits}");
+        check_geometry();
+        lock_test_capture(&format!("{theme}-bits"));
+        model.backend_silent = 1;
+        ui::set_model(Rc::new(model));
+        ui::with(|u| u.refresh());
+        settle(100);
+        let silent = text();
+        assert!(silent.contains("状态暂不可用"), "{theme}: {silent}");
+        lock_test_capture(&format!("{theme}-silent"));
+    }
+}
+
 /// `luyaz-ui --hitcheck` (eng review round 3 D5): Home, every tab and every subpage with the ▲
 /// shown (an open incident can keep it lit for days): nothing tappable may sit under its 44×44
 /// box. One line per page, "HIT ok <page>" or "HIT FAIL <page>: <what> at x,y w×h"; exit 1 on any.
@@ -639,6 +1339,8 @@ pub fn hitcheck(args: &[String]) -> i32 {
         step: Rc::new(RefCell::new(None)),
         cur: Rc::new(RefCell::new(String::new())),
         next: None,
+        #[cfg(test)]
+        wifi_test: None,
     });
     ui::create(conf, logic::launch_parse(&["luyaz-ui"]), Rc::new(Model::default()), src, "luyaz-ui");
     settle(200);
@@ -853,7 +1555,11 @@ pub fn run(args: &[String]) -> i32 {
     }
     // the model an action inside the current step leaves (the C log's model line right after it)
     let pending: Pending = Rc::new(RefCell::new(None));
-    let mut replay = Some(Box::new(Replay { feed: feed_models, step: pending.clone(), cur: cur.clone(), next: None }));
+    let mut replay = Some(Box::new(Replay {
+        feed: feed_models, step: pending.clone(), cur: cur.clone(), next: None,
+        #[cfg(test)]
+        wifi_test: None,
+    }));
 
     let mut checks = Checks::default();
     checks.dump = args.iter().any(|a| a == "--dump");
@@ -1063,10 +1769,6 @@ pub fn run(args: &[String]) -> i32 {
                 }
                 (Some("lang_note_reset_cb(NULL)"), _) => {
                     ui::with(|u| u.lang_note_reset());
-                    true
-                }
-                (Some("ui_arm_clear(&s_hx_arm)"), _) => {
-                    ui::with(|u| u.cp.hx_arm.clear());
                     true
                 }
                 (Some("power_menu_set"), Some(v)) => {

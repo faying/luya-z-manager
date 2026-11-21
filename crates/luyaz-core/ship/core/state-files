@@ -7,7 +7,6 @@
 /data/local/tmp/charge_limit.json
 /data/local/tmp/sms_forward.json
 /data/luyaz/lanid/aliases.json
-/data/luyaz/core/poller-allow.json
 /data/luyaz/core/long/regress-limits.json
 /data/luyaz/core/ops/agent-limit.json
 /data/luyaz/core/ops/roam-cheap.json

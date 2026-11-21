@@ -62,7 +62,7 @@ fn picker_explains_every_template_scenario() {
     let cfg = template();
     let home = &cfg.scenarios[0];
     assert_eq!(describe_detect(&home.detect, "460"), "还没设家里的 Wi-Fi，不会自动进入");
-    assert_eq!(describe_actions(home), "关 Wi-Fi · 不休眠，Tailscale 一直连得上");
+    assert_eq!(describe_actions(home), "关 Wi-Fi · 不休眠");
     let away = cfg.scenarios.iter().find(|s| s.id == AWAY_ID).unwrap();
     assert_eq!(describe_detect(&away.detect, "460"), "其他情景都不符合时（默认）");
     assert_eq!(describe_actions(away), "开 Wi-Fi");
@@ -81,7 +81,7 @@ fn picker_explains_every_template_scenario_in_english() {
     let cfg = template();
     let home = &cfg.scenarios[0];
     assert_eq!(describe_detect_both(&home.detect, "460").1, "Home Wi-Fi not set yet; never entered automatically");
-    assert_eq!(describe_actions_both(home).1, "Wi-Fi off · No sleep; Tailscale stays reachable");
+    assert_eq!(describe_actions_both(home).1, "Wi-Fi off · Stay awake");
     let away = cfg.scenarios.iter().find(|s| s.id == AWAY_ID).unwrap();
     assert_eq!(describe_detect_both(&away.detect, "460").1, "When no other scenario matches (default)");
     assert_eq!(describe_actions_both(away).1, "Wi-Fi on");
@@ -194,11 +194,11 @@ fn list_before_l2(cfg: &Config) -> Vec<Value> {
 }
 
 #[test]
-fn scene_list_is_byte_for_byte_what_it_was() {
+fn scene_list_keeps_its_compatibility_shape() {
     let t = template();
     let abroad_does = "开 Wi-Fi · CHILL 改成直连";
     let want = format!(
-        r#"[{{"abroad":false,"does":"关 Wi-Fi · 不休眠，Tailscale 一直连得上","id":"home","name":"在家","when":"还没设家里的 Wi-Fi，不会自动进入","wifi_off":true}},{{"abroad":false,"does":"开 Wi-Fi","id":"away","name":"外出","when":"其他情景都不符合时（默认）","wifi_off":false}},{{"abroad":true,"does":"{abroad_does}","id":"abroad","name":"国外","when":"插的不是中国的卡时（当地卡、境外 eSIM）","wifi_off":false}}]"#
+        r#"[{{"abroad":false,"does":"关 Wi-Fi · 不休眠","id":"home","name":"在家","when":"还没设家里的 Wi-Fi，不会自动进入","wifi_off":true}},{{"abroad":false,"does":"开 Wi-Fi","id":"away","name":"外出","when":"其他情景都不符合时（默认）","wifi_off":false}},{{"abroad":true,"does":"{abroad_does}","id":"abroad","name":"国外","when":"插的不是中国的卡时（当地卡、境外 eSIM）","wifi_off":false}}]"#
     );
     assert_eq!(serde_json::to_string(&picker_list(&t)).unwrap(), want);
     let cfg = Config { scenarios: every_kind_scenarios(), ..template() };

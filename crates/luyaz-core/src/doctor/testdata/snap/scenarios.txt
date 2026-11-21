@@ -62,12 +62,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -141,12 +136,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -217,12 +207,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -294,12 +279,7 @@ c（有原厂服务没注册：屏幕卡 logo / 不拨号的根源）
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -370,12 +350,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -446,12 +421,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -522,12 +492,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -598,12 +563,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -674,12 +634,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -750,12 +705,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -826,12 +776,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -902,12 +847,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -978,12 +918,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1054,12 +989,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1130,12 +1060,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1206,12 +1131,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1282,12 +1202,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1358,12 +1273,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1437,12 +1347,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1516,12 +1421,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1592,12 +1492,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	-
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1674,12 +1569,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1750,12 +1640,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1826,12 +1711,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1905,12 +1785,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -1981,12 +1856,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2057,12 +1927,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2133,12 +1998,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2209,12 +2069,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2285,12 +2140,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2361,12 +2211,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2437,12 +2282,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2513,12 +2353,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2589,12 +2424,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2665,12 +2495,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2741,12 +2566,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2817,12 +2637,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2890,12 +2705,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -2966,12 +2776,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3042,12 +2847,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3118,12 +2918,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3194,12 +2989,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3270,12 +3060,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3346,12 +3131,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3422,12 +3202,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3498,12 +3273,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3574,12 +3344,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3650,12 +3415,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3726,12 +3486,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
@@ -3802,12 +3557,7 @@ ok	manifest	清单	还没有清单	Manifest	No manifest yet
 --- --manifest
 unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
-unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
-unrecorded	record:tuning.env	$T/tuning.env	-	-
-unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
-unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
 unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
-unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
 unrecorded	record:rc.local	$T/rc	-	<rc0>
 unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
 unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-

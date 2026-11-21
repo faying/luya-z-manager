@@ -1222,21 +1222,24 @@ pub(crate) fn wifi_iface_on(sets: &[BTreeMap<String, String>], iface: &str) -> b
 }
 
 /// wifi 块：uci `wireless` 里的主网络两个频段、访客网络和总开关；密码只留「有没有」。
-/// 没有 wireless 配置（两个主网络都没 SSID、也没有 `zte_mbb`）就没有块。
+/// 没有两个主网络的 SSID 或原厂开关读数就没有块。
 pub(crate) fn wifi_block(
     sets: &[BTreeMap<String, String>],
     guest_left: Option<&Result<Value, String>>,
 ) -> Option<c::Wifi> {
-    let get = |s: &str, k: &str| uci_get(sets, &format!("wireless.{s}.{k}"));
+    let lookup = |key: &str| sets.iter().find_map(|m| m.get(key).map(String::as_str));
+    let switches = luyaz_wifi::switches::read(lookup);
+    let get = |s: &str, k: &str| lookup(&format!("wireless.{s}.{k}")).unwrap_or_default();
     if get("main_2g", "ssid").is_empty()
         && get("main_5g", "ssid").is_empty()
-        && get("zte_mbb", "wifi_onoff").is_empty()
+        && lookup("wireless.zte_mbb.wifi_onoff").is_none()
+        && lookup("wireless.zte_mbb.wifi_onoff_by_user").is_none()
     {
         return None;
     }
-    let band = |ap: &str, radio: &str| c::WifiBand {
-        ap_on: get(ap, "disabled") != "1",
-        radio_on: get(radio, "disabled") != "1",
+    let band = |ap: &str, radio: &str, i: usize| c::WifiBand {
+        ap_on: switches.main[i],
+        radio_on: switches.radios[i],
         ssid: get(ap, "ssid").into(),
         encryption: get(ap, "encryption").into(),
         has_password: !get(ap, "key").is_empty(),
@@ -1245,18 +1248,16 @@ pub(crate) fn wifi_block(
         txpower: get(radio, "txpowerpercent").into(),
         htmode: get(radio, "htmode").into(),
     };
-    // 和 agent `wifi.rs` 的 master_on_from / wifi6_from 一样
-    let on = get("zte_mbb", "wifi_onoff") != "0"
-        && !(get("main_2g", "disabled") == "1" && get("main_5g", "disabled") == "1");
     let left_s = guest_left
         .and_then(|r| r.as_ref().ok())
         .and_then(|v| number(v, "guest_left_time"));
     Some(c::Wifi {
-        on,
+        on: switches.master,
+        module_on: switches.module,
         wifi6: get("zte_mbb", "wifi6_switch") != "0",
         country: get("wifi0", "country").into(),
-        band_2g: band("main_2g", "wifi0"),
-        band_5g: band("main_5g", "wifi1"),
+        band_2g: band("main_2g", "wifi0", 0),
+        band_5g: band("main_5g", "wifi1", 1),
         guest: c::WifiGuest {
             ssid: get("guest_2g", "ssid").into(),
             encryption: get("guest_2g", "encryption").into(),
@@ -1753,6 +1754,10 @@ mod batch4_tests {
     #[test]
     fn wifi_block_keeps_passwords_on_the_device() {
         let sets = wireless(&[
+            ("wifi0", "wifi-device"),
+            ("wifi1", "wifi-device"),
+            ("main_2g", "wifi-iface"),
+            ("main_5g", "wifi-iface"),
             ("wifi0.htmode", "EHT40"),
             ("wifi0.channel", "0"),
             ("wifi0.disabled", "0"),
@@ -1785,8 +1790,8 @@ mod batch4_tests {
             ("zte_mbb.wifi_onoff", "1"),
         ]);
         let v = c::value(&wifi_block(&sets, None).unwrap());
-        // 厂商开关开着、两个主网络都关了 = 总开关关；没有 wifi6_switch 算开
-        assert_eq!(v["on"], false);
+        assert_eq!(v["on"], true);
+        assert_eq!(v["module_on"], true);
         assert_eq!(v["wifi6"], true);
         assert_eq!(v["country"], "US");
         assert_eq!(v["band_5g"]["htmode"], "EHT160");
@@ -1810,6 +1815,27 @@ mod batch4_tests {
         assert_eq!(v["guest"]["on_2g"], true);
         assert_eq!(v["guest"]["left_s"], 3599);
         assert!(wifi_block(&wireless(&[("wifi0.country", "US")]), None).is_none());
+    }
+
+    #[test]
+    fn wifi_block_separates_master_module_and_saved_bands() {
+        let sets = wireless(&[
+            ("zte_mbb.wifi_onoff_by_user", "1"),
+            ("zte_mbb.wifi_onoff", "0"),
+            ("wifi0", "wifi-device"),
+            ("wifi0.disabled", "1"),
+            ("wifi0.disabled_bk", "1"),
+            ("wifi1", "wifi-device"),
+            ("wifi1.disabled", "1"),
+            ("main_5g", "wifi-iface"),
+        ]);
+        let v = c::value(&wifi_block(&sets, None).unwrap());
+        assert_eq!(v["on"], true);
+        assert_eq!(v["module_on"], false);
+        assert_eq!(v["band_2g"]["radio_on"], false);
+        assert_eq!(v["band_5g"]["radio_on"], true);
+        assert!(v["band_2g"]["ap_on"].is_null());
+        assert_eq!(v["band_5g"]["ap_on"], true);
     }
 }
 

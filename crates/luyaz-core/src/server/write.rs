@@ -185,10 +185,6 @@ async fn agent_gate(action: &str, body: &Value) -> Result<Option<AgentPass>, Res
     let Some(layer) = agent::layer_of(action) else {
         return refuse(Refusal::NotAllowed);
     };
-    // D-g：会断连接的只按主人的指令做（后续一步也要带着标记）
-    if layer == Layer::Link && !agent::by_instruction(body) {
-        return refuse(Refusal::NeedsInstruction);
-    }
     // regress 接受新水位（CEO G2）：只按主人的指令，不看敏感、不占 30 分钟限速
     if layer == Layer::Regress {
         return if agent::by_instruction(body) {
@@ -216,17 +212,6 @@ async fn agent_gate(action: &str, body: &Value) -> Result<Option<AgentPass>, Res
             Ok(iccid) => Some(iccid),
             Err(why) => return refuse(Refusal::Sensitive(why)),
         }
-    } else if layer == Layer::Link {
-        if let Err(why) = agent::link_sensitivity().await {
-            return refuse(Refusal::SensitiveLink(why));
-        }
-        // 确认要看到 Tailscale 在线；改之前就不在线，试用必然到点退回、白白断一次
-        if !agent::tailnet_up().await {
-            return refuse(Refusal::Busy(
-                "Tailscale is not online now, so the device could not prove the change keeps it".into(),
-            ));
-        }
-        None
     } else {
         // O10：别的 CHILL 工作在跑（含核心重启前起的 chill.sh）就不动；D10：切之前先真路径测一次
         if crate::ops::chill::busy() {
@@ -1162,11 +1147,10 @@ fn display_answer(action: &str, body: &Value, peer: Option<std::net::SocketAddr>
 }
 
 /// 只读、不改设备的动作：不清慢数据缓存、不标块（`sms.list_after` 翻页时每页一次，清缓存会让下一轮全部重读）。
-/// `poller.*` 只写核心自己的白名单文件、改内存里的事件（poller.rs）。
 /// `state.set_interval` 只改本进程执行者的采样间隔（`Executor::set_interval_ms`，一个原子数 + 唤醒），
 /// 不碰设备；触屏每次亮灭屏都调，以前每次都清全部缓存、全量重读（audit-2026-10-06 附录 A）。
 fn read_only(action: &str) -> bool {
-    matches!(action, "sms.list_after" | "state.set_interval") || action.starts_with("poller.")
+    matches!(action, "sms.list_after" | "state.set_interval")
 }
 
 /// 不改任何块的读数：只读动作，和原厂休眠开关（情景引擎每 15 秒保一次「不休眠」，以前每次都清全部缓存）。
@@ -1225,13 +1209,6 @@ async fn control_task(app: App, action: &str, body: Value) -> Response {
         ).into_response(),
         crate::control::Outcome::Failed(error) => return control_failed(action, error),
         crate::control::Outcome::NotHandled => {}
-    }
-    // power.tailnet_poller's allow list and banner (poller.rs): the core's own file, no device call
-    if let Some(r) = crate::poller::control(action, body.get("params").unwrap_or(&json!({}))) {
-        return match r {
-            Ok(v) => control_ok(action, v),
-            Err(e) => invalid_parameter(action, &e),
-        };
     }
     if action == "state.set_interval" {
         let params = body.get("params").cloned().unwrap_or(json!({}));
@@ -1468,15 +1445,15 @@ mod tests {
         // 编的票不算
         let r = agent_gate("apn.add", &json!({"source":"mcp","agent_ticket":"0000"})).await;
         assert!(r.is_err());
-        // D-g：会断连接的没带主人指令标记 → 403 needs_instruction（不读设备、不占位）
+        // 锁频/锁小区须由人确认，MCP 自己附加主人指令也不能放行。
         for action in ["band.set_lte", "band.reset", "cell.lock_nr"] {
-            let Err(r) = agent_gate(action, &json!({"source":"mcp"})).await else {
-                panic!("{action} let through without the owner's instruction");
+            let Err(r) = agent_gate(action, &json!({"source":"mcp","instruction":"owner"})).await else {
+                panic!("{action} let through without a person's approval");
             };
             assert_eq!(r.status(), StatusCode::FORBIDDEN, "{action}");
             let b = axum::body::to_bytes(r.into_body(), 4096).await.unwrap();
             let v: Value = serde_json::from_slice(&b).unwrap();
-            assert_eq!(v["error"]["code"], "needs_instruction", "{action}");
+            assert_eq!(v["error"]["code"], "not_allowed", "{action}");
         }
         for (action, body) in [
             ("op.status", json!({"source":"mcp"})),

@@ -8,7 +8,7 @@
 |:--|:--|
 | **SSH** | Key-only login with `ssh -p 2222 root@192.168.0.1` (password login stays off). Survives reboots |
 | **Advanced admin web** | `http://192.168.0.1:9090/` in a browser: band and cell locking, SMS, APN, firewall, Wi-Fi and more |
-| **ui touch UI** | A new front-panel interface with 5 task tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, CHILL/Tailscale exit, eSIM switching |
+| **ui touch UI** | A new front-panel interface with 5 task tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, the CHILL exit, eSIM switching |
 | **eSIM** | Download, switch and delete profiles on a removable eUICC card (5ber, eSTK.me and the like) from the admin web; switching works on the screen too |
 | **CHILL** (optional; only when you name it) | A transparent proxy on the device (mihomo) with the zashboard panel and rule-based routing. Bring your own subscription URL |
 
@@ -70,7 +70,8 @@ Ask it to "set up my U60". It checks that SSH works before asking for the admin 
                                #   authorized_keys and start_dropbear.sh, for reference before a firmware upgrade (restore skips it)
 ./install.sh restore 备份.tgz  # checks 备份.tgz against the 备份.tgz.sha256 that backup wrote next to it (a mismatch always stops;
                                #   an older backup without one needs LUYAZ_RESTORE_NO_SHA256=1), checks the copy again on the device,
-                               #   shows which files would change and writes only after you type yes
+                               #   shows which files would change and writes only after you type yes. A backup from before Tailscale
+                               #   was retired restores everything else; the retired Tailscale identity is skipped and reported
 ./install.sh undo [--ssh]      # put back what the first install changed (snapshot in /data/luyaz/kit/snap); files only, no
                                #   service is stopped or started, a reboot completes it. Keeps SSH unless --ssh
 ./install.sh reboot            # restart once and confirm everything comes back on its own
@@ -106,7 +107,7 @@ Everything lives under `/data`, which firmware upgrades leave alone. Autostart i
 | `/data/luyaz/ship/` | `u60 ship` transactions, the manifest `manifest.jsonl`, the boot clean-up `luyaz-recover.sh` |
 | `/data/alerts/`, `/data/crashlog/` | Alert history, crash logs |
 | `/data/esim/` | lpac, the tool that reads and writes the eSIM card |
-| `/data/chill/`, `/etc/init.d/chill` | CHILL: mihomo, rule sets, zashboard, `chill.sh`. The subscription URL goes in `/data/chill/chill.env` (written by you, readable only by root) |
+| `/data/chill/`, `/etc/init.d/chill` | CHILL: Mihomo, rule sets, zashboard and configuration profiles. Source files and subscription URLs are readable only by root. |
 | `/data/luyaz/kit/rc.local.orig` | The stock `rc.local` as it was before the first install |
 
 ## Everyday use
@@ -115,11 +116,23 @@ Everything lives under `/data`, which firmware upgrades leave alone. Autostart i
 - **New admin web password**: run `./install.sh admin` again and give a new one. Or, over SSH, change the line in `/data/luyaz/web.env` (no quotes, backslashes or spaces) and log in at `:9090` again. luyaz-web reads the file on each login, so nothing needs restarting.
 - **eSIM**: profiles are managed in the admin web under 「移动网络 → eSIM」 (Mobile network → eSIM). On the screen it is 「更多功能 → eSIM」 (More → eSIM); tap a profile twice to switch. The switch takes about 10 seconds and normally needs no reboot.
 - **CHILL**: the first `./install.sh chill` installs it but leaves it stopped.
-  1. Over SSH, copy `/data/chill/chill.env.example` to `/data/chill/chill.env`, put your subscription URL in it and `chmod 600` it. Static node snapshots go in `/data/chill/providers/`.
+  1. In Services → CHILL in the admin web, import a full configuration URL, a node subscription URL or a local YAML file.
   2. Run `sh /data/chill/chill.sh safe-start`. Check that the whole network still works, then run `sh /data/chill/chill.sh confirm` within 5 minutes. Without the confirm it shuts itself off again, so a bad config cannot lock you out.
-  3. From then on, switch it on and off and pick the exit in the admin web under 「服务 → CHILL」 (Services → CHILL). The button there opens zashboard, which the admin web serves behind its own login at `:9090/chill-ui/` (also reachable over Tailscale).
+  3. From then on, switch it on and off and pick the exit in the admin web under 「服务 → CHILL」 (Services → CHILL). The button there opens zashboard, which the admin web serves behind its own login at `:9090/chill-ui/`.
 
   A later `./install.sh chill` is an update. It keeps the subscription URL and cache; if CHILL was running, the core is restarted, and a new core that fails to start is swapped back for the old one automatically.
+
+## Older Tailscale installations
+
+The kit no longer installs Tailscale and does not automatically remove an older
+installation or an independently managed VPN. Before migrating one, establish
+a local management path and inspect active ship transactions and watch records;
+older watchdogs can roll back when Tailscale stops. Inspect `/etc/rc.local` for
+the old `/data/tailscale/start.sh` or `/data/tailscale-start.sh`, and check the
+old service and state before making owner-approved changes. Check network
+rules and old backups separately; do not remove unrelated VPN configuration.
+Old configuration archives remain verifiable, but restore reports and skips
+their retired `/data/tailscale` data.
 
 ## Things to avoid
 
@@ -143,7 +156,9 @@ rm -rf /data/luyaz /data/esim /data/chill /data/alerts /data/crashlog /data/powe
 reboot   # takes effect after the restart
 ```
 
-The stock interface is back after the restart. If you want auto-update again, turn it on in the web admin.
+The stock interface is back after the restart. Keep firmware auto-update off.
+The saved `rc.local` may predate or include an older Tailscale installation;
+inspect it before restoring it rather than assuming it is stock.
 
 ## Troubleshooting
 

@@ -31,9 +31,9 @@ await hubPage.goto(`${WEB}/charts`);
 await sigPage.goto(`${WEB}/signal`);
 
 // the side poll runs on the first tab; give it one round
-await hubPage.waitForSelector("a#st-ts", { timeout: 15000 }).catch(() => {});
+await hubPage.waitForSelector("a#st-chill", { timeout: 15000 }).catch(() => {});
 for (const [p, name] of [[hubPage, "/charts"], [sigPage, "/signal"]]) {
-  for (const id of ["st-net", "st-wifi", "st-sms", "st-chill", "st-ts"]) {
+  for (const id of ["st-net", "st-wifi", "st-sms", "st-chill"]) {
     const label = await p.locator(`a#${id}`).getAttribute("aria-label", { timeout: 15000 }).catch(() => null);
     ok(!!label, `${name} ${id}: ${label}`);
   }
@@ -100,7 +100,7 @@ await new Promise((r) => setTimeout(r, 30000)); // let the earlier tabs' upstrea
   const p = await phone.newPage();
   for (const path of ["/signal", "/charts"]) {
     await p.goto(WEB + path);
-    await p.waitForSelector("a#st-ts", { timeout: 15000 }).catch(() => {});
+    await p.waitForSelector("a#st-chill", { timeout: 15000 }).catch(() => {});
     const [sw, iw] = await p.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
     ok(sw <= iw, `phone ${path}: scrollWidth ${sw} ≤ ${iw}`);
     await p.screenshot({ path: `${OUT}/topbar-phone${path.replace("/", "-")}.png` });

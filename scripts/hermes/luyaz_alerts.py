@@ -102,8 +102,8 @@ def read_pages(cfg, since, device=None):
 
 
 # Night (23:00–08:00 Mac local time): ask at most every 30 min. Each ask wakes the device's
-# cellular link through the tailnet (Phase 9a, 10-18: one ask per 5 min drove a large share of tailscaled's
-# night traffic). Daytime stays every tick (5 min).
+# cellular link (Phase 9a, 10-18: one ask per 5 min drove a large share of its night traffic).
+# Daytime stays every tick (5 min).
 NIGHT = (23, 8)
 NIGHT_EVERY_S = 30 * 60
 

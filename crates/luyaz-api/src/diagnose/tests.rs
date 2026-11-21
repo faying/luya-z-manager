@@ -75,7 +75,7 @@ fn wifi_for_a_client() {
     );
     let l = judge_wifi(&Who::Client(Some("02:00:00:00:00:02".into())), &stas);
     assert_eq!(l.level, Level::Bad);
-    // wired, Tailscale, or a lease that isn't on Wi-Fi
+    // wired, another network path, or a lease that isn't on Wi-Fi
     for who in [
         Who::Client(None),
         Who::Client(Some("02:00:00:00:00:99".into())),

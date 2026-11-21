@@ -1,6 +1,3 @@
-{%- macro sw(on, label, url, off) -%}
-<button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="{{ label }}" aria-checked="{{ on }}"{% if on %} data-selected="true"{% endif %}{% if off %} disabled{% endif %} data-on:click="@post('{{ url }}')"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button>
-{%- endmacro -%}
 <div id="sc-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
 <div class="nd-status__main">
 <div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span{% if v.current.is_some() && v.tone != "bad" %} data-data{% endif %}>{{ v.state }}</span></span></div>
@@ -19,7 +16,6 @@
 <div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Last scan", "上次扫描") }}</span></span><span class="nd-row__value nd-mono">{{ v.last_scan }}</span></div>
 <div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("SIM country code", "SIM 归属地代码") }}</span></span><span class="nd-row__value">{% if let Some(m) = v.sim_mcc %}<span class="nd-mono">{{ m }}</span>{% else %}{{ v.l.pick("unknown", "未知") }}{% endif %}</span></div>
 <div class="nd-row nd-row--two" data-signals__ifmissing="{_hm: '{{ v.home_mcc }}'}"><span class="nd-row__text"><span class="nd-row__label" id="sc-hm-l">{{ v.l.pick("Home country code", "本国代码") }}</span><span class="nd-row__sub block">{% if v.sim_differs %}{{ v.l.pick("The SIM in use is not from this country, so the device counts as abroad.", "正在用的卡不是这个国家的，设备会按在国外处理。") }}{% else %}{{ v.l.pick("Mobile country code: 460 China, 208 France, 440 Japan.", "移动国家代码，例如 460 中国、208 法国、440 日本。") }}{% endif %}</span></span><input class="nd-field nd-mono sc-num" autocomplete="off" size="3" maxlength="3" inputmode="numeric" aria-labelledby="sc-hm-l" data-bind:_hm><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm"{% if v.locked %} disabled{% endif %} data-on:click="@post('/router/scenario/ask/home', {filterSignals: {include: /^_hm$/, exclude: /(?!)/}})">{{ v.l.pick("Save", "保存") }}</button></div>
-<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label" id="sc-eng-l">{{ v.l.pick("Engine on", "引擎开启") }}</span><span class="nd-row__sub block">{{ v.l.pick("Off: the device stays in away and never switches Wi-Fi off.", "关闭时设备停在「外出」，不会自己关 Wi-Fi。") }}</span></span>{% call sw(v.enabled, "sc-eng-l", v.eng_url, v.locked) %}{% endcall %}</div>
 </div></section>{% endif %}</div>
 <!--leaf-->
 <div id="sc-pin">{% if v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("Pin a scenario", "固定情景") }}</h2>
@@ -28,8 +24,9 @@
 <div class="sc-pad"><div class="nd-seg nd-seg--block" role="radiogroup" aria-label="{{ v.l.pick("Pin a scenario", "固定情景") }}"><div class="nd-seg__track">
 <button type="button" role="radio" class="nd-seg__item" aria-checked="{{ v.auto_on }}"{% if v.auto_on %} data-selected="true"{% else %} data-on:click="@post('/router/scenario/ask/pin')"{% endif %}{% if v.locked %} disabled{% endif %}>{{ v.l.pick("Auto", "自动") }}</button>
 {% for p in v.pin_rows %}<button type="button" role="radio" class="nd-seg__item" aria-checked="{{ p.on }}"{% if p.on %} data-selected="true"{% else %} data-on:click="@post('{{ p.url }}')"{% endif %}{% if v.locked %} disabled{% endif %}><span data-data>{{ p.name }}</span></button>
-{% endfor %}</div></div>
-<p class="nd-aux">{{ v.l.pick("Pinning holds one scenario regardless of what the device sees. It survives a reboot — use it if detection is misbehaving.", "固定后不管设备看到什么，都保持在这个情景，重启后也不变。识别出问题时用它兜底。") }}</p></div>
+{% endfor %}<button type="button" role="radio" class="nd-seg__item" aria-checked="{{ !v.enabled }}"{% if !v.enabled %} data-selected="true"{% else %} data-on:click="@post('{{ v.off_url }}')"{% endif %}{% if v.locked %} disabled{% endif %}>{{ v.l.pick("Off", "关闭") }}</button>
+</div></div>
+<p class="nd-aux">{{ v.l.pick("Auto chooses from what the device sees. Pinning holds one scenario regardless of what it sees and survives a reboot. Off keeps the current Wi-Fi, CHILL and other device state, stops automatic scanning and control, and can be turned back on from this selector.", "自动模式会按设备看到的网络选择情景。固定后不管设备看到什么，都保持在这个情景，重启后也不变。关闭会保留当前 Wi-Fi、CHILL 和其它设备状态，停止自动扫描与自动控制，之后可从这里重新开启。") }}</p></div>
 </div></section>{% endif %}</div>
 <!--leaf-->
 <div id="sc-home">{% if v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("Networks that mean “at home”", "代表「在家」的网络") }}</h2>

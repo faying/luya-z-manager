@@ -72,8 +72,7 @@ pub const UNDO_ACTIONS: [&str; 11] = [
     "wifi.settings",
     "wifi.guest",
 ];
-/// Undo that reloads Wi-Fi (items wifi.main / wifi.guest): tier 3 too, in Wi-Fi words; Tailscale
-/// goes over the mobile link, so no Tailscale warning.
+/// Undo that reloads Wi-Fi (items wifi.main / wifi.guest): tier 3 too, in Wi-Fi words.
 pub const RELOADS_WIFI: [&str; 2] = ["wifi.settings", "wifi.guest"];
 /// Undo that cuts the mobile link: the tier-3 dialog (DD10; controls-inventory 三（网络模式）/ 二).
 pub const CUTS_UPLINK: [&str; 9] = [
@@ -340,7 +339,8 @@ pub fn agent_label(e: &Value, l: Lang) -> Option<String> {
         return None;
     }
     let action = e["action"].as_str().unwrap_or("");
-    let link = crate::agent_act::LINK_ACTIONS.iter().any(|(a, _)| *a == action);
+    // Historical agent link actions remain identifiable after their endpoint is retired.
+    let link = matches!(action, "band.set_lte" | "band.set_nr" | "band.reset" | "cell.lock_lte" | "cell.lock_nr");
     let who = match (e["approved_by"].as_str(), l) {
         (Some("web"), Lang::En) => "Proposed by the AI agent, approved by you on the web page",
         (Some("web"), _) => "由 AI 代理提议、你在网页批准",
@@ -571,8 +571,8 @@ pub fn confirm(e: &Value, l: Lang) -> write::Confirm {
             recovery: Some(
                 if RELOADS_WIFI.contains(&action) {
                     l.pick(
-                        "If this browser is on the U60's Wi-Fi it loses the page for a while; if the name or password goes back, join with the old one. Over a cable, USB or Tailscale (which goes over the mobile link) the page is not affected.",
-                        "如果这个浏览器连的是 U60 的 Wi-Fi，页面会断开一会儿；名称或密码改回去的话，要用原来的重新连。经网线、USB 或 Tailscale（走移动网络）打开的不受影响。",
+                        "If this browser is on the U60's Wi-Fi it loses the page for a while; if the name or password goes back, join with the old one.",
+                        "如果这个浏览器连的是 U60 的 Wi-Fi，页面会断开一会儿；名称或密码改回去的话，要用原来的重新连。",
                     )
                 } else if action.starts_with("apn.") {
                     l.pick(
@@ -598,7 +598,7 @@ pub fn confirm(e: &Value, l: Lang) -> write::Confirm {
                 .into(),
             ),
             action: label,
-            cuts_uplink: !RELOADS_WIFI.contains(&action),
+            cuts_uplink: true,
             word: None,
             danger: false,
             revert: crate::write::Revert::No,

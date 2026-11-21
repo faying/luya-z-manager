@@ -3,24 +3,22 @@
 //!
 //! ```text
 //!  u60d blocks (one SSE, hub.rs): signal, interfaces → network · wlan → Wi-Fi · sms → SMS
-//!  poll() while tabs are open:  u60d /v2/api/public/status → Tailscale       ┐ every 10 s
+//!  poll() while tabs are open:  u60d /v2/api/public/status → services        ┐ every 10 s
 //!                               u60d /v2/api/alerts       → bar              ┘ (and right after "Got it")
 //!  each tab's stream: render(ctx) → leaves by id → only the changed ones are sent
 //!  POST /alerts/read?seq ─▶ u60d /api/alerts/read (agent.rs) ─▶ refetch ─▶ bar
 //! ```
 //! Where the browser came from ([`Via`], docs/designs/remote-path-guard.md) is decided here from
-//! its address, the Host it typed, the device's LAN interfaces and `ip route get` (a viewer
-//! behind another node's subnet route answers over `tailscale0`, R18-P0-04).
+//! its peer address and the device's LAN interfaces. Missing evidence is treated as remote.
 
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use askama::Template;
 use axum::extract::{ConnectInfo, Query, Request, State};
-use axum::http::{HeaderMap, header};
+use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use serde::Deserialize;
@@ -32,7 +30,7 @@ use crate::i18n::Lang;
 use crate::pages::Shared;
 
 /// Status icons drawn filled when on (the sprite carries their fill symbols too).
-pub const FILLED: [&str; 4] = ["WifiHigh", "Cloud", "Waves", "ChatCircleText"];
+pub const FILLED: [&str; 3] = ["WifiHigh", "Waves", "ChatCircleText"];
 
 /// u60d's side reads (local files, cheap).
 const POLL: Duration = Duration::from_secs(10);
@@ -71,11 +69,9 @@ impl Ctx {
 pub enum Via {
     /// On the device's LAN (wired, Wi-Fi, USB) or the device itself.
     Local,
-    /// A tailnet address, or a tailnet name / address in Host.
-    Tailnet,
-    /// Not on the LAN, and the device answers it over `tailscale0`: another node's subnet route.
-    SubnetRoute,
-    /// Neither (or no peer address): could be anything, so it is warned like a remote one.
+    /// The peer is outside the device's known LAN.
+    Remote,
+    /// The peer or LAN networks are unavailable: warn like a remote connection.
     Unknown,
 }
 
@@ -99,8 +95,7 @@ impl Via {
         let l = *l.borrow();
         match self {
             Via::Local => "",
-            Via::Tailnet => l.pick("Remote via Tailscale", "经 Tailscale 远程访问"),
-            Via::SubnetRoute => l.pick("Remote via a subnet route", "经子网路由远程访问"),
+            Via::Remote => l.pick("Remote connection", "远程访问"),
             Via::Unknown => l.pick("Unknown source", "来源不明"),
         }
     }
@@ -110,17 +105,13 @@ impl Via {
         let l = *l.borrow();
         match self {
             Via::Local => "",
-            Via::Tailnet => l.pick(
-                "Connected over Tailscale, so changing the network, the bands or Tailscale can cut you off",
-                "你正经 Tailscale 连到设备；改网络、锁频、关 Tailscale 可能让你断开",
-            ),
-            Via::SubnetRoute => l.pick(
-                "Connected through another Tailscale node's subnet route, so changing the network, the LAN address or Tailscale can cut you off",
-                "你经别的 Tailscale 节点的子网路由连到设备；改网络、改局域网地址、关 Tailscale 可能让你断开",
+            Via::Remote => l.pick(
+                "Connected remotely: changing the network, bands or LAN address can cut you off",
+                "你正远程连接设备；改网络、锁频或改局域网地址可能让你断开",
             ),
             Via::Unknown => l.pick(
-                "Not from the device's LAN and not over Tailscale, so it is treated as remote: changing the network can cut you off",
-                "认不出你从哪条路连进来（不在设备局域网，也不是 Tailscale），按远程处理：改网络可能让你断开",
+                "The connection source is unknown, so it is treated as remote: changing the network can cut you off",
+                "认不出你从哪条路连进来，按远程处理：改网络可能让你断开",
             ),
         }
     }
@@ -132,13 +123,9 @@ impl Via {
         let (l, revert) = (*l.borrow(), *revert.borrow());
         let path = match self {
             Via::Local => return String::new(),
-            Via::Tailnet => l.pick("You are connected remotely over Tailscale.", "你正在经 Tailscale 远程操作。"),
-            Via::SubnetRoute => l.pick(
-                "You are connected remotely through a Tailscale subnet route.",
-                "你正在经 Tailscale 子网路由远程操作。",
-            ),
+            Via::Remote => l.pick("You are connected remotely.", "你正在远程操作。"),
             Via::Unknown => l.pick(
-                "Your connection is not from the device's LAN and not over Tailscale; it is treated as remote.",
+                "Your connection source is unknown; it is treated as remote.",
                 "认不出你从哪条路连进来，按远程处理。",
             ),
         };
@@ -176,48 +163,6 @@ fn plain(ip: IpAddr) -> IpAddr {
     }
 }
 
-fn tailnet_ip(ip: IpAddr) -> bool {
-    match plain(ip) {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            o[0] == 100 && (o[1] & 0xc0) == 64
-        }
-        IpAddr::V6(v6) => {
-            let s = v6.segments();
-            s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0
-        }
-    }
-}
-
-/// The host part of a Host header: `[v6]:port`, `v4:port`, `name:port`, or no port.
-fn host_part(host: &str) -> &str {
-    if let Some(rest) = host.strip_prefix('[') {
-        return rest.split(']').next().unwrap_or("");
-    }
-    match host.rsplit_once(':') {
-        Some((h, port)) if port.bytes().all(|b| b.is_ascii_digit()) => h,
-        _ => host,
-    }
-}
-
-/// Host names a tailnet address or MagicDNS name (`*.ts.net`, or a single-label name other than
-/// localhost).
-fn tailnet_host(h: &HeaderMap) -> bool {
-    let Some(host) = h.get(header::HOST).and_then(|v| v.to_str().ok()) else {
-        return false;
-    };
-    let host = host_part(host.trim())
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    if let Ok(ip) = host.split('%').next().unwrap_or("").parse::<IpAddr>() {
-        return tailnet_ip(ip);
-    }
-    if host.is_empty() || host == "localhost" {
-        return false;
-    }
-    host.ends_with(".ts.net") || !host.contains('.')
-}
-
 /// One interface network: address and prefix length.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Net(IpAddr, u8);
@@ -244,11 +189,6 @@ impl Net {
     }
 }
 
-/// Interfaces that are not the LAN: loopback, Tailscale, the cellular data path, CHILL's tun.
-fn not_lan(name: &str) -> bool {
-    name == "lo" || ["tailscale", "rmnet", "chill"].iter().any(|p| name.starts_with(p))
-}
-
 /// The LAN networks out of `ip -o addr show` ("16: br-lan    inet 192.168.0.1/24 brd …").
 pub fn lan_nets(ip_addr: &str) -> Vec<Net> {
     ip_addr
@@ -258,51 +198,38 @@ pub fn lan_nets(ip_addr: &str) -> Vec<Net> {
             let name = w.next()?.trim_end_matches(':').split('@').next()?;
             let fam = w.next()?;
             let (a, len) = w.next()?.split_once('/')?;
-            if not_lan(name) || !(fam == "inet" || fam == "inet6") {
+            if name != "br-lan" || !(fam == "inet" || fam == "inet6") {
                 return None;
             }
-            Some(Net(a.parse().ok()?, len.parse().ok()?))
+            let ip: IpAddr = a.parse().ok()?;
+            let prefix: u8 = len.parse().ok()?;
+            let max_prefix = if ip.is_ipv4() { 32 } else { 128 };
+            if prefix == 0 || prefix > max_prefix {
+                return None;
+            }
+            Some(Net(ip, prefix))
         })
         .collect()
 }
 
-/// `ip route get` answered over `tailscale0`.
-pub fn via_tailscale(ip_route: &str) -> bool {
-    ip_route
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .windows(2)
-        .any(|w| w[0] == "dev" && w[1].starts_with("tailscale"))
-}
-
-/// The classification itself (the table in remote-path-guard.md), with the device reads passed in.
-pub fn classify(
-    h: &HeaderMap,
-    peer: Option<IpAddr>,
-    lan: &[Net],
-    tailscale_route: impl FnOnce(IpAddr) -> bool,
-) -> Via {
-    if peer.is_some_and(tailnet_ip) || tailnet_host(h) {
-        return Via::Tailnet;
-    }
+/// Classify only from the peer and known LAN networks, never from the untrusted Host header.
+pub fn classify(peer: Option<IpAddr>, lan: &[Net]) -> Via {
     let Some(peer) = peer.map(plain) else {
         return Via::Unknown;
     };
     if peer.is_loopback() || lan.iter().any(|n| n.contains(peer)) {
         return Via::Local;
     }
-    if tailscale_route(peer) {
-        Via::SubnetRoute
-    } else {
+    if !lan.iter().any(|Net(net, _)| net.is_ipv4() == peer.is_ipv4()) {
         Via::Unknown
+    } else {
+        Via::Remote
     }
 }
 
 const LAN_TTL: Duration = Duration::from_secs(30);
-const ROUTE_TTL: Duration = Duration::from_secs(60);
 
-/// `ip`'s output; empty when it failed. None = there is no `ip` at all: not the device (a Mac, the
-/// browser-check container), where every viewer is local as before.
+/// `ip`'s output; empty when it failed. None = there is no `ip` at all.
 fn run_ip(args: &[&str]) -> Option<String> {
     match std::process::Command::new("ip").args(args).output() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -324,10 +251,10 @@ fn cached_lan() -> Option<Vec<Net>> {
             static SAID: std::sync::Once = std::sync::Once::new();
             match &nets {
                 None => SAID.call_once(|| {
-                    eprintln!("[luyaz-web] no `ip`: every viewer off the tailnet counts as local")
+                    eprintln!("[luyaz-web] no `ip`: non-loopback viewers have unknown origin")
                 }),
                 Some(n) if n.is_empty() => SAID.call_once(|| {
-                    eprintln!("[luyaz-web] `ip -o addr` gave no LAN network: viewers off the tailnet read as unknown")
+                    eprintln!("[luyaz-web] `ip -o addr` gave no LAN network: non-loopback viewers have unknown origin")
                 }),
                 Some(_) => {}
             }
@@ -337,33 +264,14 @@ fn cached_lan() -> Option<Vec<Net>> {
     }
 }
 
-fn cached_route(peer: IpAddr) -> bool {
-    static C: Mutex<Option<HashMap<IpAddr, (Instant, bool)>>> = Mutex::new(None);
-    let mut c = C.lock().unwrap_or_else(|e| e.into_inner());
-    let m = c.get_or_insert_with(HashMap::new);
-    if let Some((_, ts)) = m.get(&peer).filter(|(at, _)| at.elapsed() < ROUTE_TTL) {
-        return *ts;
-    }
-    let ts = via_tailscale(&run_ip(&["route", "get", &peer.to_string()]).unwrap_or_default());
-    if m.len() > 256 {
-        m.retain(|_, (at, _)| at.elapsed() < ROUTE_TTL);
-    }
-    m.insert(peer, (Instant::now(), ts));
-    ts
-}
-
-/// Where this request came from, read off the device (interfaces cached 30 s, routes 60 s per peer).
-pub fn via(h: &HeaderMap, peer: Option<IpAddr>) -> Via {
-    // the cheap answers first: no `ip` runs for a tailnet peer or name
-    if peer.is_some_and(tailnet_ip) || tailnet_host(h) {
-        return Via::Tailnet;
-    }
+/// Where this request came from, read off the device (interfaces cached 30 s).
+pub fn via(_h: &HeaderMap, peer: Option<IpAddr>) -> Via {
     if peer.map(plain).is_some_and(|p| p.is_loopback()) {
         return Via::Local;
     }
     match cached_lan() {
-        Some(lan) => classify(h, peer, &lan, cached_route),
-        None => Via::Local,
+        Some(lan) => classify(peer, &lan),
+        None => Via::Unknown,
     }
 }
 
@@ -530,22 +438,6 @@ pub fn icons(st: &St, l: Lang) -> Vec<Icon> {
             (_, Lang::Zh) => format!("{name} 未安装"),
         }
     };
-    let ts = st.side.agent.as_ref().map(|a| &a["services"]["tailscale"]);
-    let ts_tone = match ts {
-        Some(t) if t["running"].as_bool() == Some(true) => Tone::Ok,
-        Some(t) if t["installed"].as_bool() == Some(true) => Tone::Warn,
-        _ => Tone::Off,
-    };
-    out.push(Icon {
-        id: "st-ts",
-        href: "/services/tailscale",
-        icon: "Cloud",
-        tone: ts_tone,
-        label: svc("Tailscale", ts_tone),
-        badge: 0,
-        known: ts.is_some(),
-    });
-
     let chill = st.side.public.as_ref().map(|p| &p["services"]["chill"]);
     let chill_state = chill.and_then(|c| c["state"].as_str()).unwrap_or("");
     let chill_tone = match chill_state {
@@ -780,7 +672,6 @@ pub async fn poll(
         }
         let (public, alerts) =
             tokio::join!(get_data(&http, &public_url), get_data(&http, &alerts_url),);
-        // Tailscale is in u60d's public status too (8d-2: the agent's is gone)
         hub.set_side(|s| {
             s.agent = public.clone();
             s.public = public;
@@ -909,7 +800,6 @@ pub async fn read(
 mod tests {
     use super::*;
     use crate::sse::Frame;
-    use axum::http::HeaderValue;
 
     fn hub_with(blocks: Value) -> Arc<Hub> {
         let hub = Hub::new();
@@ -959,10 +849,10 @@ mod tests {
         assert_eq!(net.tone, Tone::Warn, "SA reads nr_rsrp, -112 is weak");
         assert_eq!(net.label, "移动数据已通 · SA · 信号弱");
         assert_eq!(ic[1].tone, Tone::Off);
-        assert_eq!(ic[4].badge_text(), "9+");
-        assert!(!ic[2].known && !ic[3].known, "no side data yet");
+        assert_eq!(ic[3].badge_text(), "9+");
+        assert!(!ic[2].known, "no side data yet");
         let html = hub.read(|st| topbar_html(st, &ctx("/signal")));
-        assert!(html.contains("id=\"st-ts\"") && html.contains("id=\"st-chill\""));
+        assert!(html.contains("id=\"st-chill\""));
     }
 
     #[test]
@@ -1018,27 +908,22 @@ mod tests {
         let c = ctx("/charts");
         let a = hub.read(|st| leaves(st, &c, &mut crate::opbar::Seen::default()));
         hub.set_side(|s| {
-            s.agent = Some(json!({"services": {"tailscale": {"installed": true, "running": true}}}))
+            s.public = Some(json!({"services": {"chill": {"state": "running"}}}))
         });
         let b = hub.read(|st| leaves(st, &c, &mut crate::opbar::Seen::default()));
         let out = diff(&a, &b);
         assert_eq!(out.len(), 1, "{out:?}");
-        assert!(out[0].contains("id=\"st-ts\"") && out[0].contains("Tailscale 运行中"));
+        assert!(out[0].contains("id=\"st-chill\"") && out[0].contains("CHILL 运行中"));
         // same data again: no change event, nothing to send
         let g = hub.read(|st| st.generation);
         hub.set_side(|s| {
-            s.agent = Some(json!({"services": {"tailscale": {"installed": true, "running": true}}}))
+            s.public = Some(json!({"services": {"chill": {"state": "running"}}}))
         });
         assert_eq!(hub.read(|st| st.generation), g);
     }
 
     #[test]
-    fn via_by_peer_host_lan_and_route() {
-        let h = |host: &str| {
-            let mut m = HeaderMap::new();
-            m.insert(header::HOST, HeaderValue::from_str(host).unwrap());
-            m
-        };
+    fn via_by_peer_and_lan() {
         let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
         // the device's `ip -o addr show` (10-19), addresses swapped for documentation ones
         let lan = lan_nets(
@@ -1047,43 +932,29 @@ mod tests {
              16: br-lan    inet6 fd00:66::1/64 scope global \\       valid_lft forever\n\
              17: rmnet_data0    inet 192.0.2.121/30 scope global rmnet_data0\\       valid_lft forever\n\
              17: rmnet_data0    inet6 2001:db8::5a1d/64 scope global \\       valid_lft forever\n\
-             25: tailscale0    inet 100.100.1.1/32 scope global tailscale0\\       valid_lft forever\n\
-             25: tailscale0    inet6 fd7a:115c:a1e0::1/128 scope global \\       valid_lft forever\n\
+             25: tun0    inet 198.51.100.1/24 scope global tun0\\       valid_lft forever\n\
              62: chill0    inet 198.18.0.1/30 brd 198.18.0.3 scope global chill0\\       valid_lft forever",
         );
-        assert_eq!(lan.len(), 2, "lo, rmnet, tailscale and chill are not the LAN: {lan:?}");
-        let c = |host: &str, peer: Option<IpAddr>, ts: bool| classify(&h(host), peer, &lan, |_| ts);
-        assert_eq!(c("192.168.0.1", ip("100.101.1.2"), false), Via::Tailnet);
-        assert_eq!(c("100.70.0.1:8080", None, false), Via::Tailnet);
-        assert_eq!(c("[fd7a:115c:a1e0::1]:80", None, false), Via::Tailnet);
-        assert_eq!(c("u60.tail1234.ts.net", None, false), Via::Tailnet);
-        assert_eq!(c("u60", None, false), Via::Tailnet);
-        assert_eq!(c("192.168.0.1:9090", ip("192.168.0.23"), true), Via::Local);
-        assert_eq!(c("192.168.0.1:9090", ip("::ffff:192.168.0.23"), false), Via::Local);
-        assert_eq!(c("[fd00:66::1]", ip("fd00:66::9"), false), Via::Local);
-        assert_eq!(c("localhost:8080", ip("127.0.0.1"), false), Via::Local);
-        // the bug (10-19): a computer behind another node's subnet route, Host = the LAN address
-        assert_eq!(c("192.168.0.1:9090", ip("198.51.100.88"), true), Via::SubnetRoute);
-        assert!(Via::SubnetRoute.remote());
-        assert_eq!(c("192.168.0.1:9090", ip("198.51.100.88"), false), Via::Unknown);
-        assert_eq!(c("192.168.0.1:9090", ip("192.0.2.122"), false), Via::Unknown, "the WAN side");
-        assert_eq!(c("192.168.0.1:9090", None, false), Via::Unknown, "no peer: warn");
-        assert_eq!(c("100.128.0.1", ip("192.0.2.66"), false), Via::Unknown, "outside 100.64/10");
-        assert!(!Via::Local.remote() && Via::Unknown.remote());
-    }
-
-    #[test]
-    fn route_parse() {
-        // the device's `ip route get` (10-19), documentation addresses
-        assert!(via_tailscale("198.51.100.88 dev tailscale0 table 52 src 100.100.1.1 uid 0 \n    cache "));
-        assert!(!via_tailscale("192.168.0.23 dev br-lan src 192.168.0.1 uid 0 \n    cache "));
-        assert!(!via_tailscale(""));
+        assert_eq!(lan.len(), 2, "only br-lan is the LAN: {lan:?}");
+        let c = |peer: Option<IpAddr>| classify(peer, &lan);
+        assert_eq!(c(ip("192.168.0.23")), Via::Local);
+        assert_eq!(c(ip("::ffff:192.168.0.23")), Via::Local);
+        assert_eq!(c(ip("fd00:66::9")), Via::Local);
+        assert_eq!(c(ip("127.0.0.1")), Via::Local);
+        assert_eq!(c(ip("198.51.100.88")), Via::Remote);
+        assert_eq!(c(ip("192.0.2.122")), Via::Remote);
+        assert_eq!(c(None), Via::Unknown);
+        assert_eq!(classify(ip("192.168.0.23"), &[]), Via::Unknown);
+        assert_eq!(classify(ip("2001:db8::1"), &[Net("192.168.0.1".parse().unwrap(), 24)]), Via::Unknown);
+        assert_eq!(classify(ip("127.0.0.1"), &[]), Via::Local);
+        assert!(lan_nets("1: br-lan inet 192.168.0.1/0\n1: br-lan inet 192.168.0.1/33").is_empty());
+        assert!(!Via::Local.remote() && Via::Remote.remote() && Via::Unknown.remote());
     }
 
     #[test]
     fn warn_says_whether_the_step_reverts() {
         use crate::write::Revert;
-        let w = |r| Via::SubnetRoute.warn(Lang::Zh, r);
+        let w = |r| Via::Remote.warn(Lang::Zh, r);
         assert!(w(Revert::On).contains("自动退回；"), "{}", w(Revert::On));
         assert!(w(Revert::Off).contains("自动退回没开"));
         assert!(w(Revert::No).contains("不会自动退回"));

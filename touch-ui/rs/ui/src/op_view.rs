@@ -127,7 +127,7 @@ pub fn phase_final(p: &str) -> bool {
     !p.is_empty() && !matches!(p, "accepted" | "applying" | "verifying" | "rolling_back")
 }
 
-fn item(o: &[u8]) -> OpItem {
+pub(crate) fn item(o: &[u8]) -> OpItem {
     let mut it = OpItem::default();
     if o.first() != Some(&b'{') {
         return it;

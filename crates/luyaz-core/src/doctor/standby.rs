@@ -6,11 +6,15 @@ use std::collections::BTreeMap;
 
 // Ledger keys, by position (longterm/standby.rs `PROGS`).
 const PROGS: &[&str] = &crate::longterm::standby::PROGS;
+// Tailscale's two columns — the old tunnel packets and tailscaled wakeups — are retired: the
+// writer keeps them as placeholders (`0` and `-`), so historical records and baselines stay
+// readable at the same positions; doctor judges only the named columns after them.
+const RETIRED: usize = 2;
 const LABELS: &[&str] = &[
     "-",
     "蜂窝包/分",
-    "Tailscale隧道包/分",
-    "tailscaled唤醒/秒",
+    "-", // 3: the retired Tailscale tunnel column (placeholder 0)
+    "-", // 4: the retired tailscaled column (placeholder -)
     "mihomo唤醒/秒",
     "触屏唤醒/秒",
     "数据服务唤醒/秒",
@@ -18,16 +22,22 @@ const LABELS: &[&str] = &[
 const LABELS_EN: &[&str] = &[
     "-",
     "Cell pkts/min",
-    "Tailscale tunnel pkts/min",
-    "tailscaled wakeups/s",
+    "-",
+    "-",
     "mihomo wakeups/s",
     "Screen UI wakeups/s",
     "Data service wakeups/s",
 ];
 
-/// `standby_last`: uptime, cellular, tunnel, then one column per program
+/// `standby_last`: uptime, cellular, the retired placeholders, then one column per program
 fn last() -> usize {
-    3 + PROGS.len()
+    2 + RETIRED + PROGS.len()
+}
+
+/// The columns doctor reads into a baseline: the cellular packets (2) and the named programs;
+/// the retired columns in between are skipped, whatever old records or baselines carry.
+fn cols() -> impl Iterator<Item = usize> {
+    std::iter::once(2).chain((3 + RETIRED)..=last())
 }
 
 /// `cfg_md5`: the md5's first 8, "none" when the file is not there
@@ -50,25 +60,24 @@ fn prog_md5(c: &Cfg, name: &str) -> String {
     if m.is_empty() { "?".into() } else { m }
 }
 
-/// `standby_fp`: (column, fingerprint) for columns 3..
+/// `standby_fp`: (column, fingerprint) for the named program columns
 fn fingerprints(c: &Cfg) -> Vec<(usize, String)> {
-    let tsm = prog_md5(c, "tailscaled");
-    let tun = cfg_md5(&c.ts_tuning);
-    let mut v = vec![(3, format!("{tsm}+{tun}"))];
-    for (i, p) in PROGS.iter().enumerate() {
-        let f = match *p {
-            "tailscaled" => format!("{tsm}+{tun}"),
-            "mihomo" => format!(
-                "{}+{}+{}",
-                prog_md5(c, "mihomo"),
-                cfg_md5(&c.chill.template),
-                cfg_md5(&c.chill.env)
-            ),
-            p => prog_md5(c, p),
-        };
-        v.push((4 + i, f));
-    }
-    v
+    PROGS
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let f = match *p {
+                "mihomo" => format!(
+                    "{}+{}+{}",
+                    prog_md5(c, "mihomo"),
+                    cfg_md5(&c.chill.template),
+                    cfg_md5(&c.chill.env)
+                ),
+                p => prog_md5(c, p),
+            };
+            (3 + RETIRED + i, f)
+        })
+        .collect()
 }
 
 /// awk's numeric value of a string (`x + 0`)
@@ -184,7 +193,7 @@ pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
             continue;
         }
         idle += 1;
-        for k in 2..=last() {
+        for k in cols() {
             let x = g(k - 1);
             if x != "-" && !x.is_empty() {
                 v.entry(k).or_default().push(num(x));
@@ -208,7 +217,7 @@ pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
     }
     let (mut out, mut stale) = (String::new(), String::new());
     let (sep, ssep) = if en { ("; ", ", ") } else { ("；", "、") };
-    for k in 3..=last() {
+    for k in (3 + RETIRED)..=last() {
         let b = get(&bm, k);
         if b == "-" || b.is_empty() {
             continue;
@@ -273,7 +282,7 @@ pub fn calibrate(c: &Cfg) -> (String, i32) {
     let mut v: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
     for l in stat.split('\n') {
         let f: Vec<&str> = l.split([' ', '\t']).filter(|x| !x.is_empty()).collect();
-        for k in 2..=last() {
+        for k in cols() {
             let x = f.get(k - 1).copied().unwrap_or("");
             if x != "-" && !x.is_empty() {
                 v.entry(k).or_default().push(num(x));
@@ -281,7 +290,7 @@ pub fn calibrate(c: &Cfg) -> (String, i32) {
         }
     }
     let mut out = String::from("v2\n");
-    for k in 2..=last() {
+    for k in cols() {
         match v.get_mut(&k) {
             None => out.push_str(&format!("{k} - -\n")),
             Some(x) => {

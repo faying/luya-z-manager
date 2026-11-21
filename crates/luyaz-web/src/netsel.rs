@@ -12,7 +12,7 @@
 //! Mobile network:
 //! - connection, mobile data, roaming = u60d's `interfaces.cellular` (`connect_status`, `enable`,
 //!   `roam_enable`; `enable` 0 with the call up counts as on, as core / the old page do); data and
-//!   roaming are written with u60d `cellular.set` (tier 2, tier 3 over Tailscale as the old page;
+//!   roaming are written with u60d `cellular.set` (tier 2, tier 3 for remote connections;
 //!   data on also sends `connect_mode` 1 as the agent did);
 //! - radio off ("airplane") = the agent's `/api/modem/status` `operate_mode` (u60d has no field);
 //! - operator scan, register, back to automatic = the agent's jobs (`/api/netinfo/scan`,
@@ -706,12 +706,12 @@ pub fn net_confirm(act: &Act, remote: Via, name: &str, l: Lang) -> write::Confir
         revert: crate::write::Revert::No,
     };
     match act {
-        // tier 2; tier 3 over Tailscale (turning data off can cut the page's own uplink)
+        // tier 2; tier 3 remotely (turning data off can cut the page's own uplink)
         Act::Data(true) => inline(l.pick("Turn mobile data on?", "打开移动数据？"), l.pick("The U60 connects to the mobile network again.", "U60 重新连上移动网络。"), l.pick("Confirm: turn mobile data on", "确认：打开移动数据"), false),
         Act::Data(false) => {
-            let mut c = inline(l.pick("Turn mobile data off?", "关闭移动数据？"), l.pick("Devices on the U60 lose internet until mobile data is turned back on. Wi-Fi and this page keep working.", "连着 U60 的设备会断网，直到重新打开移动数据。Wi-Fi 和这个页面照常可用。"), l.pick("Confirm: turn mobile data off", "确认：关闭移动数据"), true);
+            let mut c = inline(l.pick("Turn mobile data off?", "关闭移动数据？"), l.pick("Devices on the U60 lose internet until mobile data is turned back on. A remote connection to this page may also drop.", "连着 U60 的设备会断网，直到重新打开移动数据。远程访问这个页面也可能断开。"), l.pick("Confirm: turn mobile data off", "确认：关闭移动数据"), true);
             if c.tier == write::Tier::Dialog {
-                c.downtime = Some(l.pick("Until it is turned back on. Over Tailscale this page goes away with it.", "直到重新打开为止。经 Tailscale 访问时，这个页面也会一起断开。").into());
+                c.downtime = Some(l.pick("Until it is turned back on. A remote connection to this page may also drop.", "直到重新打开为止。远程访问这个页面也可能断开。").into());
                 c.recovery = Some(l.pick("Someone on the U60's Wi-Fi opens this page and turns it back on, or uses the device's touchscreen.", "请连着 U60 Wi-Fi 的人打开这个页面重新打开移动数据，或在设备触屏上打开。").into());
             }
             c
@@ -720,7 +720,7 @@ pub fn net_confirm(act: &Act, remote: Via, name: &str, l: Lang) -> write::Confir
         Act::Roam(false) => {
             let mut c = inline(l.pick("Turn data roaming off?", "关闭数据漫游？"), l.pick("If the U60 is roaming right now, it loses its mobile connection.", "如果 U60 现在正在漫游，会断开移动网络。"), l.pick("Confirm: turn roaming off", "确认：关闭漫游"), true);
             if c.tier == write::Tier::Dialog {
-                c.downtime = Some(l.pick("Until it is turned back on. Over Tailscale this page goes away with it.", "直到重新打开为止。经 Tailscale 访问时，这个页面也会一起断开。").into());
+                c.downtime = Some(l.pick("Until it is turned back on. A remote connection to this page may also drop.", "直到重新打开为止。远程访问这个页面也可能断开。").into());
                 c.recovery = Some(l.pick("Someone on the U60's Wi-Fi opens this page and turns it back on, or uses the device's touchscreen.", "请连着 U60 Wi-Fi 的人打开这个页面重新打开，或在设备触屏上打开。").into());
             }
             c

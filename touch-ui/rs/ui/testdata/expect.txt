@@ -39,14 +39,6 @@ good	cellular	ARFCN 504990 · PCI 120
 good	home	情景
 good	home	在家
 good	home	Wi-Fi 已关
-good	home	Tailscale
-good	home	已连接
-good	home	100.64.0.7 · DERP hkg
-good	home	在线 3/5 · 直连 1 · 中继 1
-good	home	子网
-good	home	192.168.0.0/24
-good	exit	Tailscale
-good	exit	已连接 · 在线 3/5
 good	home	CHILL
 good	exit	运行中
 good	exit	代理 · TW 台湾 01
@@ -289,31 +281,6 @@ good	esim	使用中
 good	esim	Chunghwa Telecom
 good	esim	giffgaff
 good	esim-armed	再点一次
-good	tailscale	本机
-good	tailscale	主机名
-good	tailscale	u60-pro
-good	tailscale	IP
-good	tailscale	100.64.0.7
-good	tailscale	DERP
-good	tailscale	hkg
-good	tailscale	子网路由
-good	tailscale	192.168.0.0/24
-good	tailscale	节点（和本机之间）
-good	tailscale	fd7a:115c:a1e0::7
-good	tailscale	me@example.com
-good	tailscale	1.102.4 · linux
-good	tailscale	2027-03-01
-good	tailscale	直连 203.0.113.5:41641 · 握手 42 秒前
-good	tailscale	100.64.0.2 · macOS · ↓1.2GB ↑50MB
-good	tailscale	经 DERP hkg 中继 · 握手 1 分钟前
-good	tailscale	100.64.0.4 · linux · 出口节点
-good	tailscale	macbook-pro
-good	tailscale	100.64.0.2
-good	tailscale	直连
-good	tailscale	中继
-good	tailscale	在线
-good	tailscale	离线
-good	tailscale	old-ipad
 *	perf	渲染刷新率
 *	perf	触控上报率
 *	exit-menu	在国外 · CHILL 怎么走
@@ -375,7 +342,7 @@ good	scene	现在：在家
 good	scene	外出
 good	scene	其他情景都不符合时（默认）
 good	scene	附近有 Wi-Fi「My-Home-5G」「My-Home」时
-good	scene	关 Wi-Fi · 不休眠，Tailscale 一直连得上
+good	scene	关 Wi-Fi · 不休眠
 good	scene	按下面每个情景的条件自己切换
 good	scene	不碰蜂窝网络
 full-charging	scene	已固定
@@ -423,7 +390,6 @@ good	net-auto-already	现在已经是自动选网，不用恢复
 good	esim-current	这张就是正在用的
 good	wifi	信号很好
 good	wifi	2.4 GHz · 速率稍后显示 · 信号一般
-*	exit	Tailscale
 *	cellular	蜂窝
 *	wifi	Wi-Fi
 *	exit	出口
@@ -596,26 +562,6 @@ journal	journal-cell	上次改动
 journal	journal-cell	10-03 14:32 · 网页
 op-notice	home	自动退回已开：切模式没通会退回
 op-notice	home	知道了
-# 家里出口（E3，manager docs/designs/home-exit.md §10）
-home-exit,home-fallback,home-blocked	chill	家里出口
-home-exit,home-fallback,home-blocked	chill	国内版权走家里
-home-exit,home-fallback,home-blocked	chill	家里 IP 网站
-home-exit,home-fallback,home-blocked	chill	其余都走家里 · 2 小时
-home-exit,home-blocked	chill	3 个网站
-home-exit	chill	剩 1:32
-home-exit	chill	经 Tailscale · 直连 38 ms
-home-exit	home	家里 剩 1:32
-home-fallback	chill	家里不通，暂走 JP 日本
-home-fallback	chill	经中继，视频可能卡
-home-fallback	home	▲
-home-fallback	home	家里不通，暂走原出口
-home-blocked	chill	全局模式下不生效
-home-exit	chill-home-armed	再点一次确认
-home-exit	chill-home-armed	会断一下，走漫游流量
-home-fallback	chill	试运行 0:17
-home-fallback	chill	■ 没开成：家里 Mac 没回应
-home-nocountry	chill	读不到所在国家，版权和其余暂不显示
-home-nocountry	chill	表里还没有网站
 # USB attach mode
 *	system	插入手机等设备时
 *	system	每次询问

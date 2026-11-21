@@ -44,7 +44,7 @@ pub enum Origin {
     LanOther,
     /// A LAN client on the AP being changed.
     LanSameAp,
-    /// Tailnet or a subnet route: the page comes back only if the uplink and route survive.
+    /// A routed client: the page comes back only if its route survives.
     Remote,
 }
 
@@ -56,8 +56,7 @@ pub struct Evidence {
     pub origin: Option<Origin>,
     /// Clients on the AP being changed, the requester included.
     pub clients_on_ap: Option<u32>,
-    /// Another way in that the change doesn't touch (wired, the other AP, Tailscale on the
-    /// cellular side).
+    /// Another way in that the change doesn't touch, such as a wired link or the other AP.
     pub other_entry: Option<bool>,
     /// The old values were read, so a revert has something to go back to.
     pub old_values: Option<bool>,

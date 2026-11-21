@@ -1,7 +1,6 @@
 //! Who follows a card change (network reliability P1, 10-22): once a new SIM epoch has settled
 //! back to `online` (`sim_identity::SimIdentity::settled`), CHILL re-renders and reloads (its
-//! config is built against the bearer that just came back), and the home exit starts its miss
-//! count over (misses on the old card say nothing about home).
+//! config is built against the bearer that just came back).
 //!
 //! Once per epoch, on a thread of its own: the snapshot that noticed it is not held up.
 //! CHILL only when it runs, through the one CHILL job slot; a job already running (start,
@@ -27,8 +26,7 @@ pub fn phase(epoch: u64, phase: &'static str) {
 }
 
 pub fn settled(epoch: u64) {
-    eprintln!("[sim_follow] SIM epoch {epoch} online: telling CHILL and the home exit");
-    crate::engines::home_exit::sim_changed();
+    eprintln!("[sim_follow] SIM epoch {epoch} online: checking CHILL reload");
     let spawned = std::thread::Builder::new()
         .name("sim-follow".into())
         .spawn(move || chill_reload(epoch));
@@ -55,7 +53,7 @@ fn chill_reload(epoch: u64) {
         eprintln!("[sim_follow] epoch {epoch}: a CHILL job is running, no extra reload");
         return;
     }
-    let r = crate::engines::home_exit::chill_reload_within(
+    let r = crate::ops::chill::chill_reload_within(
         &format!("{} reload", ch::CHILL_SH),
         crate::ops::chill::RELOAD_TIMEOUT,
     );

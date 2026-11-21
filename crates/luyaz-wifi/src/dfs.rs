@@ -24,7 +24,7 @@
 //! Pure decisions in [`Guard::step`]; the IO (observe, write under the Wi-Fi lock) below it.
 
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -335,7 +335,17 @@ pub fn restore(h: &dyn RadioHost, _lk: &WifiLock, ov: &Override, reload: bool) -
 }
 
 fn wait_up(deadline: Duration) -> bool {
-    crate::poll_until(deadline, || observe_5g().0)
+    let until = Instant::now() + deadline;
+    loop {
+        if observe_5g().0 {
+            return true;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        std::thread::sleep(left.min(crate::POLL_EVERY));
+    }
 }
 
 #[cfg(test)]

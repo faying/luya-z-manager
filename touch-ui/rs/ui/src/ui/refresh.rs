@@ -76,9 +76,11 @@ pub fn fmt_rate_top(bps: i64, bits: bool, shortf: bool) -> Vec<u8> {
 
 impl Ui {
     /// What is on screen, as each poll's `active`.
-    fn activity(&self) -> Activity {
+    fn activity(&self, panel_lit: bool) -> Activity {
+        if self.screen_locked() {
+            return Activity { panel_lit, ..Activity::default() };
+        }
         use super::{TAB_EXIT as EXIT, TAB_SYS};
-        // only 运营商选择 reads everything (the agent runs AT+COPS?); others what they show
         let ni_mode = if self.sub_visible(Sub::Net) {
             NI_PAGE
         } else if self.sub_visible(Sub::Apn) || self.tab_visible(TAB_CELL) {
@@ -93,13 +95,10 @@ impl Ui {
             NI_OFF
         };
         Activity {
-            panel_lit: self.src.bl_panel_lit(&self.model),
+            panel_lit,
             lit: self.bl_is_on(),
             home: self.tab_visible(TAB_HOME),
             ni_mode,
-            tailscale: self.tab_visible(TAB_HOME) || self.tab_visible(EXIT) || self.sub_visible(Sub::Ts),
-            chill_page: self.sub_visible(Sub::Chill),
-            hx_sending: self.cp.hx_sending >= 0,
             chill: self.tab_visible(TAB_HOME)
                 || self.tab_visible(EXIT)
                 || self.sub_visible(Sub::Chill)
@@ -126,9 +125,20 @@ impl Ui {
     fn refresh_inner(&mut self, periodic: bool) {
         self.appearance_tick();
         self.refreshes += 1;
-        let a = self.activity();
+        let panel_lit = self.src.bl_panel_lit(&self.model);
+        if !panel_lit {
+            self.engage_screen_lock();
+            if self.bl_is_on() && !self.src.bl_is_lit(&self.model) {
+                // The stock firmware turned off the panel. Keep the black frame until wake.
+                crate::device::blank();
+            }
+        }
+        let a = self.activity(panel_lit);
         self.polled = self.src.poll(self.refreshes, &a);
         self.sync();
+        if panel_lit {
+            self.paint_screen_lock();
+        }
         let th = t();
         let m = self.model.clone();
 
@@ -169,10 +179,21 @@ impl Ui {
             }
         }
 
+        self.op_parse();
+        // NFC: a concrete value only from a model a live core filled in (a stale block
+        // already decodes to unknown); a gone or silent core says — instead of its last word
+        let nfc = (m.data_ok != 0 && m.backend_silent == 0)
+            .then(|| match m.data.nfc_on {
+                1 => Some(true),
+                0 => Some(false),
+                _ => None,
+            })
+            .flatten();
+        self.wifi_switches_refresh(self.tab_visible(TAB_WIFI), nfc);
         if m.data_ok == 0 {
             self.home.sc_force |= self.polled.scenario;
             // backend down: a device-wide condition, said once in the shared banner
-            self.banner_set(Some(tr("后台数据服务不可用").as_bytes()));
+            self.banner_set(Some(self.wifi_warning().unwrap_or_else(|| tr("后台数据服务不可用")).as_bytes()));
             self.home_signal_down();
             self.lk_mode_sync(-1, false); // a tapped 网络模式 still gets its ending
             self.op_refresh();
@@ -203,8 +224,10 @@ impl Ui {
         }
         self.diag_refresh();
         if core_silent {
-            self.banner_set(Some(tr("后台数据服务不可用").as_bytes()));
+            self.banner_set(Some(self.wifi_warning().unwrap_or_else(|| tr("后台数据服务不可用")).as_bytes()));
             self.home_signal_down();
+        } else if let Some(warning) = self.wifi_warning() {
+            self.banner_set(Some(warning.as_bytes()));
         } else if m.screen_stuck != 0 {
             // E4: answers, but its executor has not moved for 20 s (V2-40)
             self.banner_set(Some(tr("数据服务没响应 · 暂时不能改设置").as_bytes()));
@@ -321,9 +344,6 @@ impl Ui {
         if self.sub_visible(super::Sub::Usage) {
             self.usage_paint();
         }
-        if self.tab_visible(TAB_HOME) || self.tab_visible(super::TAB_EXIT) || self.sub_visible(super::Sub::Ts) {
-            self.home_ts_paint();
-        }
         // CHILL: the card (Home's, on the exit tab) with the notice on its top, and the pages
         self.chill_refresh();
         self.home_reflow();
@@ -355,23 +375,15 @@ impl Ui {
         }
         self.tile_rows_paint();
 
-        // Wi-Fi (the radios and power save are read while Wi-Fi, 系统 or 蜂窝 is up: M5)
-        let aux_on = self.tab_visible(TAB_WIFI) || self.tab_visible(super::TAB_SYS) || self.tab_visible(TAB_CELL);
-        self.aux_refresh(aux_on, d);
+        self.aux_refresh(d);
         self.md_refresh();
         self.refresh_wifi(d);
         {
             let a = &self.aux;
-            let st = [a.w24 == 1 || a.w5 == 1, a.w24 == 1, a.w5 == 1, a.psm == 1, d.nfc_on != 0];
             let pool = a.pool.clone();
             let dps = a.dps;
-            let w = self.wifi.clone();
-            for (i, &on) in st.iter().enumerate() {
-                super::cellular::sw_apply(w.sw[i], on);
-                self.set(w.sw_st[i], if on { tr("已开启") } else { tr("已关闭") });
-            }
             if !pool.is_empty() {
-                self.set_at(w.pool, 1, &pool);
+                self.set_at(self.wifi.pool, 1, &pool);
             }
             let s = self.sys.clone();
             super::cellular::sw_apply(s.dps_sw, dps == 1);

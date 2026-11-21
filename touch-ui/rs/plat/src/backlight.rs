@@ -67,9 +67,14 @@ impl Backlight {
         self.is_on
     }
 
+    /// A failed sysfs read cannot establish an off transition for the sleep daemon.
+    pub fn observed_lit(&self) -> Option<bool> {
+        read_num(&self.level_file).filter(|level| *level >= 0).map(|level| level > 0)
+    }
+
     /// Whether the panel is lit, leaving our own flag alone (the core's pace).
     pub fn panel_lit(&self) -> bool {
-        self.level() > 0
+        self.observed_lit().unwrap_or(false)
     }
 
     /// Whether the panel is lit; our flag takes that over.
@@ -188,6 +193,17 @@ mod tests {
             b.off();
             b.on();
             assert_eq!(read(), 90);
+        });
+    }
+
+    #[test]
+    fn only_a_readable_zero_reports_a_dark_panel() {
+        panel(0, 255, |b, _| {
+            assert_eq!(b.observed_lit(), Some(false));
+            std::fs::remove_file(&b.level_file).unwrap();
+            assert_eq!(b.observed_lit(), None);
+            std::fs::write(&b.level_file, "152\n").unwrap();
+            assert_eq!(b.observed_lit(), Some(true));
         });
     }
 }
