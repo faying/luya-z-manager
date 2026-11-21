@@ -1,5 +1,5 @@
 #!/bin/sh
-# Executed directly by the kit and CI. Keep this regression entry point executable.
+# Executed directly by the kit and CI. Keep this regression entry point executable for CI.
 # ─────────────────────────────────────────────────────────────────────────────
 # chill.sh 离线单测（T8 的单测部分）
 #

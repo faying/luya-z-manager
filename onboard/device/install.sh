@@ -1,5 +1,5 @@
 #!/bin/sh
-# Executed directly by the host installer. Keep this kit entry point executable.
+# Executed directly by the host installer. Keep this kit entry point executable for the kit.
 # ═════════════════════════════════════════════════════════════════════════════
 # Luya-Z 装机包：设备端（busybox ash）。
 
