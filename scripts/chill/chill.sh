@@ -496,9 +496,10 @@ bypass_dns_start() {
   [ -s "$RESOLV_AUTO" ] && grep -q '^nameserver[[:space:]]' "$RESOLV_AUTO" || return 1
   dns_addresses=$bypass_lan4
   [ -z "$bypass_lan6" ] || dns_addresses="$dns_addresses,$bypass_lan6"
+  # Stock dnsmasq keeps stdout open after forking. Close the Core job's pipes.
   "$DNSMASQ" --conf-file=/dev/null --bind-interfaces --listen-address="$dns_addresses" \
     --port=1054 --resolv-file="$RESOLV_AUTO" --no-hosts --cache-size=0 \
-    --pid-file="$BYPASS_PID" 8>&- 2>/dev/null && bypass_dns_pid
+    --pid-file="$BYPASS_PID" 8>&- </dev/null >/dev/null 2>&1 && bypass_dns_pid
 }
 
 bypass_dns_rules() {
