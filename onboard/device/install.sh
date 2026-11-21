@@ -1,4 +1,5 @@
 #!/bin/sh
+# This file is invoked directly by the host installer and must remain executable.
 # ═════════════════════════════════════════════════════════════════════════════
 # Luya-Z 装机包：设备端（busybox ash）。
 
