@@ -8,23 +8,28 @@ use std::time::{Duration, Instant};
 use crate::layout::{self, Uci, APS};
 use crate::{hostapd_count, hostapd_serves, switches, Host, CMD_TIMEOUT, OFF_DEADLINE, ON_DEADLINE, POLL_EVERY};
 
+// B11 can tear down a briefly working AP more than seven seconds after reporting power-on.
+const RELOAD_STABLE: Duration = Duration::from_secs(15);
+
 #[derive(Clone, Copy)]
-pub(super) enum Target {
+pub(super) enum Target<'a> {
     Current,
     Aps([bool; 2]),
     Master { wanted: bool, radios_before: [Option<bool>; 2] },
+    Written { expected: &'a Uci, switches: switches::Switches, layout: [bool; 4] },
 }
 
-impl Target {
+impl Target<'_> {
     fn wants_on(self, effective: Option<[bool; 4]>) -> bool {
         match self {
             Self::Current => effective.is_none_or(|on| on.contains(&true)),
             Self::Aps(aps) => aps.contains(&true),
             Self::Master { wanted, .. } => wanted,
+            Self::Written { switches, .. } => switches.module == Some(true),
         }
     }
 
-    fn settings_match(self, cfg: &Uci) -> Option<bool> {
+    fn settings_match(self, cfg: &Uci, running: [bool; 4]) -> Option<bool> {
         let switches = || switches::read(|key| cfg.get(key).map(String::as_str));
         match self {
             Self::Current => Some(true),
@@ -49,7 +54,32 @@ impl Target {
                 }
                 Some(true)
             }
+            Self::Written { expected, switches: flags, layout } => {
+                let found = switches();
+                if layout != running {
+                    return Some(false);
+                }
+                let intended = [flags.master, flags.module, flags.radios[0], flags.radios[1], flags.main[0], flags.main[1]];
+                let observed = [found.master, found.module, found.radios[0], found.radios[1], found.main[0], found.main[1]];
+                for (wanted, actual) in intended.into_iter().zip(observed) {
+                    if wanted.is_some() && wanted != Some(actual?) {
+                        return Some(false);
+                    }
+                }
+                for (ap, enabled) in APS.iter().zip(running) {
+                    if ap.ifname(cfg)? != ap.ifname(expected)?
+                        || (enabled && ap.ssid(cfg) != ap.ssid(expected))
+                    {
+                        return Some(false);
+                    }
+                }
+                Some(true)
+            }
         }
+    }
+
+    fn stable_for(self) -> Duration {
+        if matches!(self, Self::Written { .. }) { RELOAD_STABLE } else { Duration::ZERO }
     }
 }
 
@@ -133,8 +163,8 @@ fn links_at(net: &Path, ifnames: [&str; 4]) -> [Option<bool>; 4] {
     states
 }
 
-fn check_with(cfg: &Uci, target: Target, on: [bool; 4], r: &impl Runtime) -> Option<bool> {
-    if !target.settings_match(cfg)? {
+fn check_with(cfg: &Uci, target: Target<'_>, on: [bool; 4], r: &impl Runtime) -> Option<bool> {
+    if !target.settings_match(cfg, on)? {
         return Some(false);
     }
     let [main_2g, main_5g, guest_2g, guest_5g] = std::array::from_fn(|i| APS[i].ifname(cfg));
@@ -165,7 +195,7 @@ fn check_with(cfg: &Uci, target: Target, on: [bool; 4], r: &impl Runtime) -> Opt
     }
 }
 
-pub(super) fn check(cfg: &Uci, target: Target, on: [bool; 4], until: Option<Instant>) -> Option<bool> {
+pub(super) fn check(cfg: &Uci, target: Target<'_>, on: [bool; 4], until: Option<Instant>) -> Option<bool> {
     check_with(cfg, target, on, &Device(until))
 }
 
@@ -178,26 +208,36 @@ fn fully_on_with(cfg: &Uci, r: &impl Runtime) -> bool {
     (on[0] || on[1]) && check_with(cfg, Target::Aps([true; 2]), on, r) == Some(true)
 }
 
-pub(super) fn poll(h: &dyn Host, target: Target) -> (Option<bool>, Option<Uci>) {
+pub(super) fn poll(h: &dyn Host, target: Target<'_>) -> (Option<bool>, Option<Uci>) {
     let start = Instant::now();
     let mut last_known = None;
+    let mut matching_since = None;
     loop {
         let cfg = h.wireless();
         let on = cfg.as_ref().and_then(layout::running_checked);
         last_known = on.or(last_known);
         let until = start + if target.wants_on(last_known) { ON_DEADLINE } else { OFF_DEADLINE };
         let result = cfg.as_ref().zip(on).and_then(|(cfg, on)| check(cfg, target, on, Some(until)));
-        if result == Some(true) {
-            return (result, cfg);
+        let now = Instant::now();
+        if now <= until && has_settled(&mut matching_since, now - start, target.stable_for(), result) {
+            return (Some(true), cfg);
         }
-        let left = until.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return (result, cfg);
+        let left = until.saturating_duration_since(now);
+        if left <= POLL_EVERY {
+            return (result.map(|_| false), cfg);
         }
-        std::thread::sleep(left.min(POLL_EVERY));
-        if Instant::now() >= until {
-            return (result, cfg);
-        }
+        std::thread::sleep(POLL_EVERY);
+    }
+}
+
+fn has_settled(
+    since: &mut Option<Duration>, now: Duration, minimum: Duration, found: Option<bool>,
+) -> bool {
+    if found == Some(true) {
+        now.saturating_sub(*since.get_or_insert(now)) >= minimum
+    } else {
+        *since = None;
+        false
     }
 }
 
@@ -249,7 +289,7 @@ mod tests {
         }
     }
 
-    fn sample_result(cfg: &Uci, target: Target, r: &Sample) -> Option<bool> {
+    fn sample_result(cfg: &Uci, target: Target<'_>, r: &Sample) -> Option<bool> {
         check_with(cfg, target, layout::running_checked(cfg)?, r)
     }
 
@@ -312,6 +352,68 @@ mod tests {
         assert_eq!(sample_result(&cfg, master(true), &r), Some(false));
         r.status = Some("state=ENABLED\nssid[0]=home5\n");
         assert_eq!(sample_result(&cfg, master(true), &r), Some(true));
+    }
+
+    #[test]
+    fn reload_rejects_a_late_teardown_and_never_adopts_the_new_module_state() {
+        let wanted = five_only();
+        let target = Target::Written {
+            expected: &wanted,
+            switches: switches::read(|k| wanted.get(k).map(String::as_str)),
+            layout: layout::running_checked(&wanted).unwrap(),
+        };
+        let mut sample = Sample {
+            links: [Some(false), Some(true), Some(false), Some(false)],
+            status: Some("state=ENABLED\nssid[0]=home5\n"),
+            processes: Some(0),
+        };
+        let mut since = None;
+        let update = |since: &mut Option<Duration>, t, cfg: &Uci, sample: &Sample| {
+            has_settled(since, Duration::from_secs(t), target.stable_for(), sample_result(cfg, target, sample))
+        };
+        assert!(!update(&mut since, 2, &wanted, &sample));
+        assert!(!update(&mut since, 9, &wanted, &sample));
+        sample.links[1] = Some(false);
+        assert!(!update(&mut since, 10, &wanted, &sample));
+
+        let mut stopped = wanted.clone();
+        stopped.insert(VENDOR_ONOFF.into(), "0".into());
+        stopped.insert(RADIO_5G.into(), "1".into());
+        assert_eq!(sample_result(&stopped, Target::Current, &sample), Some(true));
+        assert_eq!(sample_result(&stopped, target, &sample), Some(false));
+        assert!(!update(&mut since, 15, &stopped, &sample));
+
+        let mut renamed = wanted.clone();
+        renamed.insert("wireless.main_5g.ssid".into(), "old5".into());
+        assert_eq!(sample_result(&renamed, target, &sample), Some(false));
+        sample.links[1] = Some(true);
+        assert!(!update(&mut since, 17, &wanted, &sample));
+        sample.status = None;
+        assert!(!update(&mut since, 22, &wanted, &sample));
+        sample.status = Some("state=ENABLED\nssid[0]=home5\n");
+        assert!(!update(&mut since, 23, &wanted, &sample));
+        assert!(!update(&mut since, 37, &wanted, &sample));
+        assert!(update(&mut since, 38, &wanted, &sample));
+    }
+
+    #[test]
+    fn reload_waits_past_an_empty_layout_before_the_module_drops() {
+        let mut wanted = five_only();
+        wanted.insert(RADIO_5G.into(), "1".into());
+        let target = Target::Written {
+            expected: &wanted,
+            switches: switches::read(|k| wanted.get(k).map(String::as_str)),
+            layout: layout::running_checked(&wanted).unwrap(),
+        };
+        let sample = Sample { links: [Some(false); 4], status: None, processes: Some(0) };
+        let mut since = None;
+        assert!(!has_settled(&mut since, Duration::from_secs(3), target.stable_for(), sample_result(&wanted, target, &sample)));
+
+        let mut stopped = wanted.clone();
+        stopped.insert(VENDOR_ONOFF.into(), "0".into());
+        assert_eq!(sample_result(&stopped, Target::Current, &sample), Some(true));
+        assert_eq!(sample_result(&stopped, target, &sample), Some(false));
+        assert!(!has_settled(&mut since, Duration::from_secs(19), target.stable_for(), sample_result(&stopped, target, &sample)));
     }
 
     #[test]

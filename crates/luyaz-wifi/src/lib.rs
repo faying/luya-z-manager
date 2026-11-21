@@ -433,7 +433,19 @@ pub fn verify_master(h: &dyn Host, wanted: bool, radios_before: [Option<bool>; 2
     verify_target(h, runtime::Target::Master { wanted, radios_before })
 }
 
-fn verify_target(h: &dyn Host, target: runtime::Target) -> Value {
+/// After a configuration reload, verify the intended settings and layout throughout settling.
+pub fn verify_written(h: &dyn Host, expected: &layout::Uci) -> Value {
+    let Some(layout) = layout::running_checked(expected) else {
+        let cfg = h.wireless();
+        let mut data = observation(cfg.as_ref());
+        data["verified"] = Value::Null;
+        return data;
+    };
+    let switches = switches::read(|key| expected.get(key).map(String::as_str));
+    verify_target(h, runtime::Target::Written { expected, switches, layout })
+}
+
+fn verify_target(h: &dyn Host, target: runtime::Target<'_>) -> Value {
     let (verified, cfg) = runtime::poll(h, target);
     let mut data = observation(cfg.as_ref());
     data["verified"] = json!(verified);

@@ -346,6 +346,7 @@ impl WifiDev {
         let module_on = plan.vendor.or(switches.module) == Some(true);
         let hot = module_on.then(|| plan.hot_txpower()).flatten();
         let reload = module_on && hot.is_none() && !plan.set.is_empty();
+        let expected = reload.then(|| wifi::simulate(&m, &plan));
         let (set, vendor, guest) = (plan.set_json(), plan.vendor, kind == Kind::Guest);
         // D7：拿不到写锁就什么都不写（Wi-Fi 锁已经拿着，lk 随返回放掉）
         let r = write_lock::run(exec, async move {
@@ -385,21 +386,17 @@ impl WifiDev {
                     handle: handle.clone(),
                     exec: exec.clone(),
                 };
-                let data = match vendor {
-                    Some(wanted) => {
-                        let error = if reload {
-                            luyaz_wifi::reload(&host, &lk).err()
-                        } else {
-                            None
-                        };
-                        let mut data = luyaz_wifi::verify_master(&UciHost, wanted, switches.radios);
-                        if let Some(e) = error {
-                            data["reload_error"] = json!(e);
-                        }
-                        data
+                let data = if let Some(expected) = &expected {
+                    let error = luyaz_wifi::reload(&host, &lk).err();
+                    let mut data = luyaz_wifi::verify_written(&UciHost, expected);
+                    if let Some(e) = error {
+                        data["reload_error"] = json!(e);
                     }
-                    None if reload => luyaz_wifi::reload_and_verify(&host, &lk),
-                    None => luyaz_wifi::verify_no_reload(&UciHost),
+                    data
+                } else if let Some(wanted) = vendor {
+                    luyaz_wifi::verify_master(&UciHost, wanted, switches.radios)
+                } else {
+                    luyaz_wifi::verify_no_reload(&UciHost)
                 };
                 let ok = data["verified"].as_bool() == Some(true);
                 eprintln!("ops: Wi-Fi change: reload finished {data}");
