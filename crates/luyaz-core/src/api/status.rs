@@ -67,20 +67,26 @@ pub(super) const TAKEOVER_FILE: &str = "/tmp/luyaz/wifiguard.took-over";
 
 /// The agent's `scenario::public_summary`, from the engine's files.
 fn scenario(c: &Compat) -> Value {
+    let disabled = luyaz_scenario::disabled_state(c.path(SCENARIO_DISABLED));
+    let enabled = disabled == luyaz_scenario::DisabledState::Active;
     let cfg: sc::Config = read(c, SCENARIO_CONFIG).unwrap_or_default();
     let st: sc::RunState = read(c, SCENARIO_STATE).unwrap_or_default();
-    let pin = std::fs::read_to_string(c.path(SCENARIO_PIN))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let scen = cfg.scenario(&st.current);
+    let pin = enabled
+        .then(|| {
+            std::fs::read_to_string(c.path(SCENARIO_PIN))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .flatten();
+    let scen = enabled.then(|| cfg.scenario(&st.current)).flatten();
     let e = luyaz_api::scenario::Engine {
         configured: !cfg.scenarios.is_empty(),
-        enabled: !exists(c, SCENARIO_DISABLED),
-        current: &st.current,
+        enabled,
+        current: if enabled { &st.current } else { "" },
         pin,
-        guard_takeover: exists(c, TAKEOVER_FILE),
-        last_switch: st.last_switch,
+        guard_takeover: enabled && exists(c, TAKEOVER_FILE),
+        last_switch: enabled.then_some(st.last_switch).flatten(),
     };
     let current = scen.map(|s| luyaz_api::scenario::Current {
         id: &s.id,
@@ -95,7 +101,7 @@ fn scenario(c: &Compat) -> Value {
         &mut v,
         restores
             .iter()
-            .any(|p| p.key == luyaz_api::chill::CHILL_ON_KEY),
+            .any(|p| p.key == luyaz_api::chill::CHILL_ON_KEY) && enabled,
         scen.is_some_and(sc::is_abroad),
         scen.iter().flat_map(|s| s.actions.iter()).map(|a| {
             let member = a
@@ -107,6 +113,7 @@ fn scenario(c: &Compat) -> Value {
             (a.action.path.as_str(), member)
         }),
     );
+    v["disabled_state"] = json!(disabled.as_str());
     v
 }
 

@@ -224,17 +224,16 @@ async fn the_writes_are_not_served_with_writes_off() {
 
 #[tokio::test]
 async fn power_save_post_is_the_read_put_stays_the_scenarios() {
-    // POST reads, PUT is the scenario engine's (503 until it has started)
+    // POST reads, PUT is the scenario engine's route and remains available while it is dormant.
     let r = rig("ps-admin", true, None).await;
     let (st, b) = call(r.addr, "POST", "/api/device/power-save", "{}").await;
     assert_eq!((st, b["data"]["asked"].clone()), (200, json!({})));
     let (st, b) = call(r.addr, "PUT", "/api/device/power-save", r#"{"x":1}"#).await;
-    assert_eq!(
-        (st, b["error_en"].as_str()),
-        (503, Some("the scenario engine has not started")),
-        "{b}"
-    );
-    assert!(r.log.lock().unwrap().is_empty());
+    assert_eq!((st, b["ok"].as_bool()), (200, Some(true)), "{b}");
+    let log = r.log.lock().unwrap().clone();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0]["action"], "vendor.call");
+    assert_eq!(log[0]["source"], "scenario");
     // writes off: PUT is "not here", not a bare 405
     let r = rig("ps-off", false, None).await;
     for (m, p) in [

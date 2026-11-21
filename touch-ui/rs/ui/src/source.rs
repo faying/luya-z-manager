@@ -180,6 +180,7 @@ pub trait Source {
     /// open kept run `i` of the list
     fn ladder_open(&mut self, i: usize);
     fn scenario_kick(&mut self);
+    fn scenario_enable(&mut self, on: bool);
     fn netinfo_act(&mut self, a: NiAct);
     /// "" = back to automatic
     fn netinfo_pin(&mut self, id: &str);

@@ -29,6 +29,11 @@
 .hm-note { margin: 0 0 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .hm-note a { display: inline-flex; align-items: center; min-height: 44px; font-weight: 500; }
 .hm-grid .nd-row__text { display: flex; flex-direction: column; }
+#hm-scene { padding: 8px 12px; }
+#hm-scene .nd-module__head { min-height: 28px; }
+@media (min-width: 1024px) {
+  #hm-scene { padding: 10px 14px; }
+}
 /* operator mark (oplogo.rs): white chip so dark marks survive dark mode; round first-letter badge otherwise */
 .op-logo { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; vertical-align: middle; margin-inline-end: 6px; padding: 1px 3px; border-radius: 4px; background: #fff; box-sizing: border-box; }
 .op-logo img { width: auto; max-width: 100%; }

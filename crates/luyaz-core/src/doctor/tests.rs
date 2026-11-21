@@ -330,6 +330,44 @@ fn scenarios() {
 }
 
 #[test]
+fn scenario_disabled_marker_has_four_distinct_doctor_states() {
+    let mut fx = fixture("");
+    let cases = [
+        (None, "ok", "5 秒前"),
+        (Some(luyaz_scenario::DISABLED_PAUSED), "ok", "情景模式已关闭"),
+        (Some(luyaz_scenario::DISABLED_STOPPING), "warn", "正在停止情景模式"),
+        (Some("unknown-v1"), "warn", "不可识别"),
+    ];
+    for (marker, level, detail) in cases {
+        match marker {
+            Some(value) => then(
+                &mut fx,
+                &[],
+                &format!("printf '%s' '{}' >\"$T/scenario-disabled\"", value),
+            ),
+            None => then(&mut fx, &[], "rm -f \"$T/scenario-disabled\""),
+        }
+        let row = heartbeat(&cfg(&fx));
+        assert_eq!(row.level, level);
+        assert!(row.detail.contains(detail), "{}", row.detail);
+    }
+}
+
+#[test]
+fn scenario_disabled_wifi_does_not_claim_old_scenario_is_running() {
+    let mut fx = fixture(PROBLEMS);
+    then(
+        &mut fx,
+        &[],
+        "printf '%s' 'paused-v1' >\"$T/scenario-disabled\"",
+    );
+    let row = wifi(&cfg(&fx));
+    assert_eq!(row.level, "warn");
+    assert!(row.detail.contains("情景模式已关闭"));
+    assert!(!row.detail.contains("当前情景关着 Wi-Fi"));
+}
+
+#[test]
 fn chill_rows() {
     // the retired home-exit cases went with the feature; what is left is the listener check
     let scenarios: Vec<String> = [

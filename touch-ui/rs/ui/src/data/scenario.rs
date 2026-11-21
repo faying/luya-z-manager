@@ -237,7 +237,10 @@ impl Scenario {
 
         // the logged-in read: on a lit Home only, once a minute or when the summary moved
         let pub_sig = fnv(fnv(FNV0, self.name.as_bytes()), format!("{}/{}/{}", self.last_switch, self.pin, self.enabled as i32).as_bytes());
-        if active && lit && self.ok && (just_shown || just_lit || pub_sig != self.detail_sig || self.detail_ms == 0 || t - self.detail_ms >= SC_DETAIL_MS) {
+        if self.ok && !self.enabled {
+            self.detail = None;
+            self.detail_ms = 0;
+        } else if active && lit && self.ok && self.enabled && (just_shown || just_lit || pub_sig != self.detail_sig || self.detail_ms == 0 || t - self.detail_ms >= SC_DETAIL_MS) {
             self.detail_sig = pub_sig;
             self.detail_ms = t;
             let (code, b) = agent.api_ms("GET", "/api/scenario", None, SC_DETAIL_MAX, SC_IO_MS);
@@ -373,6 +376,35 @@ impl Scenario {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_public_status_clears_detail_and_skips_private_request() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let len = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..len]).starts_with("GET /v2/api/public/status "));
+            let body = r#"{"data":{"scenario":{"configured":true,"enabled":false}}}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            listener
+        });
+        let mut agent = CoreApi::default();
+        agent.config(port);
+        let mut scenario = Scenario::new();
+        scenario.detail = Some(Detail { candidate: "away".into(), matched_ssid: "old".into(), enter_hits: 2, ..Default::default() });
+        scenario.poll(&mut agent, true, true);
+        let status = scenario.status();
+        assert_eq!((status.available, status.enabled, status.detail), (1, 0, 0));
+        assert!(status.candidate.is_empty() && status.matched_ssid.is_empty() && status.enter_hits == 0);
+        let listener = server.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+    }
 
     #[test]
     fn reads_the_detail() {

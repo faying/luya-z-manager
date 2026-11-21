@@ -76,25 +76,25 @@ async function own(p) {
   await p.screenshot({ path: `${OUT}/scene-desk-zh.png`, fullPage: true });
   ok((await stored()).enabled === true, "engine starts on");
 
-  // ---- engine: Cancel leaves it; confirm turns it OFF (the old page turned it on) ----
-  await p.click("#sc-now button[role=switch]");
+  // ---- engine: Cancel leaves it; confirm turns it OFF while keeping device state ----
+  await p.click("#sc-pin button[role=radio]:has-text('关闭')");
   await ask("sc-eng");
-  ok(/关闭引擎/.test(await op("sc-eng")) || /不再切换情景/.test(await op("sc-eng")), `engine off: inline confirm: ${await op("sc-eng")}`);
+  ok(/关闭引擎/.test(await op("sc-eng")) && /保留当前 Wi-Fi/.test(await op("sc-eng")), `engine off: inline confirm: ${await op("sc-eng")}`);
   await cancel("sc-eng").click();
   await p.waitForFunction(() => !document.querySelector("#sc-eng-op .nd-confirm"), null, { timeout: 5000 });
   ok((await stored()).enabled === true, "Cancel: still on");
-  await p.click("#sc-now button[role=switch]");
+  await p.click("#sc-pin button[role=radio]:has-text('关闭')");
   await ask("sc-eng");
   await confirm("sc-eng").click();
   await done("sc-eng", /引擎已关闭|没有生效|设备已接受|连接中断/, 60000);
-  ok(await op("sc-eng") === "引擎已关闭" && (await stored()).enabled === false, `engine off, read back: ${await op("sc-eng")} / enabled=${(await stored()).enabled}`);
+  ok(await op("sc-eng") === "引擎已关闭" && (await stored()).enabled === false && (await stored()).pin === null, `engine off, read back: ${await op("sc-eng")} / enabled=${(await stored()).enabled} / pin=${(await stored()).pin}`);
   await until(p, "#sc-status", /引擎已关闭/, 15000);
-  ok(await p.locator("#sc-now button[role=switch]").getAttribute("aria-checked") === "false", "the switch follows");
-  await p.click("#sc-now button[role=switch]");
-  await ask("sc-eng");
-  await confirm("sc-eng").click();
-  await done("sc-eng", /引擎已开启|没有生效|设备已接受/, 30000);
-  ok(await op("sc-eng") === "引擎已开启" && (await stored()).enabled === true, `engine on again: ${await op("sc-eng")}`);
+  ok(await p.locator("#sc-pin button[role=radio]:has-text('关闭')").getAttribute("aria-checked") === "true", "the Off option follows");
+  await p.click("#sc-pin button[role=radio]:has-text('自动')");
+  await ask("sc-pin");
+  await confirm("sc-pin").click();
+  await done("sc-pin", /已取消固定|没有生效|设备已接受/, 30000);
+  ok(await op("sc-pin") === "已取消固定" && (await stored()).enabled === true, `engine on again: ${await op("sc-pin")}`);
 
   // ---- pin: "home" pins home (the old page always unpinned) ----
   await p.click("#sc-pin button[role=radio]:has-text('在家')");
@@ -269,7 +269,7 @@ async function own(p) {
   await scenario("down");
   await post("/router/scenario/refresh");
   await until(p, "#sc-status", /设置停在/, 20000);
-  ok(/设置停在 \d\d:\d\d/.test(await txt(p, "#sc-status")) && await p.locator("#sc-now button[role=switch]").isDisabled(), `stale: ${await txt(p, "#sc-status .nd-status__meta")}; controls off`);
+  ok(/设置停在 \d\d:\d\d/.test(await txt(p, "#sc-status")) && await p.locator("#sc-pin button[role=radio]").first().isDisabled(), `stale: ${await txt(p, "#sc-status .nd-status__meta")}; controls off`);
   await p.screenshot({ path: `${OUT}/scene-stale.png`, fullPage: true });
   await scenario("normal");
   await post("/router/scenario/refresh");

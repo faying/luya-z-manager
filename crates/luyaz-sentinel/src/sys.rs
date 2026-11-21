@@ -824,6 +824,9 @@ impl WorkerIo for RealWorker {
     fn read(&mut self, path: &str) -> Option<String> {
         read(path)
     }
+    fn scenario_state(&mut self, path: &str) -> luyaz_scenario::DisabledState {
+        luyaz_scenario::disabled_state(path)
+    }
     fn exists(&mut self, path: &str) -> bool {
         std::path::Path::new(path).exists()
     }

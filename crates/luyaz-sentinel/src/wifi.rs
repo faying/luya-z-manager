@@ -24,6 +24,7 @@ use std::time::Duration;
 pub const LOCK_WAIT: Duration = Duration::from_secs(150);
 pub const ON_DEADLINE_S: u64 = 45;
 pub const POLL_S: u64 = 3;
+pub const SCENARIO_PAUSED: &str = "scenario mode is paused";
 
 pub const SET_MODULE: &str =
     r#"{"action":"wifi.set_module","source":"guard","params":{"enabled":1}}"#;
@@ -87,6 +88,13 @@ pub trait WifiOps {
     fn unlock_wifi(&mut self);
     fn lock_write(&mut self, wait: Duration) -> Result<(), String>;
     fn unlock_write(&mut self);
+    /// Re-read the scenario marker after a recovery lock is acquired.
+    fn scenario_paused(&mut self) -> bool {
+        matches!(
+            luyaz_scenario::disabled_state(luyaz_scenario::DISABLED_FLAG),
+            luyaz_scenario::DisabledState::Stopping | luyaz_scenario::DisabledState::Paused
+        )
+    }
     fn uci_get(&mut self, key: &str) -> Option<String>;
     /// `uci set` each, then `uci commit wireless`.
     fn uci_set_commit(&mut self, pairs: &[(&str, &str)]) -> Result<(), String>;
@@ -120,6 +128,10 @@ fn through_core(ops: &mut dyn WifiOps) -> Via {
     if let Err(e) = ops.lock_wifi(LOCK_WAIT) {
         return Via::Done(Err(format!("Wi-Fi lock: {e}")));
     }
+    if ops.scenario_paused() {
+        ops.unlock_wifi();
+        return Via::Done(Err(SCENARIO_PAUSED.into()));
+    }
     if ops.uci_get(luyaz_wifi::VENDOR_ONOFF).as_deref() == Some("0") {
         ops.log("vendor Wi-Fi switch (wireless.zte_mbb.wifi_onoff) is off; turning it on");
         match ops.core(SET_MODULE) {
@@ -130,6 +142,10 @@ fn through_core(ops: &mut dyn WifiOps) -> Via {
                 return Via::Direct;
             }
         }
+    }
+    if ops.scenario_paused() {
+        ops.unlock_wifi();
+        return Via::Done(Err(SCENARIO_PAUSED.into()));
     }
     let r = match ops.core(APPLY) {
         Core::Done => {
@@ -156,9 +172,18 @@ fn through_core(ops: &mut dyn WifiOps) -> Via {
 fn direct(ops: &mut dyn WifiOps) -> Result<(), String> {
     ops.lock_write(LOCK_WAIT)
         .map_err(|e| format!("write lock: {e}; giving up this round"))?;
+    if ops.scenario_paused() {
+        ops.unlock_write();
+        return Err(SCENARIO_PAUSED.into());
+    }
     if let Err(e) = ops.lock_wifi(LOCK_WAIT) {
         ops.unlock_write();
         return Err(format!("Wi-Fi lock: {e}; giving up this round"));
+    }
+    if ops.scenario_paused() {
+        ops.unlock_wifi();
+        ops.unlock_write();
+        return Err(SCENARIO_PAUSED.into());
     }
     ops.log("the core is not there: writing Wi-Fi directly");
     if ops.uci_get(luyaz_wifi::VENDOR_ONOFF).as_deref() == Some("0") {

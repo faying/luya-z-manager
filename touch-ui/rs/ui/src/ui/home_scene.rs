@@ -20,7 +20,7 @@ const BAND_H: i32 = 58;
 /// the CHILL column takes the card's full width
 const CH_W: i32 = CARD_W;
 /// exit lines under the CHILL head
-pub const EX_LINES: usize = 4;
+pub const EX_LINES: usize = 3;
 const LINE_H: i32 = 18;
 /// lines start under the head row and end above the card's bottom padding
 const LINES_TOP: i32 = BAND_H + 8 + 22;
@@ -277,7 +277,7 @@ fn worse_ms(a: i32, b: i32) -> i32 {
     a.max(b)
 }
 
-/// Five lines or more: the first three, the rest as one grey 「+N」 line (their exit if they
+/// Four lines or more: the first two, the rest as one grey 「+N」 line (their exit if they
 /// share one, their tags joined with 「/」, the worst latency).
 pub fn ex_fold(mut v: Vec<ExLine>) -> Vec<ExLine> {
     if v.len() <= EX_LINES {
@@ -892,18 +892,27 @@ mod tests {
     }
 
     #[test]
-    fn five_lines_fold_into_three_and_plus_n() {
+    fn five_lines_fold_into_two_and_plus_n() {
         let v = vec![l("其余", "节点", 88), l("国内", "直连", 22), l("AI", "节点", 41), l("版权", "家里", 380), l("IP", "家里", 395)];
         let f = ex_fold(v);
-        assert_eq!(f.len(), 4);
-        assert_eq!(f[3].tag, "+2");
-        assert_eq!(f[3].exit, "家里");
-        assert_eq!(f[3].place, "版权/IP");
-        assert_eq!(f[3].ms, 395);
+        assert_eq!(f.len(), 3);
+        assert_eq!(f[2].tag, "+3");
+        assert_eq!(f[2].exit, "");
+        assert_eq!(f[2].place, "AI/版权/IP");
+        assert_eq!(f[2].ms, 395);
         let v = vec![l("a", "x", 1), l("b", "y", 2), l("c", "z", 3), l("d", "x", LAT_PAUSED), l("e", "y", 9)];
         let f = ex_fold(v);
-        assert_eq!((f[3].exit.as_str(), f[3].ms), ("", LAT_PAUSED));
-        assert_eq!(ex_fold(vec![l("a", "x", 1); 4]).len(), 4);
+        assert_eq!((f[2].exit.as_str(), f[2].ms), ("", LAT_PAUSED));
+        assert_eq!(ex_fold(vec![l("a", "x", 1); 3]).len(), 3);
+        assert_eq!(ex_fold(vec![l("a", "x", 1); 4])[2].tag, "+2");
+    }
+
+    #[test]
+    fn compact_scene_keeps_exit_lines_and_bottom_row_separate() {
+        assert_eq!(EX_LINES, 3);
+        assert!(LINES_TOP + EX_LINES as i32 * LINE_H <= LINES_BOT);
+        assert!(SCENE_Y + SCENE_H < ROW_Y);
+        assert!(ROW_Y + CELL_H < super::super::home::FOLD_Y);
     }
 
     #[test]

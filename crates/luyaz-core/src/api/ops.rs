@@ -1230,7 +1230,7 @@ pub(crate) fn note_exit_abroad(root: &str, now: i64) {
     use super::status::{SCENARIO_CONFIG, SCENARIO_DISABLED, SCENARIO_STATE};
     let path = |p: &str| std::path::PathBuf::from(format!("{root}{p}"));
     let read = |p: &str| std::fs::read_to_string(path(p)).ok();
-    if path(SCENARIO_DISABLED).exists() {
+    if luyaz_scenario::disabled_state(path(SCENARIO_DISABLED)) != luyaz_scenario::DisabledState::Active {
         return;
     }
     let cfg: sc::Config = read(SCENARIO_CONFIG)

@@ -252,7 +252,10 @@ fn toggled(c: &Compat, on: bool, was_on: bool) {
         }
         return;
     }
-    if !was_on || c.path(SCENARIO_DISABLED).exists() {
+    if !was_on
+        || luyaz_scenario::disabled_state(c.path(SCENARIO_DISABLED))
+            != luyaz_scenario::DisabledState::Active
+    {
         return;
     }
     let cfg: sc::Config = read(SCENARIO_CONFIG)

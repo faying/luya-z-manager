@@ -486,6 +486,10 @@ function scenarioPin(ctx: Ctx): Reply {
   if (typeof id === "string") {
     if (!findScenario(id)) return fail(`unknown scenario ${JSON.stringify(id)}`, 400);
     pin = id;
+    if (!enabled) {
+      enabled = true;
+      logLine("engine enabled");
+    }
     logLine(`pinned to ${JSON.stringify(id)}`);
     // The engine tick (every 15 s) switches to the pinned scenario.
     const t = setTimeout(() => {
@@ -494,6 +498,10 @@ function scenarioPin(ctx: Ctx): Reply {
     t.unref?.();
   } else {
     pin = null;
+    if (!enabled) {
+      enabled = true;
+      logLine("engine enabled");
+    }
     logLine("pin cleared");
   }
   return ok(stateJson());
@@ -508,24 +516,8 @@ function scenarioEnabled(ctx: Ctx): Reply {
     logLine("engine enabled");
   } else {
     enabled = false;
-    logLine("engine disabled — restoring away scenario");
-    if (!shared.wifiOn) {
-      shared.wifiOn = true;
-      logLine("[bootsafe] Wi-Fi was down; restored away scenario");
-    } else {
-      logLine("[bootsafe] Wi-Fi already up; nothing to repair");
-    }
-    runRestores(undefined);
-    // bootsafe sleeps 5 s + 4 s before checking beaconing, then the restores
-    // poll verify_field — the real call takes 9-20 s (client override: 120 s).
-    // The engine's next tick lands on away.
-    const t = setTimeout(() => {
-      if (!enabled && run.current !== "away") {
-        logLine("engine disabled while away from the away scenario — restoring it");
-        switchTo("away");
-      }
-    }, 3000);
-    t.unref?.();
+    pin = null;
+    logLine("engine disabled — keeping current device state");
     return { data: stateJson(), delayMs: 9500 };
   }
   return ok(stateJson());

@@ -800,6 +800,7 @@ pub struct netinfo_t {
     pub cells: Vec<ni_cell_t>,
     pub scene_known: i32,
     pub scene_enabled: i32,
+    pub scene_stopping: bool,
     pub scene_takeover: i32,
     pub scene_current: String,
     pub scene_pin: String,

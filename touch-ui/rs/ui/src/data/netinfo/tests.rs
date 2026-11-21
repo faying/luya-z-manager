@@ -23,6 +23,60 @@ fn p(n: &mut netinfo_t, s: &str) {
 }
 
 #[test]
+fn disabled_scenes_keep_the_picker_configuration() {
+    let mut n = empty();
+    p(&mut n, r#"{"scenes":{"enabled":false,"current":"home","pin":null,"list":[{"id":"home","name":"在家"},{"id":"away","name":"外出"}]}}"#);
+    assert_eq!((n.scene_known, n.scene_enabled, n.nscenes), (1, 0, 2));
+    assert!(n.scene_pin.is_empty());
+    assert_eq!(n.scenes[1].id, "away");
+}
+
+#[test]
+fn scenario_enable_puts_then_polls_fresh_state() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        for (expected, body) in [
+            ("PUT /v2/api/scenario/enabled ", r#"{"ok":true}"#),
+            ("GET /v2/api/netinfo ", r#"{"data":{"scenes":{"enabled":false,"pin":null,"list":[]}}}"#),
+        ] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req = Vec::new();
+            let mut chunk = [0; 1024];
+            while !req.windows(4).any(|v| v == b"\r\n\r\n") {
+                let len = stream.read(&mut chunk).unwrap();
+                assert!(len > 0);
+                req.extend_from_slice(&chunk[..len]);
+            }
+            let header = String::from_utf8_lossy(&req);
+            assert!(header.starts_with(expected));
+            let body_len = if expected.starts_with("PUT") { r#"{"enabled":false}"#.len() } else { 0 };
+            let header_end = req.windows(4).position(|v| v == b"\r\n\r\n").unwrap() + 4;
+            while req.len() - header_end < body_len {
+                let len = stream.read(&mut chunk).unwrap();
+                assert!(len > 0);
+                req.extend_from_slice(&chunk[..len]);
+            }
+            if body_len != 0 {
+                assert_eq!(&req[header_end..header_end + body_len], br#"{"enabled":false}"#);
+            }
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        }
+    });
+    let mut agent = CoreApi::default();
+    agent.config(port);
+    let mut n = Netinfo::default();
+    n.scenario_enable(&mut agent, false);
+    assert!(n.action_error().is_empty());
+    n.poll(&mut agent, NI_PAGE);
+    assert_eq!((n.ni.scene_known, n.ni.scene_enabled), (1, 0));
+    server.join().unwrap();
+}
+
+#[test]
 fn full_body() {
     lang::set_en(false);
     let mut n = empty();

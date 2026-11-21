@@ -30,8 +30,8 @@ pub const SC_CARD_H: i32 = 72;
 pub const HERO_Y: i32 = 4;
 pub const HERO_BOX_H: i32 = 147;
 pub const SCENE_Y: i32 = 156;
-pub const SCENE_H: i32 = 174;
-pub const ROW_Y: i32 = 336;
+pub const SCENE_H: i32 = 154;
+pub const ROW_Y: i32 = 316;
 pub const CELL_H: i32 = 54;
 /// below the fold: 落地 (the speed chart is on 系统)
 pub const FOLD_Y: i32 = ROW_Y + CELL_H + 2 * MARGIN;

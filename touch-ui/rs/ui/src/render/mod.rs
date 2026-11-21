@@ -379,6 +379,9 @@ impl Source for Replay {
     fn scenario_kick(&mut self) {
         self.acted();
     }
+    fn scenario_enable(&mut self, _on: bool) {
+        self.acted();
+    }
     fn netinfo_act(&mut self, _a: NiAct) {
         self.acted();
     }

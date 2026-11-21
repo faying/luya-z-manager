@@ -706,6 +706,7 @@ struct Dev {
     beacon: bool,
     health: Option<Health>,
     restore_ok: bool,
+    pause_during_restore: bool,
     restores: u32,
     autosleep: Vec<bool>,
     alerts: Vec<String>,
@@ -828,6 +829,13 @@ impl WorkerIo for Dev {
         self.alerts.push(kind.into());
     }
     fn restore_wifi(&mut self) -> Result<(), String> {
+        if self.pause_during_restore {
+            self.files.insert(
+                luyaz_scenario::DISABLED_FLAG.into(),
+                luyaz_scenario::DISABLED_STOPPING.into(),
+            );
+            return Err(wifi::SCENARIO_PAUSED.into());
+        }
         self.changes += 1;
         self.restores += 1;
         if self.restore_ok {
@@ -1122,6 +1130,72 @@ fn guard_device_suspended() {
     d.up = w.wifi.next_try + 1200;
     w.round(&mut d);
     assert_eq!(d.restores, 2, "…keeps being handled after waking");
+}
+
+#[test]
+fn guard_paused_skips_watchdog_across_stale_windows_and_releases_old_takeover() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    d.beacon = false;
+    d.restore_ok = true;
+    d.files
+        .insert(luyaz_scenario::DISABLED_FLAG.into(), luyaz_scenario::DISABLED_PAUSED.into());
+    d.files
+        .insert("/tmp/luyaz/wifiguard.took-over".into(), "700\n".into());
+    d.files
+        .insert("/sys/class/rtc/rtc0/since_epoch".into(), "1000\n".into());
+    d.files
+        .insert("/sys/class/rtc/rtc0/wakealarm".into(), "".into());
+    w.wifi.episode = Some(700);
+    w.wifi.took_over = true;
+    w.wifi.sleep_held = true;
+    w.wifi.next_try = 1200;
+    w.wifi.backoff = 240;
+
+    w.round(&mut d);
+    d.up = 1900;
+    w.round(&mut d);
+
+    assert_eq!(d.restores, 0);
+    assert!(d.alerts.is_empty(), "paused mode must not alert on missing heartbeat");
+    assert!(d.files.get("/sys/class/rtc/rtc0/wakealarm").is_some_and(|v| v.is_empty()));
+    assert!(marker(&d).is_none());
+    assert_eq!(d.autosleep, vec![true]);
+    assert_eq!(w.wifi.episode, None);
+    assert_eq!(w.wifi.next_try, 0);
+    assert_eq!(w.wifi.backoff, 0);
+}
+
+#[test]
+fn guard_stopping_skips_recovery_and_rtc() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    d.files.insert(
+        luyaz_scenario::DISABLED_FLAG.into(),
+        luyaz_scenario::DISABLED_STOPPING.into(),
+    );
+    d.files
+        .insert("/sys/class/rtc/rtc0/since_epoch".into(), "1000\n".into());
+    d.files
+        .insert("/sys/class/rtc/rtc0/wakealarm".into(), "".into());
+    w.round(&mut d);
+    assert_eq!(d.restores, 0);
+    assert!(d.alerts.is_empty());
+    assert!(d.files.get("/sys/class/rtc/rtc0/wakealarm").is_some_and(|v| v.is_empty()));
+}
+
+#[test]
+fn guard_stopping_race_clears_retry_without_restore_failure() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 2000;
+    d.hb(1600);
+    d.pause_during_restore = true;
+    w.round(&mut d);
+    assert_eq!(d.restores, 0);
+    assert!(!d.kinds().contains("wifi-restore-failed"));
+    assert_eq!(w.wifi.next_try, 0);
+    assert_eq!(w.wifi.backoff, 0);
+    assert!(marker(&d).is_none());
 }
 
 #[test]
@@ -1736,6 +1810,8 @@ struct W {
     up: bool,
     /// other uci keys (`wireless.guest_*`)
     uci: HashMap<String, String>,
+    scenario_paused: bool,
+    pause_on_lock: bool,
 }
 
 impl WifiOps for W {
@@ -1766,6 +1842,9 @@ impl WifiOps for W {
             return Err("busy".into());
         }
         self.held.push("wifi");
+        if self.pause_on_lock {
+            self.scenario_paused = true;
+        }
         Ok(())
     }
     fn unlock_wifi(&mut self) {
@@ -1785,6 +1864,9 @@ impl WifiOps for W {
     }
     fn unlock_write(&mut self) {
         self.held.retain(|h| *h != "write");
+    }
+    fn scenario_paused(&mut self) -> bool {
+        self.scenario_paused
     }
     fn uci_get(&mut self, key: &str) -> Option<String> {
         if key.ends_with("wifi_onoff") {
@@ -1845,6 +1927,20 @@ fn wifi_through_the_core_writes_nothing_directly() {
     );
     assert!(w.held.is_empty(), "locks let go");
     assert!(wifi::APPLY.contains(r#""wireless.wifi0.disabled":"0","wireless.wifi1.disabled":"0","wireless.main_2g.disabled":"0","wireless.main_5g.disabled":"0","wireless.guest_2g.disabled":"1","wireless.guest_5g.disabled":"1"},"reload":true,"best_effort":true"#));
+}
+
+#[test]
+fn wifi_stopping_after_lock_skips_without_device_writes() {
+    let mut w = W {
+        listening: true,
+        pause_on_lock: true,
+        comes_up: true,
+        ..Default::default()
+    };
+    assert_eq!(wifi::restore(&mut w), Err(wifi::SCENARIO_PAUSED.into()));
+    assert!(wops(&w, "core").is_empty());
+    assert!(wops(&w, "uci").is_empty() && wops(&w, "ubus").is_empty());
+    assert!(w.held.is_empty(), "lock-race cancellation releases both locks");
 }
 
 #[test]

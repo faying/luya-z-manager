@@ -451,6 +451,9 @@ impl Source for Live {
     fn scenario_kick(&mut self) {
         self.scenario.kick();
     }
+    fn scenario_enable(&mut self, on: bool) {
+        self.netinfo.scenario_enable(&mut self.agent, on);
+    }
     fn netinfo_act(&mut self, a: NiAct) {
         let ag = &mut self.agent;
         match a {

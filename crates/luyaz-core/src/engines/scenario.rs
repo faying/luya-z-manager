@@ -17,18 +17,17 @@
 //! slept is not wedged) makes u60d exit, so procd starts it again: the Wi-Fi lock is a flock and
 //! goes only with the process.
 
-use luyaz_scenario::{Engine as ScenarioEngine, Io};
+use luyaz_scenario::{DisabledState, Engine as ScenarioEngine, Io};
 use serde_json::{Value, json};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 
 use crate::api::Compat;
 
-/// The watchdog's look: the first one starts the engine; after that only a wedge
-/// ([`luyaz_scenario::WEDGED`], 15 min) or an ended thread is looked for (R18-P1-04: was 2 s).
+/// Check for a stuck or prematurely ended worker while it owns the lease.
 const LOOK_SECS: u64 = 30;
 
 // ── how the engine reaches the device from u60d ────────────────────────────
@@ -312,23 +311,190 @@ impl Io for U60dIo {
 /// The engine u60d runs, if any.
 #[derive(Default)]
 pub struct Running {
-    now: Mutex<Option<Live>>,
+    now: Mutex<Lifecycle>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Lifecycle {
+    live: Option<Live>,
+    stopping: bool,
 }
 
 struct Live {
     engine: Arc<ScenarioEngine>,
-    thread: std::thread::JoinHandle<()>,
+    active: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    watchdog: Option<tokio::task::AbortHandle>,
 }
 
 impl Running {
-    /// The engine once it runs.
+    /// The dormant engine or the engine with a live worker.
     pub(crate) fn engine(&self) -> Option<Arc<ScenarioEngine>> {
         self.now
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .live
             .as_ref()
             .map(|l| l.engine.clone())
     }
+
+    /// Create the engine without starting its worker. This keeps read and config routes usable
+    /// while scenario mode is paused or while a marker is being finished after a restart.
+    pub(crate) fn initialize(&self, c: &Compat, make: &MakeIo) {
+        let mut g = self.now.lock().unwrap_or_else(|e| e.into_inner());
+        if g.live.is_some() || g.stopping {
+            return;
+        }
+        let active = Arc::new(AtomicBool::new(false));
+        let io = make(c, active.clone());
+        g.live = Some(Live {
+            engine: Arc::new(ScenarioEngine::new(io)),
+            active,
+            thread: None,
+            watchdog: None,
+        });
+    }
+
+    /// Start the scenario worker when the marker says the engine is active.
+    pub(crate) fn start_worker(&self, c: &Compat, make: &MakeIo) -> Result<(), String> {
+        self.initialize(c, make);
+        let mut g = self.now.lock().unwrap_or_else(|e| e.into_inner());
+        if g.stopping {
+            return Err("scenario worker is stopping".into());
+        }
+        let live = g
+            .live
+            .as_mut()
+            .ok_or_else(|| "scenario engine is not initialized".to_string())?;
+        Self::spawn_worker(c, live, true)
+    }
+
+    /// Resume and write the pin or enabled flag under the same lock as worker creation.
+    /// A request cannot clear the stopping marker while a worker is being joined.
+    pub(crate) fn resume_mode(
+        &self,
+        c: &Compat,
+        write: impl FnOnce(&ScenarioEngine) -> (u16, Value),
+    ) -> (u16, Value) {
+        let mut g = self.now.lock().unwrap_or_else(|e| e.into_inner());
+        if g.stopping {
+            return stopping();
+        }
+        let Some(live) = g.live.as_mut() else {
+            return (503, json!({"ok": false, "error": "scenario engine is not initialized"}));
+        };
+        let before = live.engine.disabled_state();
+        if before == DisabledState::Stopping {
+            return stopping();
+        }
+        let (status, body) = write(&live.engine);
+        if status < 400 {
+            if let Err(e) = Self::spawn_worker(c, live, false) {
+                if before == DisabledState::Paused {
+                    // No worker started. Keep the guard exempt and let a repeated Off finish
+                    // the pin cleanup if restoring the paused state is interrupted.
+                    let _ = live.engine.write_disabled_state(DisabledState::Stopping);
+                }
+                return (503, json!({"ok": false, "error": e}));
+            }
+        }
+        (status, body)
+    }
+
+    /// The caller holds the lifecycle lock for both lease creation and thread creation.
+    fn spawn_worker(c: &Compat, live: &mut Live, boot: bool) -> Result<(), String> {
+        if live.thread.is_some() || !live.engine.enabled() {
+            return Ok(());
+        }
+        let lease = c.path(luyaz_scenario::LEASE_FILE);
+        if !luyaz_api::lease::wait_free(&lease, "scenario", &|_| {}, Duration::ZERO) {
+            return Err("scenario lease is held by another process".into());
+        }
+        luyaz_api::lease::write(&lease, "u60d").map_err(|e| format!("write scenario lease: {e}"))?;
+        live.active.store(true, Ordering::Release);
+        let engine = live.engine.clone();
+        let thread = match std::thread::Builder::new()
+            .name("scenario".into())
+            .spawn(move || {
+                engine.log("u60d runs the engine");
+                engine.run(boot);
+            })
+        {
+            Ok(t) => t,
+            Err(e) => {
+                live.active.store(false, Ordering::SeqCst);
+                luyaz_api::lease::remove(&lease);
+                return Err(format!("could not start scenario worker: {e}"));
+            }
+        };
+        live.thread = Some(thread);
+        live.watchdog = Some(tokio::spawn(run(Arc::downgrade(&c.scenario), c.clock.secs(LOOK_SECS))).abort_handle());
+        eprintln!("[compat] scenario: u60d runs it");
+        Ok(())
+    }
+
+    /// Stop the worker and finish a stopping marker without holding the lifecycle lock while
+    /// the worker unwinds. A repeated stop waits for the first stop and is idempotent.
+    pub(crate) fn stop_worker(&self, c: &Compat) -> Result<(), String> {
+        let (engine, thread) = {
+            let mut g = self.now.lock().unwrap_or_else(|e| e.into_inner());
+            while g.stopping {
+                g = self.changed.wait(g).unwrap_or_else(|e| e.into_inner());
+            }
+            let live = g.live.as_mut().ok_or("scenario engine is not initialized")?;
+            match live.engine.disabled_state() {
+                DisabledState::Paused if live.thread.is_none() => return Ok(()),
+                DisabledState::Stopping => (),
+                _ => live.engine.write_disabled_state(DisabledState::Stopping)
+                    .map_err(|e| format!("write scenario stopping marker: {e}"))?,
+            }
+            live.active.store(false, Ordering::Release);
+            if let Some(watchdog) = live.watchdog.take() {
+                watchdog.abort();
+            }
+            let going = (live.engine.clone(), live.thread.take());
+            g.stopping = true;
+            going
+        };
+
+        let result = (|| {
+            if thread.is_some_and(|thread| thread.join().is_err()) {
+                return Err("scenario worker panicked".into());
+            }
+            let lease = c.path(luyaz_scenario::LEASE_FILE);
+            if !luyaz_api::lease::wait_free(&lease, "scenario", &|_| {}, Duration::ZERO) {
+                return Err("scenario lease is held by another process".into());
+            }
+            engine.clean_for_pause().map_err(|e| format!("clean scenario state: {e}"))?;
+            for path in [lease, c.path(luyaz_scenario::HEARTBEAT_FILE)] {
+                if let Err(e) = std::fs::remove_file(&path)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    return Err(format!("remove {}: {e}", path.display()));
+                }
+            }
+            engine.write_disabled_state(DisabledState::Paused)
+                .map_err(|e| format!("write scenario paused marker: {e}"))
+        })();
+        let mut g = self.now.lock().unwrap_or_else(|e| e.into_inner());
+        g.stopping = false;
+        self.changed.notify_all();
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn worker_running(&self) -> bool {
+        let g = self.now.lock().unwrap_or_else(|e| e.into_inner());
+        g.live.as_ref().is_some_and(|live| {
+            live.active.load(Ordering::SeqCst)
+                && live.thread.as_ref().is_some_and(|thread| !thread.is_finished())
+        })
+    }
+}
+
+fn stopping() -> (u16, Value) {
+    (409, json!({"ok": false, "error": "正在停止情景模式", "error_en": "scenario mode is stopping"}))
 }
 
 /// How the engine's [`Io`] is made (the device's, or a test's fake).
@@ -360,54 +526,25 @@ pub(crate) fn wedged(since_beat: Option<Duration>) -> bool {
     since_beat.is_some_and(|d| d > luyaz_scenario::WEDGED)
 }
 
-/// Starts the engine (with the writes on); the watchdog while it runs.
-pub async fn run(c: Compat, make: MakeIo) {
-    let mut look = tokio::time::interval(c.clock.secs(LOOK_SECS));
+/// Only scheduled while a worker is live. A wedge can hold a flock, so let procd restart Core.
+async fn run(worker: std::sync::Weak<Running>, interval: Duration) {
+    let mut look = tokio::time::interval(interval);
+    look.tick().await;
     loop {
         look.tick().await;
-        let mut g = c.scenario.now.lock().unwrap_or_else(|e| e.into_inner());
-        match g.as_ref() {
-            None => {
-                let active = Arc::new(AtomicBool::new(true));
-                let io = make(&c, active.clone());
-                let lease = c.path(luyaz_scenario::LEASE_FILE);
-                if let Err(e) = luyaz_api::lease::write(&lease, "u60d") {
-                    eprintln!("[compat] scenario: could not write the lease: {e}");
-                }
-                let engine = Arc::new(ScenarioEngine::new(io));
-                engine.log("u60d runs the engine");
-                let e2 = engine.clone();
-                let thread = match std::thread::Builder::new()
-                    .name("scenario".into())
-                    .spawn(move || e2.run())
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        eprintln!("[compat] scenario: could not start the engine thread: {e}");
-                        luyaz_api::lease::remove(&lease);
-                        continue;
-                    }
-                };
-                *g = Some(Live { engine, thread });
-                eprintln!("[compat] scenario: u60d runs it");
-            }
-            Some(l) if l.thread.is_finished() => {
-                // the loop never ends by itself: it panicked (tests; on the device a panic aborts)
-                eprintln!("[compat] scenario: the engine thread ended; exiting for procd");
-                std::process::exit(70);
-            }
-            Some(l) => {
-                // wedged: a flock goes only with the process, and the guard cannot take over Wi-Fi
-                // while it is held
-                let since = l.engine.since_beat();
-                if wedged(since) {
-                    eprintln!(
-                        "[compat] scenario: no heartbeat for {}s; exiting so procd starts u60d again",
-                        since.map_or(0, |d| d.as_secs())
-                    );
-                    std::process::exit(70);
-                }
-            }
+        let Some(worker) = worker.upgrade() else { return };
+        let g = worker.now.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(live) = g.live.as_ref().filter(|live| !g.stopping && live.engine.enabled()) else {
+            return;
+        };
+        if live.thread.as_ref().is_some_and(|thread| thread.is_finished()) {
+            eprintln!("[compat] scenario: worker ended; exiting for procd");
+            std::process::exit(70);
+        }
+        let since = live.engine.since_beat();
+        if wedged(since) {
+            eprintln!("[compat] scenario: no heartbeat for {}s; exiting for procd", since.map_or(0, |d| d.as_secs()));
+            std::process::exit(70);
         }
     }
 }

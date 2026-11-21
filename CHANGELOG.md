@@ -21,6 +21,7 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- core, lweb, sentinel, touch: add a persistent Off scenario mode. Off retains the current Wi-Fi, CHILL and device state, stops scenario scanning and automatic actions, keeps configuration and manual controls available, and can be resumed from the same selector.
 - The admin web and touchscreen now share Core Wi-Fi transactions. The master switch preserves the saved bands and main AP settings. Confirmation waits for vendor readback, interface state, and hostapd. The channel display refreshes after the operation.
 - Wi-Fi configuration reloads check the intended settings and layout for 15 continuous seconds before confirming.
 - On compatible U60 Pro firmware, Core can finish the stock MAC-filter and transmit-power steps and stop a verified post-Wi-Fi loop when only one radio is enabled.

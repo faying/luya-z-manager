@@ -269,7 +269,7 @@ async fn public_status_has_what_the_screen_reads_without_a_login() {
     }
     // the switch off, the scenarios off
     put(&root, "/data/chill/disabled", "");
-    put(&root, "/data/scenario/disabled", "");
+    put(&root, "/data/scenario/disabled", luyaz_scenario::DISABLED_PAUSED);
     let (_, body) = call(addr, "GET", "/api/public/status", None, "").await;
     assert_eq!(body["data"]["services"]["chill"]["on"], false);
     assert_eq!(body["data"]["scenario"]["enabled"], false);

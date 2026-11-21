@@ -258,14 +258,18 @@ fn scenes(c: &Compat) -> Value {
                 .collect(),
         })
         .collect();
-    luyaz_api::scenario::picker(
-        !c.path(SCENARIO_DISABLED).exists(),
-        &st.current,
+    let disabled = luyaz_scenario::disabled_state(c.path(SCENARIO_DISABLED));
+    let enabled = disabled == luyaz_scenario::DisabledState::Active;
+    let mut picker = luyaz_api::scenario::picker(
+        enabled,
+        if enabled { &st.current } else { "" },
         pin,
-        c.path(TAKEOVER_FILE).exists(),
+        enabled && c.path(TAKEOVER_FILE).exists(),
         &views,
         &cfg.home_mcc,
-    )
+    );
+    picker["disabled_state"] = json!(disabled.as_str());
+    picker
 }
 
 /// The four `zwrt_apn_object` reads (the auto list for the data card's slot).

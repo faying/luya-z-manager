@@ -30,6 +30,7 @@ const OTHER: &[(&str, &str)] = &[
     // `verify_job` / `verify_field` (u60-api chill.rs templates)
     ("GET", "/api/services/chill/job"),
     ("GET", "/api/services/chill"),
+    ("GET", "/api/services/chill/bypass"),
     // the device's /data/scenario/scenarios.json (its other actions are /api/wifi/radio)
     ("PUT", "/api/services/chill/regions"),
 ];
@@ -38,7 +39,8 @@ const OTHER: &[(&str, &str)] = &[
 async fn every_path_the_engines_send_is_a_route() {
     let root = std::env::temp_dir().join(format!("u60d-compat-engine-routes-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(root.join("data/scenario")).unwrap();
+    std::fs::write(root.join("data/scenario/disabled"), luyaz_scenario::DISABLED_PAUSED).unwrap();
     let addr = start(Compat::new(root.to_str().unwrap(), Sources::none()).with_writes(true)).await;
     let mut sent = Vec::new();
     for p in luyaz_policy::scenario::ALLOWED_PATHS {
@@ -53,6 +55,7 @@ async fn every_path_the_engines_send_is_a_route() {
             !(st == 404 && b["error"] == "not_in_compat_yet"),
             "{m} {p} is not a route: {b}"
         );
+        assert_ne!(st, 503, "{m} {p} unavailable while scenario mode is off: {b}");
     }
     let _ = std::fs::remove_dir_all(&root);
 }

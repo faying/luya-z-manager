@@ -28,8 +28,34 @@ pub const SC_PEND_MS: u32 = 45000;
 pub const NI_MAX_SCENES: usize = 6;
 pub const NI_MAX_OPS: usize = 8;
 pub const NI_MAX_CELLS: usize = 8;
-/// 自动 + 各情景 + CHILL 出口
-pub const NET_SCENE_ROWS: usize = 1 + NI_MAX_SCENES + 1;
+/// 自动 + 各情景 + 关闭 + CHILL 出口
+pub const SCENE_OFF_ROW: usize = 1 + NI_MAX_SCENES;
+pub const NET_SCENE_ROWS: usize = SCENE_OFF_ROW + 2;
+
+pub(super) fn scene_selected(n: &netinfo_t, i: usize) -> bool {
+    if n.scene_known == 0 {
+        return false;
+    }
+    if i == SCENE_OFF_ROW {
+        return n.scene_enabled == 0;
+    }
+    if n.scene_enabled == 0 {
+        return false;
+    }
+    if i == 0 {
+        n.scene_pin.is_empty()
+    } else {
+        i <= n.nscenes.max(0) as usize && n.scenes.get(i - 1).is_some_and(|s| n.scene_pin == s.id)
+    }
+}
+
+pub(super) fn scene_readback(n: &netinfo_t, row: usize, id: &str) -> bool {
+    n.scene_known != 0 && if row == SCENE_OFF_ROW {
+        !n.scene_stopping && n.scene_enabled == 0 && n.scene_pin.is_empty()
+    } else {
+        n.scene_enabled != 0 && n.scene_pin == id
+    }
+}
 
 /// Which page each block hangs on.
 pub const NH_SCENE: usize = 0;
@@ -494,7 +520,7 @@ impl Ui {
     }
 
 
-    /// A scene row: 0 = 自动, 1..n = pin scenes[i-1], the last row is something else. A
+    /// A scene row: 0 = 自动, 1..n = pin scenes[i-1], then 关闭 and CHILL. A
     /// scene can turn Wi-Fi on or off, so two taps; once sent, 切换中 until it really moved.
     fn net_sc_tap(&mut self, i: usize) {
         let th = t();
@@ -504,7 +530,7 @@ impl Ui {
             return;
         }
         let nscenes = n.nscenes.max(0) as usize;
-        if i > nscenes {
+        if n.scene_known == 0 || (i > nscenes && i != SCENE_OFF_ROW) {
             return;
         }
         let scene = |k: usize| n.scenes.get(k).cloned().unwrap_or_default();
@@ -514,7 +540,7 @@ impl Ui {
             self.net_paint(true);
             return;
         }
-        let already = if i == 0 { n.scene_pin.is_empty() } else { n.scene_pin == scene(i - 1).id };
+        let already = scene_selected(&n, i);
         if already {
             self.net_clear_arms();
             let t = if i == 0 {
@@ -522,6 +548,8 @@ impl Ui {
                     tr("现在已经是自动 · 按位置和 SIM 判断为「%s」"),
                     if n.scene_current.is_empty() { tr("判定中") } else { net_scene_name(&n, &n.scene_current) }
                 )
+            } else if i == SCENE_OFF_ROW {
+                tr("情景模式已经关闭，当前状态保持不变").into()
             } else {
                 crate::cf!(tr("已经固定在「%s」。要恢复自动判断，点「自动」"), net_scene_name(&n, &n.scene_pin))
             };
@@ -534,14 +562,20 @@ impl Ui {
             let net = &mut self.net;
             net.sc_pend = i as i32;
             net.sc_pend_at = lv::tick_get();
-            net.sc_pend_id = if i > 0 { scene(i - 1).id } else { String::new() };
-            net.sc_pend_name = if i > 0 { net_scene_name(&n, &scene(i - 1).id).to_string() } else { tr("自动").to_string() };
-            net.sc_pend_wifi_off = i > 0 && scene(i - 1).wifi_off != 0;
+            net.sc_pend_id = if i > 0 && i != SCENE_OFF_ROW { scene(i - 1).id } else { String::new() };
+            net.sc_pend_name = if i == SCENE_OFF_ROW { tr("关闭").to_string() } else if i > 0 { net_scene_name(&n, &scene(i - 1).id).to_string() } else { tr("自动").to_string() };
+            net.sc_pend_wifi_off = i > 0 && i != SCENE_OFF_ROW && scene(i - 1).wifi_off != 0;
             net.sc_flash.until = 0;
             self.net_paint(true);
             lv::refr_now();
             let id = self.net.sc_pend_id.clone();
-            self.src.netinfo_pin(&id);
+            if i == SCENE_OFF_ROW {
+                self.src.scenario_enable(false);
+            } else if i == 0 && n.scene_enabled == 0 {
+                self.src.scenario_enable(true);
+            } else {
+                self.src.netinfo_pin(&id);
+            }
             self.sync();
             let err = self.model.netinfo_action_error.clone().unwrap_or_default();
             if !err.is_empty() {
@@ -611,5 +645,34 @@ impl Ui {
         }
         let a = self.net.nr_last;
         self.net_reflow(a[0], a[1], a[2], a[3], a[4]);
+    }
+}
+
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+
+    #[test]
+    fn selection_and_readback_distinguish_off_auto_and_pin() {
+        let mut n = crate::data::netinfo::empty();
+        n.scene_known = 1;
+        n.nscenes = 2;
+        n.scenes[0].id = "home".into();
+        n.scenes[1].id = "away".into();
+        n.scene_pin = "home".into();
+        assert!(scene_selected(&n, SCENE_OFF_ROW));
+        assert!(!scene_selected(&n, 0) && !scene_selected(&n, 1));
+        assert!(!scene_readback(&n, SCENE_OFF_ROW, ""));
+        n.scene_pin.clear();
+        assert!(scene_readback(&n, SCENE_OFF_ROW, ""));
+        assert!(!scene_readback(&n, 0, ""));
+        n.scene_enabled = 1;
+        assert!(scene_selected(&n, 0) && scene_readback(&n, 0, ""));
+        assert!(!scene_selected(&n, SCENE_OFF_ROW));
+        n.scene_pin = "away".into();
+        assert!(scene_selected(&n, 2) && scene_readback(&n, 2, "away"));
+        assert!(!scene_selected(&n, 0) && !scene_selected(&n, 1));
+        assert!(!scene_readback(&n, 1, "home"));
+        assert!(!scene_selected(&n, NET_SCENE_ROWS - 1));
     }
 }

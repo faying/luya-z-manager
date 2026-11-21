@@ -1,22 +1,14 @@
 //! The scenario engine's routes; the engine is [`crate::engines::scenario`].
 
-use axum::{body::Bytes, extract::{Request, State}, middleware::Next, response::Response};
+use axum::{body::Bytes, extract::State, response::Response};
 use serde_json::{Value, json};
 use luyaz_scenario::Engine as ScenarioEngine;
 
 use super::{Compat, reply};
-use crate::engines::scenario::*;
+use crate::engines::scenario::WifiHost;
 
-/// Served once the engine runs (it starts a moment after u60d); 503 before.
-pub async fn owned(State(c): State<Compat>, request: Request, next: Next) -> Response {
-    if c.scenario.engine().is_none() {
-        return reply(503, json!({"ok": false, "error": "情景引擎还没起来", "error_en": "the scenario engine has not started"}));
-    }
-    next.run(request).await
-}
-
-/// Run a route of the engine off the runtime thread (some block for long: disabling restores
-/// away, the scan runs `iw`).
+/// The configuration engine stays available while its worker is off. Its reads and an explicit
+/// `iw` scan run off the runtime thread.
 async fn with_engine(c: &Compat, f: impl FnOnce(&ScenarioEngine) -> (u16, Value) + Send + 'static) -> Response {
     let Some(e) = c.scenario.engine() else {
         return reply(503, json!({"ok": false, "error": "情景引擎还没起来", "error_en": "the scenario engine has not started"}));
@@ -38,11 +30,22 @@ pub async fn template(State(c): State<Compat>) -> Response {
 }
 
 pub async fn pin(State(c): State<Compat>, body: Bytes) -> Response {
-    with_engine(&c, move |e| e.http_pin(&body)).await
+    let (status, result) = crate::state::blocking(move || c.scenario.resume_mode(&c, |e| e.http_pin(&body))).await;
+    reply(status, result)
 }
 
 pub async fn enabled(State(c): State<Compat>, body: Bytes) -> Response {
-    with_engine(&c, move |e| e.http_enabled(&body)).await
+    let stop = serde_json::from_slice::<Value>(&body)
+        .is_ok_and(|body| body["enabled"].as_bool() == Some(false));
+    if !stop {
+        let (status, result) = crate::state::blocking(move || c.scenario.resume_mode(&c, |e| e.http_enabled(&body))).await;
+        return reply(status, result);
+    }
+    let c2 = c.clone();
+    if let Err(e) = crate::state::blocking(move || c2.scenario.stop_worker(&c2)).await {
+        return reply(503, json!({"ok": false, "error": e}));
+    }
+    with_engine(&c, |e| e.http_get()).await
 }
 
 pub async fn scan(State(c): State<Compat>) -> Response {

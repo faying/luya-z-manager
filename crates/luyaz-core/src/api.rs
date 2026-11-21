@@ -279,6 +279,7 @@ impl Compat {
 
     /// The scenario engine reaches the device this way.
     pub fn with_scenario_io(mut self, make: crate::engines::scenario::MakeIo) -> Self {
+        self.scenario.initialize(&self, &make);
         self.scenario_io = Some(make);
         self
     }
@@ -320,9 +321,7 @@ impl Compat {
             tokio::spawn(crate::engines::sms_forward::run(self.clone()));
             tokio::spawn(crate::engines::guard_duties::run(self.clone()));
             tokio::spawn(crate::engines::sentinel_watch::run(self.clone()));
-            if let Some(make) = self.scenario_io.clone() {
-                tokio::spawn(crate::engines::scenario::run(self.clone(), make));
-            }
+            self.resume_scenario().await;
             if let Some(io) = self.scheduler_io.clone() {
                 crate::engines::scheduler::spawn(self.clone(), io);
             }
@@ -337,6 +336,30 @@ impl Compat {
             let esim = self.esim.clone();
             std::thread::spawn(move || esim.run_receipts());
             ops::resume(self.clone()).await;
+        }
+    }
+
+    async fn resume_scenario(&self) {
+        use luyaz_scenario::DisabledState;
+
+        let Some(make) = &self.scenario_io else { return };
+        self.scenario.initialize(self, make);
+        let Some(engine) = self.scenario.engine() else { return };
+        let disabled = engine.disabled_state();
+        // The previous release used an empty file for Off. Migrate it as an
+        // interrupted shutdown so startup never applies a scenario over it.
+        let legacy_off = disabled == DisabledState::Invalid
+            && std::fs::read(self.path(luyaz_scenario::DISABLED_FLAG)).is_ok_and(|bytes| bytes.is_empty());
+        let result = match disabled {
+            DisabledState::Active => self.scenario.start_worker(self, make),
+            DisabledState::Stopping | DisabledState::Invalid if legacy_off || disabled == DisabledState::Stopping => {
+                let c = self.clone();
+                crate::state::blocking(move || c.scenario.stop_worker(&c)).await
+            }
+            _ => return,
+        };
+        if let Err(e) = result {
+            eprintln!("[compat] scenario: startup lifecycle: {e}");
         }
     }
 
@@ -519,24 +542,22 @@ impl Compat {
                 .route("/api/sms/forward/log", get(sms_forward::log_get))
                 .route("/api/sms/forward/log/clear", post(sms_forward::log_clear))
                 .route("/api/sms/forward/retry", post(sms_forward::retry));
-            // the scenario engine (9h): its routes and the actions only it needs
-            #[allow(unused_mut)]
-            let mut scen = Router::new()
+            // The scenario configuration stays available with the worker stopped.
+            let scen = Router::new()
                 .route("/api/scenario", get(scenario::get).put(scenario::put))
                 .route("/api/scenario/template", get(scenario::template))
                 .route("/api/scenario/enabled", axum::routing::put(scenario::enabled))
                 .route("/api/scenario/scan", get(scenario::scan))
-                .route("/api/scenario/log", get(scenario::log))
+                .route("/api/scenario/log", get(scenario::log));
+            let device_actions = Router::new()
                 .route("/api/wifi/guest", axum::routing::put(scenario::guest))
-                .route("/api/device/power-save", axum::routing::put(scenario::power_save));
-            scen = scen
+                .route("/api/device/power-save", axum::routing::put(scenario::power_save))
                 .route("/api/services/chill", get(chill_page::status))
                 .route("/api/services/chill/regions", axum::routing::put(chill_page::regions))
                 .route(
                     "/api/services/chill/bypass",
                     get(chill_page::bypass_get).put(chill_page::bypass_set),
                 );
-            let scen = scen.route_layer(middleware::from_fn_with_state(self.clone(), scenario::owned));
             // scheduled jobs (8d-1d)
             let sched = Router::new()
                 .route(
@@ -552,6 +573,7 @@ impl Compat {
                 .merge(charge)
                 .merge(sms)
                 .merge(scen)
+                .merge(device_actions)
                 .merge(sched)
                 .merge(device_admin::writes())
                 .route("/api/device/reboot", post(device_reboot))
