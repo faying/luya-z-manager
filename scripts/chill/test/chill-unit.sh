@@ -1,5 +1,5 @@
 #!/bin/sh
-# Keep this executable so the kit and CI can invoke the CHILL regression suite directly.
+# The kit and CI invoke this regression suite directly, so preserve its executable bit.
 # ─────────────────────────────────────────────────────────────────────────────
 # chill.sh 离线单测（T8 的单测部分）
 #

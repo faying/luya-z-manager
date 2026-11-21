@@ -1,5 +1,5 @@
 #!/bin/sh
-# This file is invoked directly by the host installer and must remain executable.
+# Invoked directly by the host installer, so the kit preserves this executable bit.
 # ═════════════════════════════════════════════════════════════════════════════
 # Luya-Z 装机包：设备端（busybox ash）。
 
