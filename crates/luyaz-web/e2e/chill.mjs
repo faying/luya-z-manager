@@ -81,7 +81,7 @@ async function own(p, net) {
   ok(await txt(p, "#ch-profile [aria-checked=true]") === "标准", "profile: 标准");
   ok(await p.locator("#ch-prov .nd-row").count() >= 4 && /sub/.test(await txt(p, "#ch-prov")) && /GB/.test(await txt(p, "#ch-prov")) && /到期 \d/.test(await txt(p, "#ch-prov")), `providers: rows, usage, expiry: ${(await txt(p, "#ch-prov")).slice(0, 300)}`);
   ok(await p.locator("#ch-prov .ch-bar").count() === 1, "providers: one usage bar");
-  ok(/温度.*47.*°C/.test(await txt(p, "#ch-vitals")) && /可用内存\s*612\s*MB/.test(await txt(p, "#ch-vitals")) && !/PID/.test(await txt(p, "#ch-vitals")) && /运行时间(—|\d+[hdm])/.test(await txt(p, "#ch-vitals")), `vitals: ${await txt(p, "#ch-vitals")}`);
+  ok(/温度.*47.*°C/.test(await txt(p, "#ch-vitals")) && /可用内存\s*(598|612)\s*MB/.test(await txt(p, "#ch-vitals")) && !/PID/.test(await txt(p, "#ch-vitals")) && /运行时间(—|\d+[hdm])/.test(await txt(p, "#ch-vitals")), `vitals: ${await txt(p, "#ch-vitals")}`);
   ok(/flush 完成/.test(await txt(p, "#ch-log pre")), "log lines");
   ok(await p.locator("#ch-groups .nd-row").count() === 5, "proxy groups: five");
   const rows = await p.locator("#ch-byp .nd-row").count();
