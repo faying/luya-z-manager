@@ -893,7 +893,7 @@ printf '%s\n' "$HDR" > "$CHILL_PROC/net/tcp6"; printf '%s\n' "$HDR" > "$CHILL_PR
 printf '%s\n   0: 0142000A:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 1\n' "$HDR" > "$CHILL_PROC/net/udp"
 printf '%s\n   0: 0100007F:C350 0100007F:270F 01 00000000:00000000 00:00000000 00000000 0 0 2\n' "$HDR" > "$CHILL_PROC/net/tcp"
 CHILL_BUSY_RECHECK=0; CHILL_API_LAN=0
-kill_core() { :; }; restore_dns() { :; }; ip() { :; }
+kill_core() { :; }; restore_dns() { :; }; ip() { :; }; check_rules_drift() { :; }
 if core_slots_busy >/dev/null; then ng "空闲时误报被占"; else ok "dnsmasq 的 192.168.0.1:53、已建立连接都不算被占"; fi
 
 printf '   1: 0100007F:270F 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 3\n' >> "$CHILL_PROC/net/tcp"
@@ -912,7 +912,51 @@ mkdir -p "$SYS_NET/chill0"
 rm -f "$STATE"; start_blocked; has "TUN 名被占：理由是 tun_busy" "$(cat "$STATE")" '"reason":"tun_busy"'
 rm -rf "$SYS_NET/chill0"
 if start_blocked; then ng "都空着却不起核心"; else ok "都空着：照常起核心"; fi
-unset -f kill_core restore_dns ip
+unset -f kill_core restore_dns ip check_rules_drift
+
+sec "配置档案：运行中刷新失败，恢复原件、运行副本和模式"
+(
+  p="$CHILL_DIR/profiles/p-active"
+  mkdir -p "$p/run"
+  printf 'p-active\n' > "$CHILL_DIR/active-profile"
+  printf 'rule\n' > "$MODE_FILE"
+  printf 'original-source\n' > "$p/source.yaml"
+  printf 'original-config\n' > "$p/run/config.yaml"
+  printf 'candidate-source\n' > "$p/source.next.yaml"
+  printf 'candidate-config\n' > "$p/run/config.next.yaml"
+  printf '101\n' > "$CORE_PID"
+  DISABLED="$CHILL_DIR/disabled"; RESTART_FLAG="$CHILL_DIR/restart"
+  profile_field() { case "$2" in kind) echo full_url ;; name) echo 'Home "QA"' ;; esac; }
+  api_mode() { echo global; }
+  supervisor_alive() { return 0; }
+  sync() { :; }
+  wait_profile() {
+    if [ -e "$CHILL_DIR/active-profile.prev" ]; then
+      [ "$(cat "$p/run/config.yaml")" = candidate-config ] && touch "$CHILL_DIR/attempted"
+      return 1
+    fi
+    [ "$(cat "$p/run/config.yaml")" = original-config ] && touch "$CHILL_DIR/recovered"
+  }
+  if profile_switch p-active 1 >/dev/null 2>&1; then exit 2; fi
+  [ "$(marker_id)" = p-active ] && [ "$(cat "$MODE_FILE")" = global ] &&
+    [ "$(cat "$p/source.yaml")" = original-source ] &&
+    [ -f "$CHILL_DIR/attempted" ] && [ -f "$CHILL_DIR/recovered" ] &&
+    [ ! -e "$CHILL_DIR/active-profile.prev" ]
+)
+eq '完整刷新失败后恢复上一份可用配置' "$?" 0
+
+sec "IPv6 与绕行 DNS 锁定范围"
+ipv6_rules=$(
+  nft() { cat; }
+  block_ipv6
+)
+has 'IPv6 只过滤来自 br-lan 的公网流量' "$ipv6_rules" 'iifname "br-lan" ip6 daddr != { fc00::/7, fe80::/10, ff00::/8 } counter reject'
+nft() { return 1; }
+dns_rules=$(bypass_dns_rules '192.168.0.10 192.168.0.21' '02:00:00:00:00:01')
+has 'IPv4 DNS 按绕行地址匹配' "$dns_rules" 'elements = { 192.168.0.10, 192.168.0.21 }'
+has 'IPv6 DNS 按同一客户端的 MAC 匹配' "$dns_rules" 'ether saddr { 02:00:00:00:00:01 } meta nfproto ipv6'
+has 'TCP 和 UDP DNS 都重定向' "$dns_rules" 'meta l4proto { tcp, udp } th dport 53 redirect to :1054'
+unset -f nft
 
 # ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== 结果：%d 通过 / %d 失败\n' "$PASS" "$FAIL"

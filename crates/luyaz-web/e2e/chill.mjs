@@ -51,6 +51,30 @@ async function own(p, net) {
   // ---- values ----
   ok(/运行中/.test(await txt(p, "#ch-status .nd-status__state")), `status: ${await txt(p, "#ch-status .nd-status")}`);
   ok(/mihomo v[\d.]+ · mode rule/.test(await txt(p, "#ch-status .nd-status__meta")), "meta: mihomo version and mode");
+  const mode = p.locator("#ch-mode");
+  const applyMode = mode.getByRole("button", { name: "应用" });
+  ok(await mode.getByRole("radio").count() === 3 && await mode.getByRole("radio", {name:"规则"}).isChecked(), "canonical mode read back");
+  ok(/Home.*完整配置链接/.test(await txt(p, "#ch-configs")) && await p.locator("#ch-c-delete-0").isDisabled(), "active configuration and disabled delete");
+  await mode.getByRole("radio", {name:"规则"}).focus();
+  await p.keyboard.press("ArrowRight");
+  await p.keyboard.press("Tab");
+  await p.keyboard.press("Enter");
+  await until(p, "#ch-md-op", /模式已更新/);
+  await p.waitForFunction(() => document.querySelector('#ch-mode [value=global]')?.defaultChecked);
+  await mode.getByRole("radio", {name:"直连"}).focus();
+  await p.keyboard.press("Space");
+  await applyMode.click();
+  await p.waitForSelector("#ch-md-op .nd-confirm");
+  await p.keyboard.press("Escape");
+  await p.locator("#ch-md-op .nd-confirm").waitFor({ state: "hidden" });
+  await mode.getByRole("radio", {name:"直连"}).check();
+  await applyMode.click();
+  await p.click("#ch-md-op .nd-btn--confirm");
+  await until(p, "#ch-md-op", /模式已更新/);
+  await mode.getByRole("radio", {name:"规则"}).check();
+  await applyMode.click();
+  await p.waitForFunction(() => document.querySelector('#ch-mode [value=rule]')?.defaultChecked);
+  await until(p, "#ch-exit [aria-checked=true]", /^代理$/);
   ok(await p.locator("#ch-exit [role=radio]").count() === 4 && await txt(p, "#ch-exit [aria-checked=true]") === "代理", "exit: four, 代理 selected");
   ok(await p.locator("#ch-region [role=radio]").count() === 6 && await p.locator("#ch-region [aria-checked=true]").count() === 1, "region: six members, one selected");
   ok(await p.locator("#ch-ai [role=radio]").count() === 4, "AI exit: four members");
@@ -150,6 +174,53 @@ async function own(p, net) {
   ok(!net.some((u) => u.includes("zzTOKENzz")), "the link was in no URL");
   ok(!(await p.content()).includes("zzTOKENzz"), "the link is not in the page at the end");
 
+  // The multipart import navigates to the completed result, without echoing its source.
+  for (const [kind, name] of [["full_url", "Full source"], ["node_url", "Node source"], ["local_yaml", "Local source"]]) {
+    await p.fill("#ch-import-name", name);
+    await p.check(`input[name=kind][value=${kind}]`);
+    if (kind === "local_yaml") await p.setInputFiles("#ch-import-file", { name: "test.yaml", mimeType: "text/yaml", buffer: Buffer.from("mode: rule\nproxies: []\n") });
+    else await p.fill("#ch-import-url", LINK);
+    await Promise.all([p.waitForNavigation({ waitUntil: "load", timeout: 30000 }), p.click(".ch-import button[type=submit]")]);
+    ok(/配置档案已导入/.test(await txt(p, "#ch-cf-op")), `${kind}: import finished`);
+    await until(p, "#ch-configs", new RegExp(name), 15000);
+    ok(!(await p.content()).includes("zzTOKENzz") && !(await txt(p, "body")).includes("zzTOKENzz"), `${kind}: source token not rendered`);
+  }
+  await p.click("#ch-c-activate-1");
+  await p.waitForSelector("#ch-cf-op .nd-confirm");
+  await p.click("#ch-cf-op .nd-btn--confirm");
+  await until(p, "#ch-cf-op", /配置档案已更新/, 20000);
+  await p.waitForFunction(() => document.querySelector('#ch-c-delete-1')?.disabled, null, { timeout: 15000 });
+  ok(await p.locator("#ch-c-delete-1").isDisabled(), "active configuration changed and cannot be deleted");
+  await p.click("#ch-c-refresh-1");
+  await p.click("#ch-cf-op .nd-btn--confirm");
+  await until(p, "#ch-cf-op", /配置档案已更新/, 20000);
+  await p.click("#ch-c-activate-0");
+  await p.click("#ch-cf-op .nd-btn--confirm");
+  await until(p, "#ch-cf-op", /配置档案已更新/, 20000);
+  await p.waitForFunction(() => !document.querySelector('#ch-c-delete-1')?.disabled, null, { timeout: 15000 });
+  await p.click("#ch-c-delete-1");
+  await p.click("#ch-cf-op .nd-btn--confirm");
+  await until(p, "#ch-cf-op", /配置档案已更新/, 20000);
+  ok(!(await txt(p, "#ch-log")).includes("zzTOKENzz") && !net.some((u) => u.includes("zzTOKENzz")), "profile token absent from logs and request URLs");
+  const stream = await p.evaluate(async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch('/services/chill/events?t=profile-privacy', { signal: controller.signal });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      while (!text.includes('ch-configs')) {
+        const part = await reader.read();
+        if (part.done) break;
+        text += decoder.decode(part.value, { stream: true });
+      }
+      await reader.cancel();
+      return text;
+    } catch { return ''; } finally { clearTimeout(timer); }
+  });
+  ok(stream.includes('ch-configs') && !stream.includes('zzTOKENzz'), "profile SSE contains no URL token");
+
   // ---- log pause ----
   const logBefore = await txt(p, "#ch-log pre");
   await p.click("#ch-log button:has-text('暂停')");
@@ -196,6 +267,7 @@ async function own(p, net) {
   await until(p, "#ch-pw-op", /停止中/, 3000);
   ok(/停止中/.test(await txt(p, "#ch-pw-op")), "stop: progress while the job runs");
   await until(p, "#ch-pw-op", /CHILL 已停止/, 20000);
+  await until(p, "#ch-status .nd-status__state", /直连/);
   ok(/CHILL 已停止/.test(await txt(p, "#ch-pw-op")) && /直连/.test(await txt(p, "#ch-status .nd-status__state")), `stop applied and read back: ${await txt(p, "#ch-status .nd-status__state")}`);
   ok(await p.locator("#ch-exit [role=radio]").count() === 0 && await p.locator("#ch-prov .nd-row").count() === 0, "stopped: exit and subscriptions are hidden");
   ok(/已手动停用/.test(await txt(p, "#ch-status .nd-status__reason")), "direct reason said");
@@ -205,6 +277,7 @@ async function own(p, net) {
   await p.click("#ch-status button");
   await p.click("#ch-pw-op .nd-btn--confirm");
   await until(p, "#ch-pw-op", /CHILL 已启动/, 20000);
+  await until(p, "#ch-status .nd-status__state", /运行中/);
   ok(/CHILL 已启动/.test(await txt(p, "#ch-pw-op")) && /运行中/.test(await txt(p, "#ch-status .nd-status__state")), "start applied and read back");
   // the one-time token of a link save is gone once used
   const gone = await (await fetch(`${WEB}/services/chill/prov/save/set?t=nope`, { method: "POST", headers: { ...hdr, "datastar-request": "true" } })).text();

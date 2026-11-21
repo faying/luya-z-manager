@@ -107,7 +107,7 @@ Everything lives under `/data`, which firmware upgrades leave alone. Autostart i
 | `/data/luyaz/ship/` | `u60 ship` transactions, the manifest `manifest.jsonl`, the boot clean-up `luyaz-recover.sh` |
 | `/data/alerts/`, `/data/crashlog/` | Alert history, crash logs |
 | `/data/esim/` | lpac, the tool that reads and writes the eSIM card |
-| `/data/chill/`, `/etc/init.d/chill` | CHILL: mihomo, rule sets, zashboard, `chill.sh`. The subscription URL goes in `/data/chill/chill.env` (written by you, readable only by root) |
+| `/data/chill/`, `/etc/init.d/chill` | CHILL: Mihomo, rule sets, zashboard and configuration profiles. Source files and subscription URLs are readable only by root. |
 | `/data/luyaz/kit/rc.local.orig` | The stock `rc.local` as it was before the first install |
 
 ## Everyday use
@@ -116,7 +116,7 @@ Everything lives under `/data`, which firmware upgrades leave alone. Autostart i
 - **New admin web password**: run `./install.sh admin` again and give a new one. Or, over SSH, change the line in `/data/luyaz/web.env` (no quotes, backslashes or spaces) and log in at `:9090` again. luyaz-web reads the file on each login, so nothing needs restarting.
 - **eSIM**: profiles are managed in the admin web under 「移动网络 → eSIM」 (Mobile network → eSIM). On the screen it is 「更多功能 → eSIM」 (More → eSIM); tap a profile twice to switch. The switch takes about 10 seconds and normally needs no reboot.
 - **CHILL**: the first `./install.sh chill` installs it but leaves it stopped.
-  1. Over SSH, copy `/data/chill/chill.env.example` to `/data/chill/chill.env`, put your subscription URL in it and `chmod 600` it. Static node snapshots go in `/data/chill/providers/`.
+  1. In Services → CHILL in the admin web, import a full configuration URL, a node subscription URL or a local YAML file.
   2. Run `sh /data/chill/chill.sh safe-start`. Check that the whole network still works, then run `sh /data/chill/chill.sh confirm` within 5 minutes. Without the confirm it shuts itself off again, so a bad config cannot lock you out.
   3. From then on, switch it on and off and pick the exit in the admin web under 「服务 → CHILL」 (Services → CHILL). The button there opens zashboard, which the admin web serves behind its own login at `:9090/chill-ui/`.
 

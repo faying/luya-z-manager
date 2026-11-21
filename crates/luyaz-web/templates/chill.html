@@ -5,6 +5,19 @@
 <div class="ch-page" data-signals__ifmissing="{_cdo: false, _chlp: false}">
 {{ self.leaf("ch-status")|safe }}
 {{ ops[0]|safe }}
+{{ self.leaf("ch-mode")|safe }}
+{{ ops[7]|safe }}
+{{ self.leaf("ch-configs")|safe }}
+{{ ops[8]|safe }}
+<form action="/services/chill/config/import" method="post" enctype="multipart/form-data" class="nd-group ch-import" aria-labelledby="ch-import-t">
+<h2 id="ch-import-t" class="nd-group-title">{{ l.pick("Import configuration", "导入配置档案") }}</h2>
+<label for="ch-import-name">{{ l.pick("Name", "名称") }}</label><input id="ch-import-name" class="nd-field" name="name" required maxlength="128">
+<fieldset><legend>{{ l.pick("Source", "来源") }}</legend>
+<div class="ch-import-kinds"><label><input type="radio" name="kind" value="full_url" checked> {{ l.pick("Full URL", "完整配置链接") }}</label><label><input type="radio" name="kind" value="node_url"> {{ l.pick("Node URL", "节点订阅链接") }}</label><label><input type="radio" name="kind" value="local_yaml"> {{ l.pick("Local YAML", "本地 YAML") }}</label></div></fieldset>
+<label for="ch-import-url">{{ l.pick("Configuration or subscription URL", "配置或订阅链接") }}</label><input id="ch-import-url" class="nd-field nd-mono" name="url" type="password" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false">
+<label for="ch-import-file">{{ l.pick("YAML file (up to 4 MiB)", "YAML 文件（最大 4 MiB）") }}</label><input id="ch-import-file" name="file" type="file" accept=".yaml,.yml,text/yaml,application/yaml">
+<button class="nd-btn nd-btn--primary" type="submit">{{ l.pick("Import", "导入") }}</button>
+</form>
 {{ self.leaf("ch-exit")|safe }}
 {{ ops[1]|safe }}
 {{ self.leaf("ch-region")|safe }}

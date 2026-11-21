@@ -239,6 +239,31 @@ pub fn exit_wanted(body: &Value) -> Result<&str, (u16, Value)> {
     }
 }
 
+pub fn valid_mode(mode: &str) -> bool {
+    matches!(mode, "rule" | "global" | "direct")
+}
+
+pub fn exit_mode(exit: &str) -> Option<&'static str> {
+    match exit {
+        "proxy" | "direct_keep_ai" => Some("rule"),
+        "direct_all" => Some("direct"),
+        "global" => Some("global"),
+        _ => None,
+    }
+}
+
+pub fn mode_wanted(body: &Value) -> Result<&str, (u16, Value)> {
+    let mode = body.get("mode").and_then(Value::as_str).unwrap_or("");
+    if valid_mode(mode) {
+        Ok(mode)
+    } else {
+        Err((
+            400,
+            json!({"ok": false, "error": "mode must be rule, global or direct"}),
+        ))
+    }
+}
+
 /// While manual-first holds a backup region, the owner's choice is still the manual group.
 pub fn main_to_remember<'a>(now: &'a str, backup: &str) -> &'a str {
     if !backup.is_empty() && backup == now {
@@ -484,7 +509,7 @@ pub fn exit_state(mode: &str, main_now: &str) -> &'static str {
     }
 }
 
-/// The region groups from mihomo's `/proxies`: name, current member, size.
+/// The groups from mihomo's `/proxies` that expose an `all` member list.
 pub fn summarize_groups(proxies: Option<&Value>) -> Vec<Value> {
     let Some(proxies) = proxies
         .and_then(|v| v.get("proxies"))
@@ -492,17 +517,22 @@ pub fn summarize_groups(proxies: Option<&Value>) -> Vec<Value> {
     else {
         return Vec::new();
     };
-    REGION_GROUPS
+    let mut groups: Vec<Value> = proxies
         .iter()
-        .filter_map(|name| {
-            let info = proxies.get(*name)?;
+        .filter_map(|(name, info)| {
+            let all = info.get("all").and_then(Value::as_array)?;
             Some(json!({
                 "name": name,
+                "type": info.get("type").and_then(Value::as_str),
                 "now": info.get("now").and_then(Value::as_str),
-                "size": info.get("all").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0),
+                "size": all.len(),
+                "selectable": info.get("type").and_then(Value::as_str)
+                    .is_some_and(|t| t.eq_ignore_ascii_case("Selector") || t.eq_ignore_ascii_case("select")),
             }))
         })
-        .collect()
+        .collect();
+    groups.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    groups
 }
 
 /// One group from mihomo's `/proxies`: its current member and options.
@@ -538,12 +568,11 @@ pub fn status_data(
         data["groups"] = json!(summarize_groups(proxies));
         data["region"] = json!(group_now(proxies, MAIN_GROUP));
         data["ai_exit"] = json!(group_now(proxies, AI_GROUP));
-        let main_now = group_now(proxies, MAIN_GROUP)
-            .and_then(|g| g.get("active").and_then(Value::as_str).map(str::to_string));
-        if let (Some(m), Some(n)) = (&mode, &main_now) {
-            data["exit"] = json!(exit_state(m, n));
+        if let Some(mode) = mode.as_deref().filter(|m| valid_mode(m)) {
+            let main_now = data["region"]["active"].as_str().unwrap_or("");
+            data["exit"] = json!(exit_state(mode, main_now));
         }
-        data["mode"] = json!(mode);
+        data["mode"] = json!(mode.as_deref().filter(|m| valid_mode(m)));
     }
     data["manual_first"] = manual_first;
     data
@@ -633,6 +662,29 @@ mod status_tests {
         assert_eq!(exit_state("direct", "🇹🇼 台湾"), "direct_all");
         assert_eq!(exit_state("direct", "DIRECT"), "direct_all");
         assert_eq!(exit_state("global", "DIRECT"), "global");
+    }
+
+    #[test]
+    fn canonical_mode_parser_rejects_legacy_values() {
+        assert_eq!(mode_wanted(&json!({"mode": "rule"})), Ok("rule"));
+        assert_eq!(mode_wanted(&json!({"mode": "global"})), Ok("global"));
+        assert_eq!(mode_wanted(&json!({"mode": "direct"})), Ok("direct"));
+        assert_eq!(mode_wanted(&json!({"mode": "proxy"})).unwrap_err().0, 400);
+    }
+
+    #[test]
+    fn dynamic_group_summary_keeps_any_selectable_group() {
+        let groups = summarize_groups(Some(&json!({
+            "proxies": {
+                "custom": {"type": "select", "now": "DIRECT", "all": ["DIRECT", "A"]},
+                "url": {"type": "url-test", "now": "A", "all": ["A"]},
+                "leaf": {"type": "direct", "now": "DIRECT"}
+            }
+        })));
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0]["name"], "custom");
+        assert_eq!(groups[0]["selectable"], true);
+        assert_eq!(groups[1]["selectable"], false);
     }
 
     #[test]

@@ -1094,13 +1094,12 @@ c_scripts_check() {
     IFS=$_ifs
 }
 
-# chill: the new template (its side file, name.test) rendered and tested before anything is touched
-# (the new chill.sh, this device's chill.env). A rollback goes back to
-# what ran before, whatever an old chill.sh can validate.
+# chill: test the staged template and the active runtime before promotion.
+# Rollback uses what ran before, whatever the old chill.sh can validate.
 c_chill_pre() {
     case "$X_NOTE" in rollback*) return 0 ;; esac
-    if ! _o=$(sh "$CH_DIR/chill.sh.test" validate "$CH_DIR/template.yaml.test" 2>&1); then
-        REASON="新模板校验不过：$(printf '%s' "$_o" | tail -n 1 | cut -c1-160)"
+    if ! _o=$(sh "$CH_DIR/chill.sh.test" validate --template "$CH_DIR/template.yaml.test" 2>&1); then
+        REASON="CHILL 配置校验不过：$(printf '%s' "$_o" | tail -n 1 | cut -c1-160)"
         return 1
     fi
 }
@@ -1138,7 +1137,7 @@ c_chill_check() {
         _st=$(ch_field state)
         _rs=$(ch_field reason)
         case "$_st:$_rs" in
-            direct:gaveup | direct:render_failed)
+            direct:gaveup | direct:render_failed | direct:profile_not_ready | direct:profile_switch_failed | direct:ipv6_unavailable)
                 REASON="CHILL 回了直连（$_rs）"
                 return 1
                 ;;
@@ -1157,7 +1156,7 @@ c_chill_check() {
                     [ -d "$ROOT/proc/$_cp" ] && return 0
                     REASON="CHILL 说在跑，核心 pid $_cp 不在"
                     ;;
-                direct:idle | direct:paused | direct:captive_wan | direct:overheat | direct:ruleset_missing) return 0 ;;
+                direct:idle | direct:paused | direct:captive_wan | direct:overheat | direct:ruleset_missing | direct:no_profile) return 0 ;;
                 *) REASON="CHILL 状态不对（${_st:-没有状态} ${_rs}）" ;;
             esac
             return 1

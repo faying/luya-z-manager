@@ -100,6 +100,37 @@ let switchedOn = true;
 /** chill.env CHILL_BYPASS_IP */
 let bypassIps: string[] = ["192.168.0.105"];
 
+type Config = { id: string; name: string; kind: string; source_host: string; has_url: boolean; updated_at: number; provider_count: number; group_count: number; last_error: null };
+const configs: Config[] = [{ id: "p-initial", name: "Home", kind: "full_url", source_host: "example.net", has_url: true, updated_at: BOOT, provider_count: 4, group_count: 5, last_error: null }];
+let activeConfig = "p-initial";
+let configSerial = 0;
+function configList(): Reply {
+  return ok({ active_id: activeConfig, profiles: configs.map((p) => ({ ...p, active: p.id === activeConfig })) });
+}
+function configAction(ctx: Ctx, action: string): Reply {
+  if (action === "import") {
+    const name = String(bodyField(ctx.body, "name") ?? "");
+    const kind = String(bodyField(ctx.body, "kind") ?? "");
+    const url = String(bodyField(ctx.body, "url") ?? "");
+    if (!name || !["full_url", "node_url", "local_yaml"].includes(kind)) return fail("invalid configuration", 400);
+    let host = "";
+    try { if (kind !== "local_yaml") host = new URL(url).hostname; } catch { return fail("invalid URL", 400); }
+    return startJob("config_import", () => {
+      configs.push({ id: `p-mock-${++configSerial}`, name, kind, source_host: host, has_url: !!host, updated_at: deviceNow(), provider_count: 1, group_count: 2, last_error: null });
+      return "Imported";
+    });
+  }
+  const id = String(bodyField(ctx.body, "id") ?? "");
+  const p = configs.find((x) => x.id === id);
+  if (!p || (action === "delete" && (id === activeConfig || configs.length === 1))) return fail("invalid configuration", 409);
+  return startJob(`config_${action}`, () => {
+    if (action === "activate") activeConfig = id;
+    if (action === "delete") configs.splice(configs.indexOf(p), 1);
+    if (action === "refresh") p.updated_at = deviceNow();
+    return "Updated";
+  });
+}
+
 type StateFile = Omit<ChillStatus, "version" | "groups" | "region" | "ai_exit" | "mode" | "exit">;
 
 const stateFile: StateFile = {
@@ -224,7 +255,7 @@ function chillStatus(ctx: Ctx): Reply {
       data.mode = null;
     }
   }
-  return ok(data);
+  return ok({ ...data, ipv6_mode: "blocked", profile_id: activeConfig });
 }
 
 // ── providers ───────────────────────────────────────────────────────────────
@@ -546,6 +577,14 @@ export const routes: Route[] = [
   // ownMissing: generic stripping would null flags Rust always sends
   // (installed/state/job id/secret) and break the pages in unrealistic ways.
   { method: "GET", path: "/api/services/chill", handler: chillStatus, ownMissing: true },
+  { method: "GET", path: "/api/services/chill/configs", handler: configList },
+  ...["import", "refresh", "activate", "delete"].map((action) => ({ method: "POST" as const, path: `/api/services/chill/configs/${action}`, handler: (ctx: Ctx) => configAction(ctx, action) })),
+  { method: "PUT", path: "/api/services/chill/mode", handler: (ctx) => {
+    const mode = bodyField(ctx.body, "mode");
+    if (!mihomoUp(ctx) || (mode !== "rule" && mode !== "global" && mode !== "direct")) return fail("invalid mode", 400);
+    mihomo.mode = mode;
+    return ok({ mode });
+  } },
   { method: "GET", path: "/api/services/chill/dashboard", handler: () => ok(clone(dashboard)), ownMissing: true },
   { method: "GET", path: "/api/services/chill/providers", handler: providersList, ownMissing: true },
   { method: "PUT", path: "/api/services/chill/providers", handler: providersSetUrl },

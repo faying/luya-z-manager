@@ -12,7 +12,7 @@ use super::usage::Usage;
 use super::latency::DirectLat;
 use super::today::Today;
 use super::versions::Versions;
-use super::chill::Chill;
+use super::chill::{Chill, ConfigProfile};
 use super::core_link::{Cfg, CoreLink};
 use super::diagnose::Diagnose;
 use super::esim::Esim;
@@ -53,6 +53,7 @@ pub struct Live {
     today: Cached<Today>,
     usage: Cached<Usage>,
     chill: Cached<Chill>,
+    chill_config: Cached<ConfigProfile>,
     wifi: Option<Task<WifiRead>>,
     lcd_status: Option<LcdStatus>,
     pub bl: Backlight,
@@ -80,6 +81,7 @@ impl Live {
             today: Cached::new(Today::default()),
             usage: Cached::new(Usage::default()),
             chill: Cached::new(Chill::default()),
+            chill_config: Cached::new(ConfigProfile::default()),
             wifi: None,
             lcd_status: physical_panel.then(LcdStatus::default),
             bl: Backlight::init(),
@@ -134,6 +136,9 @@ impl Live {
             chill_traffic: Some(self.chill.traffic().into()),
             chill_speed: Some(self.chill.speed().into()),
             chill_chain: Some(self.chill.chain().into()),
+            chill_profile: self.chill_config.name.clone(),
+            chill_profile_kind: self.chill_config.kind.clone(),
+            chill_ipv6: self.chill.ipv6(),
             chill_pin: self.chill.exit_pin(),
             chill_conns: Some(self.chill.conns().into()),
             chill_online: self.chill.online() as i32,
@@ -267,7 +272,9 @@ impl Source for Live {
         let ch = self.chill.poll(move |s| {
             (s.poll(active) as u32) | ((s.pins_poll(home) as u32) << 1)
         });
-        p.chill = ch != 0;
+        let mut ag = self.agent.clone();
+        let profiles = self.chill_config.poll(move |s| s.poll(&mut ag, active) as u32);
+        p.chill = ch != 0 || profiles != 0;
         let mut ag = self.agent.clone();
         let (active, prefetch) = (a.esim, a.esim_prefetch);
         let key = self.core.sim_key();

@@ -27,6 +27,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tower_http::limit::RequestBodyLimitLayer;
 #[cfg(test)]
 use tokio::net::TcpListener;
 use luyaz_api::alerts::Alerts;
@@ -40,6 +41,7 @@ mod charge;
 mod health;
 mod chill_jobs;
 mod chill_page;
+mod chill_profiles;
 pub(crate) mod control;
 mod device_admin;
 mod esim;
@@ -462,7 +464,8 @@ impl Compat {
         // batch 5b: CHILL's page reads (the subscription list's PUT is a write, below)
         r = r
             .route("/api/services/chill/log", get(chill_page::log))
-            .route("/api/services/chill/providers", get(chill_page::providers_list));
+            .route("/api/services/chill/providers", get(chill_page::providers_list))
+            .route("/api/services/chill/configs", get(chill_profiles::list));
         if self.writes {
             // netwatch, deep diagnosis and the APN monitor (9b)
             let group = Router::new()
@@ -604,7 +607,19 @@ impl Compat {
                 .route(
                     "/api/services/chill/providers/refresh",
                     post(chill_page::providers_refresh),
-                );
+                )
+                .route("/api/services/chill/configs/refresh", post(chill_profiles::refresh))
+                .route("/api/services/chill/configs/activate", post(chill_profiles::activate))
+                .route("/api/services/chill/configs/delete", post(chill_profiles::delete))
+                .route("/api/services/chill/mode", axum::routing::put(chill_profiles::mode));
+        }
+        r = r.layer(RequestBodyLimitLayer::new(crate::server::REQUEST_BODY_LIMIT));
+        if self.writes {
+            let profile_import = Router::new()
+                .route("/api/services/chill/configs/import", post(chill_profiles::import))
+                .layer(axum::extract::DefaultBodyLimit::disable())
+                .layer(RequestBodyLimitLayer::new(chill_profiles::IMPORT_BODY_LIMIT));
+            r = r.merge(profile_import);
         }
         r
     }

@@ -20,6 +20,7 @@ const SC_IO_MS: i32 = 1500;
 const SC_TTL_MS: i64 = 5000; // was 2000; reduced poll rate (P2 觸屏降頻 2026-10-19)
 /// /configs is about 170 KB (mostly the TUN route exclusions) for the one field we want
 const SC_CFG_TTL_MS: i64 = 30000;
+const SC_PROFILE_TTL_MS: i64 = 30000;
 /// one hand-picked group had 168 nodes on 2026-09-22
 const SC_MAX_NODE: usize = 200;
 const SC_NAME_MAX: usize = 96;
@@ -46,6 +47,53 @@ const SC_ABSENT_TTL_MS: i64 = 30000;
 /// is /group, ~15 KB, plus one delay test per group)
 const SC_PINS: [(&str, &str); 2] = [("AI", "🤖 AI"), ("VoWiFi", "📞 VoWiFi")];
 const SC_PIN_TTL_MS: i64 = 60000;
+
+/// A separate background cache keeps a slow Core API read off the Mihomo control path.
+#[derive(Clone, Default)]
+pub struct ConfigProfile {
+    pub name: Option<String>,
+    pub kind: Option<String>,
+    last_ms: i64,
+}
+
+impl super::background::ReadCopy for ConfigProfile {
+    fn read_copy(&self) -> Self { self.clone() }
+}
+
+impl ConfigProfile {
+    pub fn poll(&mut self, agent: &mut CoreApi, active: bool) -> bool {
+        if !active { return false; }
+        let now = mono_ms();
+        if self.last_ms != 0 && now - self.last_ms < SC_PROFILE_TTL_MS { return false; }
+        self.last_ms = now.max(1);
+        let (status, body) = agent.api("GET", "/api/services/chill/configs", None, SC_RESP_MAX);
+        if status != 200 { return false; }
+        let Some((name, kind)) = body.as_deref().and_then(parse_config_profile) else { return false };
+        let changed = self.name.as_ref() != Some(&name) || self.kind != kind;
+        self.name = Some(name);
+        self.kind = kind;
+        changed
+    }
+}
+
+/// A missing active ID is distinct from a failed or incomplete response.
+fn parse_config_profile(body: &[u8]) -> Option<(String, Option<String>)> {
+    let data = json::get(body, "data", SC_RESP_MAX)?;
+    let id = json::get_str(&data, "active_id", 128)?;
+    let profiles = json::get(&data, "profiles", SC_RESP_MAX)?;
+    if profiles.first() != Some(&b'[') || profiles.last() != Some(&b']') { return None; }
+    if id == "null" || id.is_empty() { return Some((String::new(), None)); }
+    let mut pos = 0;
+    while let Some((entry, next)) = json::arr_next(&profiles, pos, SC_RESP_MAX) {
+        pos = next;
+        if json::get_str(&entry, "id", 128).as_deref() == Some(id.as_str()) {
+            let name = json::get_str(&entry, "name", 512)?;
+            let kind = json::get_str(&entry, "kind", 64)?;
+            return Some((sanitize_name(&name, SC_NAME_MAX), Some(kind)));
+        }
+    }
+    None
+}
 
 /// One (rule group, node) pair's bytes since this process started.
 #[derive(Clone)]
@@ -80,6 +128,7 @@ pub struct Chill {
     profile: String,
     profile_eff: String,
     thermal_eco: bool,
+    ipv6: Option<String>,
     profile_pending_ms: i64,
     node: String,
     /// 「🚀 节点选择」's pick as is: the exit state looks at whether it is DIRECT
@@ -143,6 +192,7 @@ impl super::background::ReadCopy for Chill {
             profile: self.profile.clone(),
             profile_eff: self.profile_eff.clone(),
             thermal_eco: self.thermal_eco,
+            ipv6: self.ipv6.clone(),
             profile_pending_ms: self.profile_pending_ms,
             node: self.node.clone(),
             main_now: self.main_now.clone(),
@@ -285,6 +335,7 @@ impl Default for Chill {
             profile: "standard".into(),
             profile_eff: "standard".into(),
             thermal_eco: false,
+            ipv6: None,
             profile_pending_ms: 0,
             node: String::new(),
             main_now: String::new(),
@@ -613,10 +664,16 @@ impl Chill {
         match self.grp_raw.iter().position(|r| *r == self.group) {
             Some(i) => self.grp_idx = i as i32,
             None if !self.grp_raw.is_empty() => {
+                self.node.clear();
+                self.chain.clear();
                 self.grp_idx = 0;
                 self.group = self.grp_raw[0].clone();
             }
-            None => self.grp_idx = -1,
+            None => {
+                self.grp_idx = -1;
+                self.node.clear();
+                self.chain.clear();
+            }
         }
     }
 
@@ -633,6 +690,8 @@ impl Chill {
         let v = jget(&b, "profile_effective", 16);
         self.profile_eff = if valid_profile(&v) { v } else { self.profile.clone() };
         self.thermal_eco = find(&b, b"\"thermal_eco\":true", 0).is_some();
+        self.ipv6 = json::get_str(&b, "ipv6_mode", 32)
+            .filter(|s| matches!(s.as_str(), "blocked" | "tun" | "unavailable"));
     }
 
     /// Read mihomo if `active` and the last read is older than SC_TTL_MS. true when a read ran.
@@ -818,6 +877,9 @@ impl Chill {
     pub fn mode_raw(&self) -> &str {
         &self.mode_raw
     }
+    pub fn ipv6(&self) -> Option<String> {
+        self.ipv6.clone()
+    }
     pub fn group(&self) -> String {
         sanitize_name(&self.group, SC_NAME_MAX)
     }
@@ -874,8 +936,7 @@ impl Chill {
         }
     }
 
-    /// The exit through luyaz-core (PUT /api/services/chill/exit); shown as asked until the next
-    /// read says otherwise.
+    /// The exit through luyaz-core (PUT /api/services/chill/exit); /configs remains authoritative.
     pub fn set_exit(&mut self, agent: &mut CoreApi, state: &str) -> bool {
         if state.is_empty() {
             return false;
@@ -883,16 +944,6 @@ impl Chill {
         let code = agent.request_status("PUT", "/api/services/chill/exit", Some(&trunc(&format!("{{\"state\":\"{state}\"}}"), 48)));
         if !(200..300).contains(&code) {
             return false;
-        }
-        if state == "direct_all" {
-            self.mode_raw = "direct".into();
-        } else {
-            self.mode_raw = "rule".into();
-            if state == "direct_keep_ai" {
-                self.main_now = "DIRECT".into();
-            } else if self.main_now == "DIRECT" {
-                self.main_now.clear();
-            }
         }
         self.last_ms = 0;
         self.cfg_again = 2; // read the real mode back

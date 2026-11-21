@@ -1096,6 +1096,9 @@ pub async fn chill_exit(State(c): State<Compat>, headers: axum::http::HeaderMap,
         Ok(w) => w.to_string(),
         Err(r) => return http(r),
     };
+    let Some(_slot) = super::chill_jobs::reserve(&c) else {
+        return super::chill_jobs::busy();
+    };
     let env = std::fs::read_to_string(c.path(ch::CHILL_ENV)).unwrap_or_default();
     let secret = ch::env_var(&env, "CHILL_SECRET");
     let client = match reqwest::Client::builder()
@@ -1124,6 +1127,18 @@ pub async fn chill_exit(State(c): State<Compat>, headers: axum::http::HeaderMap,
             .await
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok()),
+        Ok(r) if r.status() == axum::http::StatusCode::NOT_FOUND => {
+            let mode = ch::exit_mode(&want).expect("legacy exit was validated");
+            if let Err(error) = crate::ops::chill::write_mode(
+                &client, &c.src.mihomo, &secret, &c.path(ch::CHILL_MODE_FILE), mode,
+            ).await {
+                return reply(502, json!({"ok": false, "error": error}));
+            }
+            if !headers.contains_key(luyaz_api::headers::RESTORE_HEADER) {
+                exit_changed_abroad(&c, c.clock.now());
+            }
+            return reply(200, json!({"ok": true, "data": {"exit": ch::exit_state(mode, "")}}));
+        }
         _ => None,
     };
     let Some(info) = info else {

@@ -700,6 +700,73 @@ fn init_render_test() {
 
 #[cfg(test)]
 #[test]
+fn mihomo_home_card_render_and_navigation() {
+    let Some(variant) = isolated_render("render::mihomo_home_card_render_and_navigation", &["light-zh", "dark-zh", "light-en", "dark-en"]) else { return };
+    init_render_test();
+    let en = variant.ends_with("-en");
+    let theme = if variant.starts_with("dark") { "dark" } else { "light" };
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: None,
+    });
+    let mut model = Model { data_ok: 1, bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    model.chill_online = 1;
+    model.chill_profile = Some("SG2HOME very long profile name with a long ending".into());
+    model.chill_mode_raw = Some("rule".into());
+    model.chill_node = Some("SG2HOME".into());
+    model.chill_speed = Some("↓1M/s ↑2K/s".into());
+    model.chill_traffic = Some("↓3G ↑4M".into());
+    ui::create(Conf::parse(&format!("appearance={theme}\nautooff=0\n{}", if en { "lang=en\n" } else { "" })), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model.clone()), src, "luyaz-ui");
+    settle(1200);
+    let labels = || {
+        let mut out = Vec::new();
+        lock_test_labels(Obj::screen_active(), &mut out);
+        out
+    };
+    let text = || labels().into_iter().map(|(s, _)| s).collect::<Vec<_>>().join(" ");
+    assert!(text().contains("Mihomo"));
+    assert!(text().contains(if en { "Running" } else { "运行中" }));
+    assert!(text().contains("SG2HOME"));
+    for (s, a) in labels().into_iter().filter(|(s, _)| s.starts_with("SG2HOME") || s == "Mihomo") {
+        assert!(a.x1 >= 0 && a.x2 < W as i32 && a.y1 >= 0 && a.y2 < H as i32, "{variant}: {s:?}");
+    }
+    model.chill_mode_raw = Some("direct".into());
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(100);
+    assert!(text().contains(if en { "Direct" } else { "直连" }));
+    model.chill_online = 0;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(100);
+    assert!(text().contains(if en { "Unavailable" } else { "服务不可用" }));
+    model.chill_profile = Some(String::new());
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(100);
+    assert!(text().contains(if en { "Not configured" } else { "未配置" }));
+    model.chill_absent = 1;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(100);
+    assert!(!text().contains("Mihomo"));
+    model.chill_absent = 0;
+    ui::set_model(Rc::new(model));
+    ui::with(|u| u.refresh());
+    settle(100);
+    let a = ui::with(|u| u.home.sn.card.coords());
+    FX.store((a.x1 + a.x2) / 2, Ordering::Relaxed);
+    FY.store(a.y1 + 80, Ordering::Relaxed);
+    FDOWN.store(true, Ordering::Relaxed);
+    settle(100);
+    FDOWN.store(false, Ordering::Relaxed);
+    settle(500);
+    assert!(ui::with(|u| u.sub_visible(Sub::Chill)), "{variant}: one tap opens CHILL");
+}
+
+#[cfg(test)]
+#[test]
 fn wifi_switch_waits_for_readback_and_blocks_touch() {
     if isolated_render("render::wifi_switch_waits_for_readback_and_blocks_touch", &["dark"]).is_none() {
         return;

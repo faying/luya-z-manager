@@ -7,7 +7,8 @@
 #   chill.sh reload              重新渲染并热重载（不重启进程）
 #   chill.sh status              打印 chill.state
 #   chill.sh flush               幂等清理（可单独执行）
-#   chill.sh validate <模板>     只渲染并校验，不碰服务（ship 转正前用）
+#   chill.sh validate [ID]      校验指定或正在使用的配置档案
+#   chill.sh validate --template <文件>  校验候选模板和正在使用的档案（ship 转正前用）
 #   chill.sh pause <分钟>        临时直连，到点自动恢复
 #   chill.sh safe-start          首装用：挂 5 分钟死人开关，没 confirm 就自动 stop
 #   chill.sh confirm             撤销 safe-start 的死人开关
@@ -79,8 +80,15 @@ TUN_SNAP=/tmp/chill.tun.rules         # 核心起来后自管区间里的 ip rul
 CORE_READY_MAX=10           # 起核心后最多等这么久（秒）让 API 和 dns.listen 就绪
 # /tmp 是内存盘，日志不截断的话长期运行会把内存吃掉（§2 要求每 60 秒截断）。
 LOG_MAX_BYTES=524288        # 512 KB
+SUP_PID=/tmp/chill.supervisor.pid
+BYPASS_PID=/tmp/chill.bypass.pid
+CHILL_INIT=/etc/init.d/chill
+DNSMASQ=/usr/sbin/dnsmasq
+active_id='' active_kind='' active_name='' ipv6_mode=unavailable
+runtime_home=$CHILL_DIR
 
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
+legacy_url=${SUB_URL:-}
 CHILL_API_LAN="${CHILL_API_LAN:-0}"
 CHILL_CN_SET="${CHILL_CN_SET:-0}"
 CHILL_BYPASS_IP="${CHILL_BYPASS_IP:-}"
@@ -214,15 +222,20 @@ write_state() {
   _state="$1"; _reason="$2"
   _pid=$(cat "$CORE_PID" 2>/dev/null || echo 0)
   _bypass="${bypass_stale_json:-[]}"
-  cat > "$STATE.tmp" <<EOF
+  cat > "$STATE.$$" <<EOF
 {"state":"$_state","reason":$( [ -n "$_reason" ] && echo "\"$_reason\"" || echo null ),
 "cpuss_c":$(( $(max_temp) / 1000 )),"mem_avail_mb":$(mem_avail_mb),
 "core_pid":$_pid,"started_at":"${started_at:-}","updated_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)",
 "bypass_stale":$_bypass,"rules_drift":${rules_drift:-false},"mem_pressure":${mem_pressure:-false},
 "profile":"$(profile_read)","profile_effective":"$(profile_effective)","thermal_eco":$([ -f "$THERMAL_ECO" ] && echo true || echo false),
-"cn_set":"${cn_set:-routes}"}
+"cn_set":"${cn_set:-routes}","profile_id":"$active_id","profile_name":$(json_string "$active_name"),
+"mode":"$(saved_mode)","ipv6_mode":"$ipv6_mode"}
 EOF
-  mv "$STATE.tmp" "$STATE" 2>/dev/null
+  mv "$STATE.$$" "$STATE" 2>/dev/null
+}
+
+json_string() {
+  printf '%s\n' "$1" | awk 'BEGIN { printf "\"" } NR > 1 { printf "\\n" } { for (i=1;i<=length($0);i++) { c=substr($0,i,1); if (c=="\"" || c=="\\") printf "\\"; if (c !~ /[[:cntrl:]]/) printf "%s", c } } END { printf "\"" }'
 }
 
 # ── AI 闸门（CHILL_AI_STRICT=1）──────────────────────────────────────────────
@@ -342,6 +355,7 @@ state_profile_now() {
 # 停在关之前的 running，网页读回「没有生效」、首页也照旧显示运行中（2026-10-09 真机发现）。
 mark_stopped() {
   started_at=""
+  select_profile || true
   write_state stopped ""
 }
 
@@ -370,17 +384,16 @@ restore_dns() {
 # 让 dnsmasq 把查询转发给 mihomo。**必须在确认 mihomo 的 dns.listen 能应答之后再调**，
 # 反序会造成启动期间全屋 DNS 中断。
 apply_dns() {
-  [ -f "$DHCP_BACKUP" ] || cp "$DHCP_CONF" "$DHCP_BACKUP" 2>/dev/null
+  [ -f "$DHCP_BACKUP" ] || cp "$DHCP_CONF" "$DHCP_BACKUP" 2>/dev/null || return 1
   # 段名是 lan_dns 不是 @dnsmasq[0]（本机实例名），写错会静默设到不生效的段上
-  uci -q set dhcp.lan_dns.noresolv=1
+  uci -q set dhcp.lan_dns.noresolv=1 || return 1
   uci -q delete dhcp.lan_dns.server 2>/dev/null
-  uci -q add_list dhcp.lan_dns.server=127.0.0.1
-  uci -q commit dhcp
+  uci -q add_list dhcp.lan_dns.server=127.0.0.1 && uci -q commit dhcp || return 1
   if ai_gate_write "$(ai_want_up)"; then
     dnsmasq_restart
   else
     "$DNSMASQ_INIT" reload >/dev/null 2>&1
-  fi
+  fi || return 1
   log "apply_dns: dnsmasq 上游已指向 mihomo"
 }
 
@@ -418,19 +431,160 @@ wait_core_ready() {
   done
 }
 
-# ── 绕行（决定 1：按源 IP，不再用 exclude-mac-address）──────────────────────
-# 增删绕行设备只是加删一条 ip rule，不碰配置文件、不 reload、不重建 TUN、零中断。
-apply_bypass() {
-  [ -n "$CHILL_BYPASS_IP" ] || return 0
-  lan=$(ip -4 addr show br-lan 2>/dev/null | awk '/inet /{print $2; exit}')
-  for one in $CHILL_BYPASS_IP; do
-    case "$one" in
-      *[!0-9.]*) log "bypass: 跳过非法 IP ${one}"; continue ;;
-    esac
-    ip rule add from "$one" priority "$BYPASS_PRIO" lookup main 2>/dev/null \
-      && log "bypass: ${one} 已绕行（lan=${lan}）" \
-      || log "bypass: ${one} 添加失败"
+# IPv4-only profiles must not leave a public IPv6 forwarding path around TUN.
+# The router's own IPv6 and LAN-scoped destinations are unaffected.
+block_ipv6() {
+  nft -f - <<'EOF'
+table inet chillv6 {
+  chain forward {
+    type filter hook forward priority -5; policy accept;
+    iifname "br-lan" ip6 daddr != { fc00::/7, fe80::/10, ff00::/8 } counter reject
+  }
+}
+EOF
+}
+
+bypass_lock() ( umask 077; flock -x 8 && "$@" ) 8>"$CHILL_DIR/bypass.lock"
+
+bypass_configured() (
+  [ ! -f "$ENV_FILE" ] || . "$ENV_FILE"
+  printf '%s\n' "${CHILL_BYPASS_IP:-}"
+)
+
+read_lan_addrs() {
+  bypass_lan4=$(ip -4 addr show dev br-lan 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]; exit}')
+  bypass_lan6=$(ip -6 addr show dev br-lan scope link 2>/dev/null | awk '/inet6 / {split($2,a,"/"); print a[1]; exit}')
+  [ -n "$bypass_lan4" ]
+}
+
+bypass_macs() {
+  # Static leases work even if the client has not appeared in the ARP table
+  # since this boot. Fall back to live ARP for clients with manually fixed IPs.
+  client_macs=''
+  for addr in $1; do
+    mac=$(uci -q show dhcp | awk -F= -v ip="'$addr'" '
+      $2 == ip && $1 ~ /\.ip$/ {section=$1; sub(/\.ip$/, "",section); want[section]=1}
+      $1 ~ /\.mac$/ {section=$1; sub(/\.mac$/, "",section); value[section]=$2}
+      END {for (s in want) if (s in value) print value[s]}' | tr -d "'")
+    [ -n "$mac" ] || mac=$(ip -4 neigh show to "$addr" dev br-lan 2>/dev/null | awk '{for(i=1;i<NF;i++) if ($i=="lladdr") {print $(i+1); exit}}')
+    [ -n "$mac" ] || return 1
+    client_macs="$client_macs $mac"
   done
+  printf '%s\n' "$client_macs" | awk '
+    { for (i=1;i<=NF;i++) {
+      mac=tolower($i); if (split(mac,bytes,":") != 6) { bad=1; continue }
+      for (j=1;j<=6;j++) if (bytes[j] !~ /^[0-9a-f][0-9a-f]$/) bad=1
+      if (!seen[mac]++) { printf "%s%s", count++ ? ", " : "", mac }
+    } }
+    END {print ""; if (bad || !count) exit 1}'
+}
+
+bypass_dns_pid() {
+  IFS= read -r _dns_pid 2>/dev/null < "$BYPASS_PID" && uint "$_dns_pid" &&
+    [ "$_dns_pid" -gt 1 ] &&
+    [ "$(readlink "/proc/$_dns_pid/exe" 2>/dev/null)" = "$DNSMASQ" ] &&
+    tr '\0' '\n' < "/proc/$_dns_pid/cmdline" 2>/dev/null | grep -Fxq -- "--pid-file=$BYPASS_PID"
+}
+
+bypass_dns_stop() {
+  if bypass_dns_pid; then kill "$_dns_pid" 2>/dev/null || true; fi
+  rm -f "$BYPASS_PID"
+}
+
+bypass_dns_start() {
+  bypass_dns_pid && return 0
+  [ -s "$RESOLV_AUTO" ] && grep -q '^nameserver[[:space:]]' "$RESOLV_AUTO" || return 1
+  dns_addresses=$bypass_lan4
+  [ -z "$bypass_lan6" ] || dns_addresses="$dns_addresses,$bypass_lan6"
+  "$DNSMASQ" --conf-file=/dev/null --bind-interfaces --listen-address="$dns_addresses" \
+    --port=1054 --resolv-file="$RESOLV_AUTO" --no-hosts --cache-size=0 \
+    --pid-file="$BYPASS_PID" 8>&- 2>/dev/null && bypass_dns_pid
+}
+
+bypass_dns_rules() {
+  if nft list table inet chilldns >/dev/null 2>&1; then echo 'delete table inet chilldns'; fi
+  [ -n "$1" ] || return 0
+  printf 'table inet chilldns {\n set clients { type ipv4_addr; elements = { %s }; }\n' "$(printf '%s' "$1" | sed 's/ /, /g')"
+  cat <<'EOF'
+ chain pre {
+   type nat hook prerouting priority -105; policy accept;
+   iifname "br-lan" ip saddr @clients meta l4proto { tcp, udp } th dport 53 redirect to :1054
+EOF
+  if [ -n "$2" ]; then
+    printf '   iifname "br-lan" ether saddr { %s } meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 redirect to :1054\n' "$2"
+  fi
+  cat <<'EOF'
+ }
+ chain input {
+   type filter hook input priority -5; policy accept;
+   iifname "br-lan" ip saddr @clients meta l4proto { tcp, udp } th dport 1054 accept
+EOF
+  if [ -n "$2" ]; then
+    printf '   iifname "br-lan" ether saddr { %s } meta nfproto ipv6 meta l4proto { tcp, udp } th dport 1054 accept\n' "$2"
+  fi
+  printf '   meta l4proto { tcp, udp } th dport 1054 drop\n }\n}\n'
+}
+
+bypass_route_clear() {
+  ip rule show 2>/dev/null | awk -F: -v p="$BYPASS_PRIO" '$1+0==p {print $1}' |
+    while IFS= read -r pref; do ip rule del pref "$pref" || exit 1; done
+}
+
+bypass_route_add() {
+  for addr in $1; do ip rule add from "$addr" priority "$BYPASS_PRIO" lookup main || return 1; done
+}
+
+bypass_apply() { # requested IPv4 list; caller holds bypass lock
+  bypass_old=$(ip rule show 2>/dev/null | awk -v p="$BYPASS_PRIO:" '$1==p && $2=="from" {sub(/\/32$/,"",$3); printf "%s%s", (n++ ? " " : ""), $3}')
+  if [ -n "$1" ]; then
+    read_lan_addrs || return 1
+    if [ -n "$bypass_lan6" ]; then
+      bypass_v6_macs=$(bypass_macs "$1") || return 1
+    else
+      bypass_v6_macs=''
+    fi
+    bypass_dns_rules "$1" "$bypass_v6_macs" | nft -c -f - >/dev/null 2>&1 || return 1
+    bypass_dns_start || return 1
+  fi
+  if bypass_route_clear && bypass_route_add "$1" &&
+     bypass_dns_rules "$1" "${bypass_v6_macs:-}" | nft -f - >/dev/null 2>&1; then
+    [ -n "$1" ] || bypass_dns_stop
+    return 0
+  fi
+  bypass_route_clear && bypass_route_add "$bypass_old" || log 'bypass: route rollback failed'
+  [ -n "$bypass_old" ] || bypass_dns_stop
+  return 1
+}
+
+bypass_apply_saved() { bypass_apply "$(bypass_configured)"; }
+
+bypass_set() { # Core passes only a canonical, sorted list of IPv4 addresses
+  bypass_want=$*
+  for addr in "$@"; do
+    printf '%s\n' "$addr" | awk -F. 'NF!=4 {exit 1} {for(i=1;i<=4;i++) if ($i!~/^[0-9]+$/ || $i>255) exit 1}' || return 1
+  done
+  {
+    if [ -f "$ENV_FILE" ]; then awk '!/^[[:space:]]*(export[[:space:]]+)?CHILL_BYPASS_IP=/' "$ENV_FILE"; fi
+    printf "CHILL_BYPASS_IP='%s'\n" "$bypass_want"
+  } > "$ENV_FILE.$$" || return 1
+  bypass_previous=$(bypass_configured)
+  bypass_live=0
+  if api_alive 1; then
+    bypass_live=1
+    if ! bypass_apply "$bypass_want"; then
+      rm -f "$ENV_FILE.$$"
+      echo 'bypass_dns_unavailable' >&2
+      return 1
+    fi
+  fi
+  if mv -f "$ENV_FILE.$$" "$ENV_FILE"; then return 0; fi
+  [ "$bypass_live" = 0 ] || bypass_apply "$bypass_previous"
+  return 1
+}
+
+bypass_clear() {
+  nft delete table inet chilldns 2>/dev/null || true
+  bypass_dns_stop
 }
 
 # ── flush（幂等；任何退出路径都要能跑）──────────────────────────────────────
@@ -443,7 +597,10 @@ flush() {
   nft delete table inet mihomo 2>/dev/null || true
   nft delete table inet chill 2>/dev/null || true
   nft delete table inet chillcn 2>/dev/null || true
+  nft delete table inet chillv6 2>/dev/null || true
+  bypass_lock bypass_clear
   rm -f "$CN_SET_MARK"
+  ipv6_mode=unavailable
 
   # 只删自管区间，逐条删到没有。区间外一律不碰。
   for fam in 4 6; do
@@ -525,7 +682,9 @@ kill_core() {
   # 兜底：按可执行文件路径扫描，仍然不按进程名
   for d in /proc/[0-9]*; do
     q=${d#/proc/}
-    readlink "$d/exe" 2>/dev/null | grep -q "^$BIN$" || continue
+    [ "$(readlink "$d/exe" 2>/dev/null)" = "$BIN" ] || continue
+    # Validation and inactive-provider probes use the same executable.
+    tr '\0' '\n' < "$d/cmdline" 2>/dev/null | grep -Eq '^(-t|-ext-ctl-unix)$' && continue
     kill -9 "$q" 2>/dev/null
   done
   rm -f "$CORE_PID"
@@ -622,23 +781,34 @@ api_mode() {
   curl -s -m 3 -H "Authorization: Bearer ${CHILL_SECRET:-}" http://127.0.0.1:9999/configs 2>/dev/null \
     | sed -n 's/.*"mode":"\([a-z]*\)".*/\1/p'
 }
+saved_mode() {
+  _saved=$(cat "$MODE_FILE" 2>/dev/null)
+  case "$_saved" in rule|global|direct) printf '%s\n' "$_saved" ;; *) echo rule ;; esac
+}
+
+write_marker() {
+  (umask 077; printf '%s\n' "$2" > "$1.$$") && mv -f "$1.$$" "$1"
+}
+
 save_mode() {
   _m=$(api_mode)
   case "$_m" in
-    rule|global|direct) [ "$(cat "$MODE_FILE" 2>/dev/null)" = "$_m" ] || echo "$_m" > "$MODE_FILE" ;;
+    rule|global|direct) [ "$(cat "$MODE_FILE" 2>/dev/null)" = "$_m" ] || write_marker "$MODE_FILE" "$_m" ;;
   esac
 }
 restore_mode() {
   _m=$(cat "$MODE_FILE" 2>/dev/null)
-  case "$_m" in global|direct) ;; *) return 0 ;; esac
+  case "$_m" in rule|global|direct) ;; *) return 0 ;; esac
   [ "$(api_mode)" = "$_m" ] && return 0
-  curl -s -m 3 -o /dev/null -X PATCH -H "Authorization: Bearer ${CHILL_SECRET:-}" \
-    --data "{\"mode\":\"$_m\"}" http://127.0.0.1:9999/configs 2>/dev/null
+  curl -fsS -m 3 -o /dev/null -X PATCH -H "Authorization: Bearer ${CHILL_SECRET:-}" \
+    -H 'Content-Type: application/json' --data "{\"mode\":\"$_m\"}" \
+    http://127.0.0.1:9999/configs 2>/dev/null && [ "$(api_mode)" = "$_m" ] || return 1
   log "出口模式恢复为 $_m"
 }
 
 # 热重载：渲染 → PUT /configs。渲染不过就保留旧配置。模式先记后恢复。
 do_reload() {
+  select_profile || return 1
   save_mode
   render || return 1
   curl -s -m 5 -o /dev/null -w '%{http_code}' -X PUT \
@@ -647,6 +817,310 @@ do_reload() {
     | grep -q '^2' || return 1
   restore_mode
   return 0
+}
+
+# A profile ID is also a directory name. Validate it before using metadata or a
+# marker as a path. The stock template is the only implicit (legacy) profile.
+valid_id() {
+  case "$1" in [a-z0-9]*) ;; *) return 1 ;; esac
+  case "$1" in *[!a-z0-9_-]*) return 1 ;; esac
+  [ "${#1}" -le 32 ]
+}
+
+profile_field() {
+  jsonfilter -i "$CHILL_DIR/profiles/$1/profile.json" -e "@.$2" 2>/dev/null
+}
+
+marker_id() {
+  cat "$CHILL_DIR/active-profile" 2>/dev/null || true
+}
+
+select_profile() {
+  active_id='' active_name='' active_kind='' runtime_home=$CHILL_DIR
+  SUB_URL=${legacy_url:-}
+  _selected=${1-$(marker_id)}
+  if [ -z "$_selected" ]; then
+    if [ -n "$SUB_URL" ] && [ ! -d "$CHILL_DIR/profiles" ]; then
+      active_kind=legacy active_name=CHILL
+    fi
+    RUN_DIR="$CHILL_DIR/run" CONFIG="$CHILL_DIR/run/config.yaml"
+    return 0
+  fi
+  valid_id "$_selected" || return 1
+  active_kind=$(profile_field "$_selected" kind) || return 1
+  case "$active_kind" in
+    node_url) SUB_URL=$(profile_field "$_selected" url) || return 1 ;;
+    full_url|local_yaml) ;;
+    *) return 1 ;;
+  esac
+  active_name=$(profile_field "$_selected" name) || return 1
+  active_id=$_selected
+  runtime_home="$CHILL_DIR/profiles/$active_id"
+  RUN_DIR="$runtime_home/run" CONFIG="$runtime_home/run/config.yaml"
+}
+
+prepare_profile_home() {
+  [ "$active_id" ] || return 0
+  (umask 077; mkdir -p "$RUN_DIR" "$runtime_home/providers" "$runtime_home/ruleset") || return 1
+  if [ -d "$CHILL_DIR/ui" ] && [ ! -e "$runtime_home/ui" ]; then
+    ln -s "$CHILL_DIR/ui" "$runtime_home/ui" || return 1
+  fi
+  if [ "$active_kind" = node_url ]; then
+    for rule_file in "$CHILL_DIR"/ruleset/*; do
+      [ -f "$rule_file" ] || continue
+      rule_target="$runtime_home/ruleset/${rule_file##*/}"
+      [ -e "$rule_target" ] || (umask 077; cp "$rule_file" "$rule_target") || return 1
+    done
+  fi
+}
+
+# Full-profile source and runtime are prepared by Core. Run the exact pinned
+# executable against the candidate, keeping Mihomo's potentially sensitive
+# diagnostics out of logs and API responses.
+config_test() {
+  if ! "$BIN" -t -d "$runtime_home" -f "$1" >/dev/null 2>&1; then
+    echo 'mihomo_config_invalid' >&2
+    return 1
+  fi
+}
+
+validate_profile() {
+  select_profile "$1" && [ "$active_kind" ] && prepare_profile_home || return 1
+  case "$active_kind" in
+    full_url|local_yaml) config_test "${2:-$CONFIG}" ;;
+    *) render ;;
+  esac
+}
+
+profile_options() {
+  case "$active_kind" in
+    full_url|local_yaml) grep -Eq '^ipv6:[[:space:]]*true[[:space:]]*$' "${1:-$CONFIG}" ;;
+    *) return 1 ;;
+  esac
+}
+
+public_ipv6() {
+  _wan6=$(ip -6 route show default 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+  [ -n "$_wan6" ] && ip -6 addr show dev "$_wan6" scope global 2>/dev/null | grep -Eq 'inet6 [23][0-9a-fA-F]*:'
+}
+
+profile_ready() {
+  [ "$(jsonfilter -i "$STATE" -e '@.state' 2>/dev/null)" = running ] &&
+    [ "$(jsonfilter -i "$STATE" -e '@.profile_id' 2>/dev/null)" = "$1" ] &&
+    _ready_pid=$(jsonfilter -i "$STATE" -e '@.core_pid' 2>/dev/null) &&
+    [ "$_ready_pid" != "$2" ] && uint "$_ready_pid" && [ "$_ready_pid" -gt 0 ] &&
+    kill -0 "$_ready_pid" 2>/dev/null && api_alive 1 && dns_answers && tun_present &&
+    [ "$(api_mode)" = "$(saved_mode)" ]
+}
+
+wait_profile() {
+  local now deadline
+  now=$(boot_now) || return 1
+  deadline=$((now + 55))
+  while [ "$now" -lt "$deadline" ]; do
+    profile_ready "$1" "$2" && return 0
+    case "$(jsonfilter -i "$STATE" -e '@.reason' 2>/dev/null)" in
+      ipv6_unavailable|profile_not_ready|render_failed|profile_switch_failed)
+        [ "$(jsonfilter -i "$STATE" -e '@.profile_id' 2>/dev/null)" != "$1" ] || return 1 ;;
+    esac
+    sleep 1
+    now=$(boot_now) || return 1
+  done
+  return 1
+}
+
+# The journal is written before replacing either file or the marker. Recovery
+# uses copies until the journal is removed, so a second interruption is safe.
+profile_rollback() {
+  _journal="$CHILL_DIR/active-profile.prev"
+  [ -f "$_journal" ] || return 0
+  {
+    IFS= read -r rollback_id && IFS= read -r _rollback_target &&
+      IFS= read -r _rollback_mode && IFS= read -r _rollback_refresh
+  } < "$_journal" || return 1
+  valid_id "$_rollback_target" || return 1
+  if [ "$_rollback_refresh" = 1 ]; then
+    _rdir="$CHILL_DIR/profiles/$_rollback_target"
+    for _file in source.yaml run/config.yaml; do
+      cp -p "$_rdir/$_file.prev" "$_rdir/$_file.restore" &&
+        mv -f "$_rdir/$_file.restore" "$_rdir/$_file" || return 1
+    done
+  fi
+  if [ "$rollback_id" = '-' ]; then
+    rm -f "$CHILL_DIR/active-profile"
+    rollback_id=''
+  else
+    valid_id "$rollback_id" && write_marker "$CHILL_DIR/active-profile" "$rollback_id" || return 1
+  fi
+  case "$_rollback_mode" in
+    rule|global|direct) write_marker "$MODE_FILE" "$_rollback_mode" || return 1 ;;
+    *) rm -f "$MODE_FILE" ;;
+  esac
+  sync
+  rm -f "$_journal"
+  sync
+  if [ "$_rollback_refresh" = 1 ]; then
+    rm -f "$_rdir/source.yaml.prev" "$_rdir/run/config.yaml.prev"
+  fi
+}
+
+supervisor_alive() {
+  IFS= read -r _supervisor 2>/dev/null < "$SUP_PID" && uint "$_supervisor" &&
+    [ "$_supervisor" -gt 1 ] && kill -0 "$_supervisor" 2>/dev/null
+}
+
+profile_switch() ( # <id> [refresh], invoked under the profile lock
+  target=$1 refresh=${2:-0}
+  profile_rollback || { echo 'profile_recovery_failed' >&2; return 1; }
+  select_profile "$target" && prepare_profile_home || { echo 'profile_missing' >&2; return 1; }
+  if [ "$refresh" = 1 ]; then
+    candidate="$RUN_DIR/config.next.yaml"
+    [ -f "$runtime_home/source.next.yaml" ] || return 1
+    config_test "$candidate" || return 1
+  else
+    candidate=$CONFIG
+    validate_profile "$target" || return 1
+  fi
+
+  old_id=$(marker_id)
+  # Refreshing an inactive profile does not change the active marker or service.
+  activate=1
+  if [ "$refresh" = 1 ] && [ "$old_id" != "$target" ]; then activate=0; fi
+  if [ "$activate" = 1 ] && profile_options "$candidate" && ! public_ipv6; then
+    echo 'ipv6_unavailable' >&2
+    return 1
+  fi
+  old_mode=$(api_mode)
+  case "$old_mode" in rule|global|direct) ;; *) old_mode=$(cat "$MODE_FILE" 2>/dev/null) ;; esac
+  live=0
+  if [ "$activate" = 1 ] && [ ! -f "$DISABLED" ] && supervisor_alive; then live=1; fi
+  old_pid=$(cat "$CORE_PID" 2>/dev/null)
+  if [ "$refresh" = 1 ]; then
+    cp -p "$CONFIG" "$CONFIG.prev" && cp -p "$runtime_home/source.yaml" "$runtime_home/source.yaml.prev" || return 1
+  fi
+  journal=$(printf '%s\n%s\n%s\n%s' "${old_id:--}" "$target" "${old_mode:--}" "$refresh")
+  write_marker "$CHILL_DIR/active-profile.prev" "$journal" || return 1
+  sync
+
+  if { [ "$refresh" = 0 ] || { mv -f "$candidate" "$CONFIG" && mv -f "$runtime_home/source.next.yaml" "$runtime_home/source.yaml"; }; } &&
+     { [ "$activate" = 0 ] || write_marker "$CHILL_DIR/active-profile" "$target"; } &&
+     { [ -z "$old_mode" ] || write_marker "$MODE_FILE" "$old_mode"; }; then
+    sync
+    if [ "$live" = 0 ] || { rm -f "$CHILL_DIR/profile-switch-failed" "$GAVEUP" "$STATE"; : > "$RESTART_FLAG"; wait_profile "$target" "$old_pid"; }; then
+      rm -f "$CHILL_DIR/active-profile.prev"
+      sync
+      [ "$refresh" = 0 ] || rm -f "$CONFIG.prev" "$runtime_home/source.yaml.prev"
+      if [ "$activate" = 1 ] && [ "$live" = 0 ]; then mark_stopped; fi
+      return 0
+    fi
+  fi
+
+  failed_pid=$(cat "$CORE_PID" 2>/dev/null)
+  if ! profile_rollback; then
+    : > "$CHILL_DIR/profile-switch-failed"
+    : > "$RESTART_FLAG"
+    echo 'profile_recovery_failed' >&2
+    return 1
+  fi
+  if [ "$live" = 1 ]; then
+    rm -f "$GAVEUP" "$STATE"
+    : > "$RESTART_FLAG"
+    if [ -n "$old_pid" ] && ! wait_profile "$rollback_id" "$failed_pid"; then
+      : > "$CHILL_DIR/profile-switch-failed"
+      : > "$RESTART_FLAG"
+      for _attempt in $(seq 1 12); do
+        [ "$(jsonfilter -i "$STATE" -e '@.reason' 2>/dev/null)" = profile_switch_failed ] && break
+        sleep 1
+      done
+      echo 'profile_switch_failed' >&2
+      return 1
+    fi
+  fi
+  echo 'profile_activation_failed_rolled_back' >&2
+  return 1
+)
+
+profile_lock() (
+  umask 077
+  flock -n -x 9 || { echo 'profile_busy' >&2; return 1; }
+  "$@"
+) 9>"$CHILL_DIR/profile.lock"
+
+recover_interrupted_profile() {
+  [ -f "$CHILL_DIR/active-profile.prev" ] || return 1
+  profile_lock profile_rollback >/dev/null 2>&1 || return 1
+  log 'profile: restored interrupted activation'
+  : > "$RESTART_FLAG"
+}
+
+validate_template() (
+  select_profile '' || return 1
+  TEMPLATE=$1
+  [ -f "$TEMPLATE" ] || return 1
+  SUB_URL=${legacy_url:-}
+  SUB_URL=${SUB_URL:-https://example.invalid/provider}
+  runtime_home=$(mktemp -d /tmp/chill-validate.XXXXXX) || return 1
+  trap 'rm -rf "$runtime_home"' EXIT
+  RUN_DIR="$runtime_home/run" CONFIG="$RUN_DIR/config.yaml"
+  render
+)
+
+validate_active() {
+  select_profile || return 1
+  case "$active_kind" in
+    full_url|local_yaml|node_url) config_test "$CONFIG" ;;
+    legacy) validate_template "$TEMPLATE" ;;
+    '') return 0 ;;
+  esac
+}
+
+refresh_node_cache() (
+  local scratch probe pid nodes
+  scratch=$(mktemp -d "$RUN_DIR/provider.XXXXXX") || return 1
+  pid=''
+  trap '[ -z "$pid" ] || { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }; rm -rf "$scratch"' EXIT
+  # Test the provider with the same pinned parser used during a real start.
+  # This instance has no listeners besides its private Unix control socket.
+  curl -fsSL --proto '=http,https' --proto-redir '=http,https' --max-redirs 5 \
+    --max-time 20 --max-filesize 4194304 -o "$scratch/sub.yaml" -- "$SUB_URL" 2>/dev/null || return 1
+  cat > "$scratch/probe.yaml" <<'EOF'
+ipv6: false
+proxy-providers:
+  sub:
+    type: file
+    path: ./sub.yaml
+    override: {interface-name: "", routing-mark: 0}
+EOF
+  probe="$scratch/api.sock"
+  "$BIN" -d "$scratch" -f "$scratch/probe.yaml" -ext-ctl-unix "$probe" 9>&- >/dev/null 2>&1 &
+  pid=$!
+  for _attempt in $(seq 1 8); do
+    kill -0 "$pid" 2>/dev/null || return 1
+    nodes=$(curl -fsS -m 1 --unix-socket "$probe" http://localhost/providers/proxies/sub 2>/dev/null) || nodes=''
+    if printf '%s' "$nodes" | jsonfilter -e '@.proxies[0].name' >/dev/null; then
+      mv -f "$scratch/sub.yaml" "$runtime_home/providers/sub.yaml"
+      return $?
+    fi
+    sleep 1
+  done
+  return 1
+)
+
+profile_refresh() {
+  select_profile "$1" && prepare_profile_home || return 1
+  [ "$active_kind" = node_url ] || { profile_switch "$1" 1; return $?; }
+  if [ "$(marker_id)" = "$1" ] && api_alive 1; then
+    # A successful PUT can also be an unchanged subscription; verify it still
+    # has nodes in that case instead of requiring the timestamp to move.
+    if curl -fsS -m 25 -X PUT -o /dev/null -H "Authorization: Bearer ${CHILL_SECRET:-}" \
+      http://127.0.0.1:9999/providers/proxies/sub 2>/dev/null && providers_ready; then
+      return 0
+    fi
+  elif refresh_node_cache; then
+    return 0
+  fi
+  echo 'provider_refresh_failed' >&2
+  return 1
 }
 
 # 直连用的 DNS 里补上运营商的 IPv4 DNS，输出 `, "a.b.c.d", ...`（没有就输出空）。
@@ -803,6 +1277,13 @@ start_blocked() {
 }
 
 render() {
+  case "$active_kind" in
+    full_url|local_yaml)
+      profile_vars "$(profile_effective)"
+      [ -s "$CONFIG" ] && config_test "$CONFIG"
+      return $? ;;
+  esac
+  umask 077
   mkdir -p "$RUN_DIR"
   [ -f "$TEMPLATE" ] || { log "render: 缺 template.yaml"; return 1; }
   [ -f "$CN_LIST" ] || { log "render: 缺 cn.list"; return 1; }
@@ -837,14 +1318,15 @@ render() {
   # 的 ${SUB_URL} 永远不会被替换，会原样留在渲染结果里传给 mihomo。
   profile_vars "$(profile_effective)"
   DIRECT_DNS_EXTRA=$(direct_dns4)
-  if [ -f "$CN_SET_MARK" ]; then _cn_routes=0; else _cn_routes=1; fi
+  # Managed profiles keep CN routing in Mihomo, so GLOBAL really is global.
+  if [ "$active_kind" = node_url ] || [ -f "$CN_SET_MARK" ]; then _cn_routes=0; else _cn_routes=1; fi
   HC_INTERVAL="$HC_INTERVAL" KEEPALIVE="$KEEPALIVE" TCP_CONCURRENT="$TCP_CONCURRENT" \
   CONTROLLER="$CONTROLLER" SUB_URL="${SUB_URL:-}" \
   CHILL_SECRET="${CHILL_SECRET:-}" DIRECT_DNS_EXTRA="$DIRECT_DNS_EXTRA" \
   FILTER_UNION="${FILTER_UNION:-}" EXCLUDE_FILTER="${EXCLUDE_FILTER:-}" \
   FILTER_TW="${FILTER_TW:-}" FILTER_JP="${FILTER_JP:-}" \
   FILTER_SG="${FILTER_SG:-}" FILTER_US="${FILTER_US:-}" \
-  awk -v cnlist="$CN_LIST" -v cnroutes="$_cn_routes" '
+  awk -v cnlist="$CN_LIST" -v cnroutes="$_cn_routes" -v managed="$active_kind" '
     # CN_CIDR 单独处理：值有 163KB 量级，不能走 ENVIRON（会撞 argv/envp 大小
     # 限制，见上面的中文注释）。-v 传的只是文件路径（几十字节），BEGIN 里
     # 自己按行读文件拼接，全程文件 I/O，没有大小限制。
@@ -867,28 +1349,33 @@ render() {
         if (!first) cn_cidr = cn_cidr ","
       }
     }
+    /^    filter:.*FILTER_UNION/ && managed == "node_url" { next }
+    /^  - MATCH,/ && managed == "node_url" { print "  - RULE-SET,cn_ip,DIRECT,no-resolve" }
+    managed == "node_url" && /name: 🎯 手动节点,/ { sub(/, filter: '\''\$\{FILTER_UNION\}'\''/, "") }
+    managed == "node_url" && /name: 🚀 节点选择,/ {
+      sub(/proxies: \[/, "proxies: [🎯 手动节点, "); sub(/, 🎯 手动节点, DIRECT/, ", DIRECT")
+    }
     {
       line = $0
+      result = ""
       while (match(line, /\$\{[A-Z_]+\}/)) {
         key = substr(line, RSTART + 2, RLENGTH - 3)
         # 同上：这台设备的 awk 三元运算符不可靠，这里也改用显式 if/else。
         if (key == "CN_CIDR") { val = cn_cidr } else { val = ENVIRON[key] }
-        line = substr(line, 1, RSTART - 1) val substr(line, RSTART + RLENGTH)
+        result = result substr(line, 1, RSTART - 1) val
+        line = substr(line, RSTART + RLENGTH)
       }
-      print line
+      print result line
     }' "$TEMPLATE" > "$CONFIG.tmp" || return 1
   strip_egress "$CONFIG.tmp" || { rm -f "$CONFIG.tmp"; return 1; }
 
   # 绝对路径 -f：验证从任何工作目录都能通过
-  if _t_out=$("$BIN" -t -d "$CHILL_DIR" -f "$CONFIG.tmp" 2>&1); then
+  if config_test "$CONFIG.tmp"; then
     mv "$CONFIG.tmp" "$CONFIG"; chmod 600 "$CONFIG"
     RENDERED_DNS_EXTRA="$DIRECT_DNS_EXTRA"
     return 0
   fi
-  # 第一行错误也写到 stderr：`chill.sh reload` 的调用方（u60d）拿它告诉用户为什么没开成
-  _t_err=$(printf '%s\n' "$_t_out" | grep -i -m1 'error\|fail' | cut -c1-200)
-  log "render: mihomo -t 未通过，保留旧配置：${_t_err}"
-  [ -n "$_t_err" ] && echo "mihomo -t: $_t_err" >&2
+  log 'render: mihomo -t 未通过，保留旧配置'
   rm -f "$CONFIG.tmp"
   return 1
 }
@@ -912,6 +1399,43 @@ wan_is_cellular() {
 # 绕行 8999 不算：网页随时增删（luyaz-core bypass_set），删一条不该重启核心；被外部删了下次启动补。
 owned_rules() {
   ip rule show 2>/dev/null | awk -F: -v lo="$RULE_LO" -v hi="$RULE_HI" -v by="$BYPASS_PRIO" '$1+0>=lo && $1+0<=hi && $1+0!=by'
+}
+
+tun_present() {
+  owned_rules | grep -q "lookup $TABLE" && ip route show table "$TABLE" 2>/dev/null | grep -q 'dev chill0'
+}
+
+tun_v6_ready() {
+  ip -6 rule show 2>/dev/null | grep -q "lookup $TABLE" &&
+    ip -6 route show table "$TABLE" 2>/dev/null | grep -q 'dev chill0' &&
+    curl -6 -fsS -m 5 https://one.one.one.one/cdn-cgi/trace >/dev/null 2>&1
+}
+
+controller_get() {
+  curl -fsS -m 3 -H "Authorization: Bearer ${CHILL_SECRET:-}" "http://127.0.0.1:9999/$1" 2>/dev/null
+}
+
+providers_ready() (
+  proxies=$(controller_get providers/proxies) && rule_sets=$(controller_get providers/rules) || return 1
+  proxy_entries=$(printf '%s' "$proxies" | jsonfilter -e '@.providers.*')
+  if [ -n "$proxy_entries" ]; then
+    printf '%s\n' "$proxy_entries" | while IFS= read -r entry; do
+      kind=$(printf '%s' "$entry" | jsonfilter -e '@.vehicleType')
+      [ "$kind" = Compatible ] || printf '%s' "$entry" | jsonfilter -e '@.proxies[0].name' >/dev/null || exit 1
+    done || return 1
+  fi
+  counts=$(printf '%s' "$rule_sets" | jsonfilter -e '@.providers.*.ruleCount')
+  for count in $counts; do uint "$count" && [ "$count" -gt 0 ] || return 1; done
+  [ "$active_kind" != node_url ] || printf '%s' "$proxies" | jsonfilter -e '@.providers.sub.proxies[0].name' >/dev/null
+)
+
+wait_gateway_ready() {
+  for _gate_attempt in $(seq 1 15); do
+    kill -0 "$1" 2>/dev/null || return 1
+    tun_present && { [ -z "$active_id" ] || providers_ready; } && return 0
+    sleep 1
+  done
+  return 1
 }
 # 返回 1 = 缺了（快照里的规则不见了，或 table 2022 里没有 chill0 的路由）。
 # 还没有像样的快照（TUN 规则刚起来）就现在记，这一轮算好。
@@ -965,8 +1489,9 @@ wan_now() {
 # 而不是静默超时等到 TTL 过期。
 enter_direct() {
   reason="$1"
-  restore_dns
-  kill_core
+  flush
+  [ "$reason" != no_profile ] || { write_state direct "$reason"; return; }
+  if [ "$reason" = ipv6_unavailable ]; then ipv6_mode=unavailable; fi
   ip route add unreachable "$FAKE_IP_NET" 2>/dev/null || true
   event "$reason -> direct"
   write_state direct "$reason"
@@ -1065,9 +1590,12 @@ truncate_log() {
 
 # ── run：procd 实例命令 ─────────────────────────────────────────────────────
 run() {
-  trap 'log "收到 TERM/INT"; flush; exit 0' TERM INT
-
+  trap 'log "收到 TERM/INT"; flush; rm -f "$SUP_PID"; exit 0' TERM INT
   flush
+  # Only recover a journal whose writer no longer holds the lock. A live
+  # profile job intentionally leaves it in place while the supervisor starts.
+  profile_lock profile_rollback >/dev/null 2>&1 || true
+  write_marker "$SUP_PID" "$$" || return 1
   ip rule show > "$RULES_BEFORE" 2>/dev/null
   ip -6 rule show >> "$RULES_BEFORE" 2>/dev/null
 
@@ -1077,8 +1605,19 @@ run() {
   heal_n=0; heal_t0=-1
 
   while :; do
+    recover_interrupted_profile || true
+    if [ -f "$RESTART_FLAG" ]; then
+      rm -f "$RESTART_FLAG"
+      backoff=0; crash_n=0; crash_t0=-1
+    fi
     # ---- 不该启动的情形，保持进程存活、停在直连 ----
+    if ! select_profile; then enter_direct render_failed; sleep 5; continue; fi
     if [ -f "$DISABLED" ]; then enter_direct disabled; sleep 5; continue; fi
+    if [ -f "$CHILL_DIR/profile-switch-failed" ]; then enter_direct profile_switch_failed; sleep 5; continue; fi
+    if [ -z "$active_kind" ]; then
+      if [ "$state_idle" != no_profile ]; then write_state direct no_profile; state_idle=no_profile; fi
+      sleep 5; continue
+    fi
     if [ -f "$GAVEUP" ];   then enter_direct gaveup;   sleep 5; continue; fi
     if manual_paused; then enter_direct paused; sleep 5; continue; fi
     [ -e "$PAUSE_UNTIL" ] && rm -f "$PAUSE_UNTIL"
@@ -1088,7 +1627,9 @@ run() {
       sleep 5; continue
     fi
     state_idle=0
-    if ! rulesets_ok; then enter_direct ruleset_missing; sleep 30; continue; fi
+    case "$active_kind" in
+      node_url|legacy) if ! rulesets_ok; then enter_direct ruleset_missing; sleep 5; continue; fi ;;
+    esac
     if ! wan_is_cellular; then enter_direct captive_wan; sleep 15; continue; fi
     if [ "$backoff" != 0 ]; then
       _rn=$(boot_now) || { sleep 5; continue; }
@@ -1101,34 +1642,44 @@ run() {
     if [ "$h" = critical ]; then sleep 15; continue; fi
 
     # ---- 启动核心 ----
-    if start_blocked; then sleep 30; continue; fi
-    cn_set_up
-    render || { enter_direct render_failed; sleep 30; continue; }
-    [ "$CHILL_API_LAN" = "1" ] && rebuild_api_guard
+    if start_blocked; then sleep 5; continue; fi
+    cn_set=routes
+    [ "$active_kind" != legacy ] || cn_set_up
+    prepare_profile_home && render || { enter_direct render_failed; sleep 5; continue; }
+    if profile_options; then
+      if ! public_ipv6; then enter_direct ipv6_unavailable; sleep 5; continue; fi
+      ipv6_mode=tun
+    else
+      if ! block_ipv6; then enter_direct ipv6_unavailable; sleep 5; continue; fi
+      ipv6_mode=blocked
+    fi
+    if [ "$CHILL_API_LAN" = 1 ] && ! rebuild_api_guard; then enter_direct api_guard_failed; sleep 5; continue; fi
     ip route del unreachable "$FAKE_IP_NET" 2>/dev/null || true
 
     # render() 刚按当前档位设过 GMP（eco = 2 核）
-    if [ -n "$GMP" ]; then
-      GOMAXPROCS="$GMP" "$BIN" -d "$CHILL_DIR" -f "$CONFIG" >> "$LOG" 2>&1 &
-    else
-      "$BIN" -d "$CHILL_DIR" -f "$CONFIG" >> "$LOG" 2>&1 &
-    fi
-    echo $! > "$CORE_PID"
-    wait_core_ready "$(cat "$CORE_PID" 2>/dev/null)"
-    [ $? -eq 1 ] && log "核心 ${CORE_READY_MAX} 秒内未就绪（API 或 dns.listen），照常继续"
-
-    if ! kill -0 "$(cat "$CORE_PID" 2>/dev/null)" 2>/dev/null; then
-      log "核心启动即退出"
+    # Imported names, URLs and keys can appear in raw errors. Publish only
+    # phase diagnostics for managed profiles, never Mihomo's raw log output.
+    mihomo_log=/dev/null
+    [ "$active_kind" != legacy ] || mihomo_log=$LOG
+    (umask 077; if [ -n "$GMP" ]; then export GOMAXPROCS="$GMP"; fi; exec "$BIN" -d "$runtime_home" -f "$CONFIG") >> "$mihomo_log" 2>&1 &
+    mihomo_pid=$!
+    printf '%s\n' "$mihomo_pid" > "$CORE_PID"
+    if ! wait_core_ready "$mihomo_pid" || ! wait_gateway_ready "$mihomo_pid"; then
+      enter_direct profile_not_ready
       note_crash || : > "$GAVEUP"
-      flush; sleep 5; continue
+      sleep 5; continue
     fi
+    if [ "$ipv6_mode" = tun ] && ! tun_v6_ready; then enter_direct ipv6_unavailable; sleep 5; continue; fi
 
     net_tune_chill0
 
-    # DNS 与绕行都要在核心确认可用之后才施加
-    if dns_answers; then apply_dns; else log "dns.listen 无应答，跳过 apply_dns"; fi
-    apply_bypass
-    restore_mode
+    # Do not publish running or hand dnsmasq to a partially started gateway.
+    if ! restore_mode || ! bypass_lock bypass_apply_saved || ! apply_dns; then
+      enter_direct profile_not_ready
+      note_crash || : > "$GAVEUP"
+      sleep 5; continue
+    fi
+    save_mode
 
     event "started -> running"
     write_state running ""
@@ -1142,11 +1693,13 @@ run() {
       # immediately (a foreground sleep would hold it for up to 5 s).
       sleep 5 & wait $!
       tick=$((tick+5))
+      recover_interrupted_profile || true
 
       # 要换档位（进出 eco）：平稳重启核心。必须在下面「子进程消失」之前处理，
       # 否则自己杀掉的核心会被记成一次崩溃，攒三次就 gaveup。
       if [ -f "$RESTART_FLAG" ]; then
         rm -f "$RESTART_FLAG"
+        backoff=0; crash_n=0; crash_t0=-1
         restart_core "$(profile_effective)"
         break
       fi
@@ -1233,10 +1786,13 @@ run() {
 
       # 运营商 DNS 变了（换卡、重新拨号）就热重载，让直连用上新的。拿不到 v4 时
       # （断网中）不动，留着上次的。
-      d4=$(direct_dns4)
-      if [ -n "$d4" ] && [ "$d4" != "${RENDERED_DNS_EXTRA:-}" ]; then
-        if do_reload; then event "direct_dns -> reload"; else log "运营商 DNS 变了，但热重载失败"; fi
-      fi
+      case "$active_kind" in
+        node_url|legacy)
+          d4=$(direct_dns4)
+          if [ -n "$d4" ] && [ "$d4" != "${RENDERED_DNS_EXTRA:-}" ]; then
+            if do_reload; then event "direct_dns -> reload"; else log "运营商 DNS 变了，但热重载失败"; fi
+          fi ;;
+      esac
 
       write_state running ""
     done
@@ -1248,7 +1804,7 @@ rebuild_api_guard() {
   nft delete table inet chill 2>/dev/null || true
   allow=""
   for one in $CHILL_API_ALLOW_IP; do allow="$allow $one,"; done
-  nft -f - <<EOF 2>/dev/null || log "rebuild_api_guard 失败"
+  nft -f - <<EOF 2>/dev/null
 table inet chill {
   chain input {
     type filter hook input priority -5;
@@ -1272,26 +1828,30 @@ case "${1:-}" in
   run)     run ;;
   flush)   flush ;;
   status)  cat "$STATE" 2>/dev/null || echo '{"state":"unknown"}' ;;
-  start)   rm -f "$DISABLED" "$GAVEUP"; /etc/init.d/chill start ;;
+  start)   rm -f "$DISABLED" "$GAVEUP" "$CHILL_DIR/profile-switch-failed"; "$CHILL_INIT" start ;;
   stop)
     : > "$DISABLED"
-    /etc/init.d/chill stop
+    "$CHILL_INIT" stop
     mark_stopped
     # 总开关停机后 unreachable 路由保留 5 分钟再删，让客户端尽快重解析而不是静默超时
     (sleep 300; ip route del unreachable "$FAKE_IP_NET" 2>/dev/null) >/dev/null 2>&1 &
     ;;
-  restart) /etc/init.d/chill restart ;;
+  restart) "$CHILL_INIT" restart ;;
+  profile-validate|profile-switch|profile-refresh)
+    [ "$#" -eq 2 ] && valid_id "$2" || { echo 'invalid_profile_id' >&2; exit 2; }
+    case "$1" in
+      profile-validate) profile_lock validate_profile "$2" ;;
+      profile-switch) profile_lock profile_switch "$2" ;;
+      profile-refresh) profile_lock profile_refresh "$2" ;;
+    esac ;;
+  bypass-set) shift; bypass_lock bypass_set "$@" ;;
   validate)
-    # ship 转正前用：拿这台设备自己的 chill.env、cn.list 渲染给定模板并 mihomo -t。
-    # 渲染结果含订阅地址，只放临时目录，用完就删；不碰正在用的配置和服务。
-    [ -f "${2:-}" ] || { echo "validate: 没有模板 ${2:-}" >&2; exit 2; }
-    TEMPLATE=$2
-    RUN_DIR=/tmp/chill-validate.$$
-    CONFIG=$RUN_DIR/config.yaml
-    trap 'rm -rf "$RUN_DIR"' EXIT
-    (umask 077; mkdir -p "$RUN_DIR") || exit 2
-    render
-    exit $?
+    case "${2:-}" in
+      '') profile_lock validate_active ;;
+      --template) [ "$#" -eq 3 ] && validate_template "$3" && TEMPLATE=$3 profile_lock validate_active ;;
+      *) if valid_id "$2"; then profile_lock validate_profile "$2";
+         else validate_template "$2" && TEMPLATE=$2 profile_lock validate_active; fi ;;
+    esac
     ;;
   reload)
     # 要返回正确的退出码：调用方（脚本、u60d）凭它判断 reload 成没成。
@@ -1341,16 +1901,16 @@ case "${1:-}" in
     # 设置了 disabled 并停止，但重新 safe-start 时这个文件还在，新实例一起来
     # 就立刻卡在「已关闭」，连 render 都不会尝试。safe-start 本该是「重新开始
     # 一轮全新验证」的入口，语义上就该跟 start 一样先清场。
-    rm -f "$DISABLED" "$GAVEUP"
+    rm -f "$DISABLED" "$GAVEUP" "$CHILL_DIR/confirmed" "$CHILL_DIR/profile-switch-failed"
     # 2026-09-16 真机实测踩到的第二个缺口，比上面那个更严重：每次 safe-start
     # 都会独立起一个 300 秒计时器，旧的从来不会被取消。当天连续调了几次
     # safe-start 调试，旧计时器在我 confirm 之前就先到期检查了 confirmed、
     # 发现还不存在，直接把刚激活、工作正常的核心关掉了——confirm 晚到没用，
     # 因为检查只做一次。记录死人开关自己的 pid，下次 safe-start 前先杀掉上一个。
     [ -f "$CHILL_DIR/deadman.pid" ] && kill "$(cat "$CHILL_DIR/deadman.pid")" 2>/dev/null
-    /etc/init.d/chill start
+    "$CHILL_INIT" start || exit 1
     # 首装保险：5 分钟内没 confirm 就自动关掉，避免把自己锁在外面
-    ( sleep 300; [ -f "$CHILL_DIR/confirmed" ] || { : > "$DISABLED"; /etc/init.d/chill stop; } ) \
+    ( sleep 300; [ -f "$CHILL_DIR/confirmed" ] || { : > "$DISABLED"; "$CHILL_INIT" stop; mark_stopped; } ) \
       >/dev/null 2>&1 &
     echo $! > "$CHILL_DIR/deadman.pid"
     echo "safe-start：5 分钟内请执行 chill.sh confirm"
@@ -1370,5 +1930,5 @@ case "${1:-}" in
       *) echo "usage: $0 ai-gate {on|off|status}" >&2; exit 2 ;;
     esac
     ;;
-  *) echo "usage: $0 {run|start|stop|restart|reload|status|flush|pause <min>|safe-start|confirm|profile [eco|standard|perf]|ai-gate on|off|status}"; exit 1 ;;
+  *) echo "usage: $0 {run|start|stop|restart|reload|status|flush|pause|safe-start|confirm|profile|profile-validate|profile-switch|profile-refresh|validate|bypass-set|ai-gate}"; exit 1 ;;
 esac

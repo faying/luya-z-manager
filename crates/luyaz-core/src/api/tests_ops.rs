@@ -939,8 +939,8 @@ async fn chill_switch_and_profile_as_jobs() {
     for (p, text) in [
         ("data/scenario/scenarios.json", serde_json::to_string(&luyaz_policy::scenario::template()).unwrap()),
         ("data/scenario/state.json", r#"{"current":"abroad","candidate":"","hits":0,"misses":0,"applied":{},"last_switch":1,"last_error":null,"last_scan":0}"#.to_string()),
-        // a chill.sh that logs its arguments; "profile" takes a moment
-        ("data/chill/chill.sh", format!("#!/bin/sh\necho \"$@\" >> {}/calls\n[ \"$1\" = profile ] && sleep 0.3\necho line1\necho applied \"$2\"\n", root.display())),
+        // A CHILL job's output may contain a URL. It stays out of the job response.
+        ("data/chill/chill.sh", format!("#!/bin/sh\necho \"$@\" >> {}/calls\n[ \"$1\" = profile ] && sleep 0.3\necho 'https://example.invalid/config?token=private'\n", root.display())),
         ("tmp/chill.state", r#"{"state":"running","mem_avail_mb":300,"cpuss_c":50}"#.to_string()),
     ] {
         let f = root.join(p);
@@ -983,7 +983,7 @@ async fn chill_switch_and_profile_as_jobs() {
         serde_json::from_str(&fs::read_to_string(root.join("data/scenario/restore.json")).unwrap())
             .unwrap();
     assert_eq!(r[0]["key"], "chill-on-after-abroad");
-    // a profile change: one job at a time; message is the output's tail
+    // A profile change shares the write slot and keeps script output private.
     assert_eq!(
         call(
             addr,
@@ -1012,7 +1012,8 @@ async fn chill_switch_and_profile_as_jobs() {
         (409, Some("operation in progress"))
     );
     let j = wait().await;
-    assert_eq!(j["message"], "line1 | applied eco");
+    assert_eq!(j["status"], "done");
+    assert!(!j.to_string().contains("token=private"));
     // on: the entry is dropped
     assert_eq!(
         call(addr, "POST", "/api/services/chill/enable", "").await.0,
@@ -1034,7 +1035,7 @@ async fn chill_switch_and_profile_as_jobs() {
         st == 409 && b["error"].as_str().unwrap().contains("too hot"),
         "{b}"
     );
-    // a failing chill.sh: error with its tail
+    // A failing job reports its error without returning raw diagnostics.
     fs::write(
         root.join("data/chill/chill.sh"),
         "#!/bin/sh\necho boom\nexit 3\n",
@@ -1048,10 +1049,8 @@ async fn chill_switch_and_profile_as_jobs() {
         200
     );
     let j = wait().await;
-    assert_eq!(
-        (j["status"].as_str(), j["message"].as_str()),
-        (Some("error"), Some("chill.sh stop failed: boom"))
-    );
+    assert_eq!(j["status"], "error");
+    assert!(!j.to_string().contains("boom"));
 }
 
 /// Step 9f: a scenario restore's "on" keeps its restore entry; the subscription URL goes into

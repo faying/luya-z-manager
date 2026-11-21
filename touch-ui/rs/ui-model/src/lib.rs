@@ -41,6 +41,13 @@ pub struct Model {
     pub chill_traffic: Option<String>,
     pub chill_speed: Option<String>,
     pub chill_chain: Option<String>,
+    /// Active configuration profile; Some("") means a successful read found none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chill_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chill_profile_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chill_ipv6: Option<String>,
     /// The auto group 🚀 points at: its hand-picked node ("" = none). None = 🚀 is not on one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chill_pin: Option<String>,
@@ -182,6 +189,21 @@ fn is_zero64(v: &i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_fields_are_optional_for_old_models() {
+        let old = serde_json::to_value(Model::default()).unwrap();
+        assert!(old.get("chill_profile").is_none());
+        assert!(old.get("chill_profile_kind").is_none());
+        assert!(old.get("chill_ipv6").is_none());
+        let mut model: Model = serde_json::from_value(old).unwrap();
+        assert_eq!((model.chill_profile.as_deref(), model.chill_profile_kind.as_deref(), model.chill_ipv6.as_deref()), (None, None, None));
+        model.chill_profile = Some("SG2HOME".into());
+        model.chill_profile_kind = Some("full_url".into());
+        model.chill_ipv6 = Some("blocked".into());
+        let restored: Model = serde_json::from_value(serde_json::to_value(&model).unwrap()).unwrap();
+        assert_eq!(restored, model);
+    }
 
     /// A model the render test wrote (good scene, Home) reads back field for field: nothing in the
     /// C object is unknown to the Rust types and nothing is lost.

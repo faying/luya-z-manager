@@ -106,7 +106,7 @@ U60 不在默认地址时：`GATEWAY=192.168.x.1 ./install.sh`。
 | `/data/luyaz/ship/` | `u60 ship` 事务、清单 `manifest.jsonl`、开机收尾 `luyaz-recover.sh` |
 | `/data/alerts/`、`/data/crashlog/` | 告警记录、崩溃日志 |
 | `/data/esim/` | lpac，读写 eSIM 卡的工具 |
-| `/data/chill/`、`/etc/init.d/chill` | CHILL：mihomo、规则集、zashboard、`chill.sh`。订阅地址写在 `/data/chill/chill.env`（你自己写，只有 root 能读） |
+| `/data/chill/`、`/etc/init.d/chill` | CHILL：Mihomo、规则集、zashboard 和配置档案。档案原件和订阅地址仅 root 可读。 |
 | `/data/luyaz/kit/rc.local.orig` | 第一次安装前的原厂 `rc.local` |
 
 ## 日常用法
@@ -115,7 +115,7 @@ U60 不在默认地址时：`GATEWAY=192.168.x.1 ./install.sh`。
 - **换高级后台密码**：再跑一次 `./install.sh admin`，给新密码。或者 SSH 进去改 `/data/luyaz/web.env` 里那一行（不能有引号、反斜杠、空格），再到 `:9090` 重新登录；luyaz-web 每次登录都现读这个文件，不用重启。
 - **eSIM**：在后台「移动网络 → eSIM」管理 profile；屏幕上是「更多功能 → eSIM」，点两下切换。切换约 10 秒生效，一般不用重启。
 - **CHILL**：第一次 `./install.sh chill` 只装不启动。
-  1. SSH 进去，把 `/data/chill/chill.env.example` 复制成 `/data/chill/chill.env`，填上订阅地址，`chmod 600`。静态节点快照放 `/data/chill/providers/`。
+  1. 在管理网页「服务 → CHILL」导入完整配置链接、节点订阅链接或本地 YAML。
   2. 跑 `sh /data/chill/chill.sh safe-start`；确认全屋网络正常后，5 分钟内跑 `sh /data/chill/chill.sh confirm`。不确认它会自己停掉，配错了也不会把你锁在外面。
   3. 以后在后台「服务 → CHILL」里开关、选出口。那一页的按钮打开 zashboard，由高级后台在自己的登录后面提供（`:9090/chill-ui/`）。
 

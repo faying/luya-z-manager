@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use askama::Template;
 use axum::Router;
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -83,6 +83,11 @@ pub fn routes() -> Router<Shared> {
         .route("/services/chill/exit/set", post(exit_set))
         .route("/services/chill/pick/set", post(pick_set))
         .route("/services/chill/profile/set", post(profile_set))
+        .route("/services/chill/mode/set", post(mode_set))
+        .route("/services/chill/mode/ask", post(mode_ask))
+        .route("/services/chill/config/ask", post(config_ask))
+        .route("/services/chill/config/set", post(config_set))
+        .route("/services/chill/config/import", post(config_import).layer(DefaultBodyLimit::max(4 * 1024 * 1024 + 64 * 1024)))
         .route("/services/chill/prov/refresh/ask", post(prov_refresh_ask))
         .route("/services/chill/prov/refresh/set", post(prov_refresh_set))
         .route("/services/chill/prov/edit", post(prov_edit))
@@ -105,6 +110,7 @@ const LOG_EVERY: Duration = Duration::from_secs(4);
 #[derive(Default)]
 struct Due {
     status: Option<Instant>,
+    configs: Option<Instant>,
     prov: Option<Instant>,
     bypass: Option<Instant>,
     clients: Option<Instant>,
@@ -173,13 +179,18 @@ impl Polled for Poll {
         let d_byp = is_due(self.due.bypass, all, now);
         let d_cli = is_due(self.due.clients, all, now);
         let d_log = !paused_now && (log_on || is_due(self.due.log, all, now));
-        let (prov, byp, cli, log) = tokio::join!(
+        let (prov, byp, cli, log, configs) = tokio::join!(
             get_if(app, &self.who, d_prov, "/api/services/chill/providers"),
             get_if(app, &self.who, d_byp, "/api/services/chill/bypass"),
             get_if(app, &self.who, d_cli, "/api/network/clients"),
             get_if(app, &self.who, d_log, "/api/services/chill/log?lines=200"),
+            get_if(app, &self.who, is_due(self.due.configs, all, now), "/api/services/chill/configs"),
         );
         let after = Instant::now();
+        if let Some(r) = configs {
+            self.got.configs.set(r);
+            self.due.configs = Some(after + PROV_EVERY);
+        }
         if let Some(r) = prov {
             self.got.prov.set(r);
             self.due.prov = Some(after + PROV_EVERY);
@@ -204,6 +215,7 @@ impl Polled for Poll {
             }
         };
         near(self.due.prov, running);
+        near(self.due.configs, true);
         near(self.due.bypass, true);
         near(self.due.clients, true);
         near(self.due.log, !paused_now);
@@ -226,7 +238,7 @@ struct Page {
     shell: crate::shell::Shell,
     l: Lang,
     leaves: Vec<(String, String)>,
-    ops: [String; 7],
+    ops: [String; 9],
 }
 
 impl Page {
@@ -271,6 +283,7 @@ mod tests {
             "region": {"active": "🇹🇼 台湾", "options": ["🇯🇵 日本", "🇹🇼 台湾", "DIRECT"]},
             "ai_exit": {"active": "🇺🇸 美国", "options": ["🇺🇸 美国"]},
             "groups": [{"name": "🚀 节点选择", "now": "🇹🇼 台湾", "size": 6}]})));
+        g.configs.set(Ok(json!({"active_id":"p-home", "profiles":[{"id":"p-home", "name":"Home <safe>", "kind":"full_url", "source_host":"example.net", "has_url":true, "active":true, "updated_at":1790000000, "provider_count":2, "group_count":3}]})));
         g.prov.set(Ok(json!({"providers": [{"name": "sub", "vehicle_type": "HTTP", "updated_at": "2026-10-13T08:00:00.4Z", "node_count": 24,
             "subscription": {"Upload": 1, "Download": 2, "Total": 100, "Expire": 1798732800}, "editable": true}]})));
         g.bypass.set(Ok(json!({"ips": ["192.168.0.105"], "stale": ["192.168.0.105"]})));
@@ -303,6 +316,9 @@ mod tests {
         // the dashboard secret is never read
         assert!(!all.contains("secret"));
         assert!(all.contains("Running") && all.contains("mihomo v1.19.14 · mode rule"));
+        assert!(all.contains("Home &lt;safe&gt;") && all.contains("example.net"));
+        assert!(all.contains("id=\"ch-c-delete-0\"") && all.contains(" disabled data-on:click"));
+        assert!(all.contains("name=\"mode\" value=\"rule\" required checked") && all.contains("/services/chill/mode/ask"));
     }
 
     #[test]
@@ -312,7 +328,7 @@ mod tests {
         let ls = leaves(&g, Lang::En, "t", 0);
         let st = &ls[0].1;
         assert!(st.contains("Not started") && st.contains("power/ask?act=start"), "{st}");
-        assert_eq!(ls[1].1, "<div id=\"ch-exit\"></div>");
+        assert_eq!(ls.iter().find(|(id, _)| id == "ch-exit").unwrap().1, "<div id=\"ch-exit\"></div>");
     }
 
     #[test]

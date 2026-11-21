@@ -21,6 +21,7 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- core, lweb, touch, scripts: manage several Mihomo configurations and switch Rule, Global or Direct mode. CHILL keeps profile caches separate and restores the previous working profile if activation fails. The touchscreen home page opens CHILL from the Mihomo status card.
 - core, lweb, sentinel, touch: add a persistent Off scenario mode. Off retains the current Wi-Fi, CHILL and device state, stops scenario scanning and automatic actions, keeps configuration and manual controls available, and can be resumed from the same selector.
 - The admin web and touchscreen now share Core Wi-Fi transactions. The master switch preserves the saved bands and main AP settings. Confirmation waits for vendor readback, interface state, and hostapd. The channel display refreshes after the operation.
 - Wi-Fi configuration reloads check the intended settings and layout for 15 continuous seconds before confirming.

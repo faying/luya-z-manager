@@ -36,3 +36,16 @@
 #ch-pv-form:not(:empty) { margin-bottom: 8px; }
 .ch-adv { display: grid; gap: 16px; }
 .ch-adv > :empty { display: none; }
+.ch-config-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.ch-config-row .nd-row__text { min-width: 0; overflow-wrap: anywhere; }
+.ch-config-actions, .ch-import-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
+.ch-config-actions button { min-height: 44px; }
+.ch-import { display: grid; gap: 8px; padding: 16px; min-width: 0; }
+.ch-import fieldset { border: 0; padding: 0; margin: 8px 0; min-width: 0; }
+.ch-import-kinds label { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.ch-import input:not([type=radio]) { min-width: 0; max-width: 100%; min-height: 44px; font-size: 16px; }
+.ch-import button { justify-self: start; }
+.ch-mode, .ch-mode fieldset { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.ch-mode fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.ch-mode label { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.ch-mode input:checked + span { font-weight: 700; }

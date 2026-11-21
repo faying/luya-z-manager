@@ -121,7 +121,10 @@ pub fn is_job(cmdline: &[u8]) -> bool {
     let mut w = s.split_whitespace();
     while let Some(x) = w.next() {
         if x.ends_with("chill.sh") {
-            return matches!(w.next(), Some("start" | "stop" | "profile" | "reload"));
+            return matches!(
+                w.next(),
+                Some("start" | "stop" | "profile" | "reload" | "profile-switch" | "profile-refresh" | "profile-validate")
+            );
         }
     }
     false
@@ -216,30 +219,30 @@ pub fn read_profile() -> Option<Value> {
 }
 
 /// 主代理组现在的成员、可选的成员；模式。
-async fn exit_now() -> Result<(String, Vec<String>, String), String> {
-    let group = get_json(&format!("/proxies/{}", ch::enc(ch::MAIN_GROUP))).await?;
+async fn exit_now() -> Result<(Option<Value>, String), String> {
+    let url = format!("{}/proxies/{}", mihomo(), ch::enc(ch::MAIN_GROUP));
+    let res = auth(client(Duration::from_secs(3))?.get(&url), &secret())
+        .send()
+        .await
+        .map_err(|_| "mihomo group request failed".to_owned())?;
+    let group = match res.status().as_u16() {
+        200 => Some(serde_json::from_slice(&res.bytes().await.map_err(|_| "cannot read mihomo group")?)
+            .map_err(|_| "invalid mihomo group response")?),
+        404 => None,
+        code => return Err(format!("mihomo group request failed (HTTP {code})")),
+    };
     let cfg = get_json("/configs").await?;
-    let now = group["now"].as_str().unwrap_or("").to_owned();
-    let options = group["all"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    Ok((
-        now,
-        options,
-        cfg["mode"].as_str().unwrap_or("rule").to_owned(),
-    ))
+    let mode = cfg["mode"].as_str()
+        .filter(|mode| ch::valid_mode(mode))
+        .ok_or("invalid mihomo mode")?;
+    Ok((group, mode.to_owned()))
 }
 
 /// 现在的出口。
 pub async fn read_exit() -> Result<Value, String> {
-    let (now, _, mode) = exit_now().await?;
-    Ok(json!(ch::exit_state(&mode, &now)))
+    let (group, mode) = exit_now().await?;
+    let now = group.as_ref().and_then(|g| g["now"].as_str()).unwrap_or("");
+    Ok(json!(ch::exit_state(&mode, now)))
 }
 
 /// mihomo 在跑（读数的 `registered`）。
@@ -264,10 +267,59 @@ async fn put_member(cl: &reqwest::Client, secret: &str, member: &str) -> Result<
     }
 }
 
+pub(crate) async fn write_mode(
+    client: &reqwest::Client,
+    api: &str,
+    secret: &str,
+    file: &std::path::Path,
+    want: &str,
+) -> Result<(), String> {
+    if !ch::valid_mode(want) {
+        return Err("mode must be rule, global or direct".into());
+    }
+    let url = format!("{api}/configs");
+    let response = auth(client.patch(&url), secret)
+        .header("Content-Type", "application/json")
+        .body(json!({"mode": want}).to_string())
+        .send()
+        .await
+        .map_err(|_| "mode request failed".to_owned())?;
+    if !response.status().is_success() {
+        return Err(format!("mihomo rejected mode (HTTP {})", response.status().as_u16()));
+    }
+    let response = auth(client.get(&url), secret).send().await.map_err(|_| "mode readback failed")?;
+    if !response.status().is_success() {
+        return Err(format!("mode readback failed (HTTP {})", response.status().as_u16()));
+    }
+    let bytes = response.bytes().await.map_err(|_| "cannot read mihomo mode")?;
+    let readback: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid mihomo mode response")?;
+    if readback.get("mode").and_then(Value::as_str) != Some(want) {
+        return Err("mihomo mode readback did not match".into());
+    }
+    crate::api::ops::atomic_write(file, format!("{want}\n").as_bytes())
+        .map_err(|_| "cannot save mihomo mode".to_owned())
+}
+
 /// 写出口：组、模式两步（和兼容层的 `chill_exit` 同一个计划）；模式那步失败把组换回原来的成员（O5）。
 pub async fn write_exit(want: &str) -> Result<Value, String> {
-    let (now, options, _) = exit_now().await?;
-    let opts: Vec<&str> = options.iter().map(String::as_str).collect();
+    let (group, _) = exit_now().await?;
+    let cl = client(Duration::from_secs(3))?;
+    let api = mihomo();
+    let secret = secret();
+    let file = std::path::Path::new(ch::CHILL_MODE_FILE);
+    let Some(group) = group else {
+            let mode = ch::exit_mode(want).ok_or("invalid CHILL exit state")?;
+            write_mode(&cl, &api, &secret, file, mode).await?;
+            crate::api::ops::note_exit_abroad(
+                "",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64),
+            );
+            return Ok(json!({"exit": ch::exit_state(mode, "")}));
+    };
+    let now = group["now"].as_str().unwrap_or("");
+    let opts: Vec<&str> = group["all"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     let remembered = std::fs::read_to_string(ch::LAST_MAIN).ok();
     let backup = std::fs::read_to_string(ch::MANUAL_FIRST_STATE)
         .ok()
@@ -276,7 +328,7 @@ pub async fn write_exit(want: &str) -> Result<Value, String> {
         .unwrap_or_default();
     let plan = ch::exit_plan(
         want,
-        &now,
+        now,
         &opts,
         remembered.as_deref().map(str::trim),
         &backup,
@@ -287,22 +339,15 @@ pub async fn write_exit(want: &str) -> Result<Value, String> {
             .unwrap_or("cannot plan the exit")
             .to_owned()
     })?;
-    let cl = client(Duration::from_secs(3))?;
-    let secret = secret();
     if let Some(r) = &plan.remember {
         let _ = std::fs::write(ch::LAST_MAIN, r);
     }
     if let Some(m) = &plan.member {
         put_member(&cl, &secret, m).await?;
     }
-    let mode = auth(cl.patch(format!("{}/configs", mihomo())), &secret)
-        .header("Content-Type", "application/json")
-        .body(json!({"mode": plan.mode}).to_string())
-        .send()
-        .await;
+    let mode = write_mode(&cl, &api, &secret, file, plan.mode).await;
     let err = match mode {
-        Ok(r) if r.status().as_u16() < 400 => {
-            let _ = std::fs::write(ch::CHILL_MODE_FILE, format!("{}\n", plan.mode));
+        Ok(_) => {
             // 和兼容层一样：在国外改了出口，回国由情景改回代理
             crate::api::ops::note_exit_abroad(
                 "",
@@ -312,12 +357,11 @@ pub async fn write_exit(want: &str) -> Result<Value, String> {
             );
             return Ok(json!({"exit": want}));
         }
-        Ok(r) => format!("mihomo rejected mode (HTTP {})", r.status().as_u16()),
-        Err(e) => format!("mode request failed: {e}"),
+        Err(e) => e,
     };
     if plan.member.is_some() && !now.is_empty() {
         // O5：组已经换了、模式没换上：换回去，不留半截
-        if let Err(e) = put_member(&cl, &secret, &now).await {
+        if let Err(e) = put_member(&cl, &secret, now).await {
             eprintln!("ops: chill exit: could not put the group back to {now}: {e}");
         }
     }
@@ -411,6 +455,37 @@ mod tests {
         assert!(is_job(b"/bin/sh\0/data/chill/chill.sh\0profile\0eco\0"));
         assert!(is_job(b"sh\0-c\0/data/chill/chill.sh profile perf\0"));
         assert!(is_job(b"/bin/sh\0/data/chill/chill.sh\0reload\0"));
+        assert!(is_job(b"/bin/sh\0/data/chill/chill.sh\0profile-switch\0p-x\0"));
+        assert!(is_job(b"/bin/sh\0/data/chill/chill.sh\0profile-refresh\0p-x\0"));
         assert!(!is_job(b"/usr/bin/mihomo\0-d\0/data/chill\0"));
+    }
+
+    #[tokio::test]
+    async fn canonical_mode_persists_only_after_a_matching_readback() {
+        use axum::{Router, Json, extract::State, routing::get};
+        use serde_json::{Value, json};
+        use std::sync::{Arc, Mutex};
+
+        let state = Arc::new(Mutex::new("rule".to_owned()));
+        let app = Router::new().route("/configs", get(
+            |State(mode): State<Arc<Mutex<String>>>| async move { Json(json!({"mode": *mode.lock().unwrap()})) },
+        ).patch(
+            |State(mode): State<Arc<Mutex<String>>>, Json(want): Json<Value>| async move {
+                // Simulate a successful PATCH that does not honor a mode.
+                if want["mode"] != "direct" {
+                    *mode.lock().unwrap() = want["mode"].as_str().unwrap().to_owned();
+                }
+                axum::http::StatusCode::NO_CONTENT
+            },
+        )).with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let path = std::env::temp_dir().join(format!("luyaz-mode-test-{}", std::process::id()));
+        let cl = super::client(Duration::from_secs(3)).unwrap();
+        assert_eq!(super::write_mode(&cl, &url, "", &path, "global").await, Ok(()));
+        assert!(super::write_mode(&cl, &url, "", &path, "direct").await.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "global\n");
+        std::fs::remove_file(path).unwrap();
     }
 }

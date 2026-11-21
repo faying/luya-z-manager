@@ -19,7 +19,7 @@ use std::convert::Infallible;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use axum::extract::{Query, Request, State};
+use axum::extract::{FromRequest, Multipart, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
@@ -351,6 +351,126 @@ pub async fn profile_set(State(app): State<Shared>, Query(q): Query<ExitQ>, req:
         };
         done("ch-pf", l, o)
     })
+}
+
+pub async fn mode_ask(req: Request) -> impl IntoResponse {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let l = ctx.lang;
+    let c = inline(l.pick("Switch to direct mode?", "切到直连模式？").into(), l.pick("All traffic, including AI and VoWiFi, goes direct.", "全屋流量改为直连，AI 和 VoWiFi 也直连。").into(), l.pick("Confirm: direct", "确认：直连").into());
+    one(ask("ch-md", l, ctx.remote, &format!("{PATH}/mode/set?v=direct"), c))
+}
+
+pub async fn mode_set(State(app): State<Shared>, Query(q): Query<ExitQ>, req: Request) -> impl IntoResponse {
+    let (who, l, _) = who(&app, &req);
+    write::respond(pending("ch-md", l, l.pick("Switching…", "正在切换…")), async move {
+        let want = q.v;
+        if !["rule", "global", "direct"].contains(&want.as_str()) {
+            return done("ch-md", l, Outcome::Failed(l.pick("Unknown mode", "未知模式").into()));
+        }
+        let r = agent::send_json(&app, &who, reqwest::Method::PUT, "/api/services/chill/mode", &json!({"mode": want})).await;
+        let o = match sent(r, l) {
+            Err(o) => o,
+            Ok((_, no_reply)) => finish(&app, &who, STATUS, no_reply, l.pick("Mode updated", "模式已更新").into(), |v| s(v, "mode") == want).await,
+        };
+        done("ch-md", l, o)
+    })
+}
+
+const CONFIGS: &str = "/api/services/chill/configs";
+
+#[derive(Deserialize, Default)]
+pub struct ConfigQ {
+    #[serde(default)] act: String,
+    #[serde(default)] i: usize,
+    #[serde(default)] h: String,
+}
+
+async fn config_at(app: &Shared, who: &Caller, q: &ConfigQ, l: Lang) -> Result<(String, bool), Outcome> {
+    let v = read(app, who, CONFIGS).await.map_err(|e| failed(&e, l))?;
+    v["profiles"].as_array().and_then(|a| a.get(q.i)).filter(|p| tag(s(p, "id")) == q.h)
+        .and_then(|p| {
+            let id = s(p, "id");
+            let valid = !id.is_empty() && id.len() <= 32 && id.bytes().next().is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+            valid.then(|| (id.to_owned(), p["active"].as_bool() == Some(true)))
+        }).ok_or_else(|| Outcome::NotYet(l.pick("The list changed; press it again", "列表变了，请再按一次").into()))
+}
+
+pub async fn config_ask(State(app): State<Shared>, Query(q): Query<ConfigQ>, req: Request) -> impl IntoResponse {
+    let (who, l, remote) = who(&app, &req);
+    let valid = ["activate", "refresh", "delete"].contains(&q.act.as_str());
+    let result = if valid { config_at(&app, &who, &q, l).await } else { Err(Outcome::Failed(l.pick("Unknown action", "未知操作").into())) };
+    let html = match result {
+        Err(o) => done("ch-cf", l, o),
+        Ok((_, active)) if active && q.act == "delete" => done("ch-cf", l, Outcome::Failed(l.pick("The active configuration cannot be deleted", "不能删除使用中的配置档案").into())),
+        Ok(_) => {
+            let c = inline(l.pick("Apply this configuration action?", "执行配置档案操作？").into(), l.pick("Switching or refreshing an active configuration can interrupt connections.", "切换或刷新使用中的配置可能中断连接。").into(), l.pick("Confirm", "确认").into());
+            ask("ch-cf", l, remote, &format!("{PATH}/config/set?act={}&i={}&h={}", q.act, q.i, q.h), c)
+        }
+    };
+    one(html)
+}
+
+pub async fn config_set(State(app): State<Shared>, Query(q): Query<ConfigQ>, req: Request) -> impl IntoResponse {
+    let (who, l, _) = who(&app, &req);
+    write::respond(pending("ch-cf", l, l.pick("Working…", "正在处理…")), async move {
+        if !["activate", "refresh", "delete"].contains(&q.act.as_str()) { return done("ch-cf", l, Outcome::Failed(l.pick("Unknown action", "未知操作").into())); }
+        let (id, active) = match config_at(&app, &who, &q, l).await { Ok(v) => v, Err(o) => return done("ch-cf", l, o) };
+        if q.act == "delete" && active { return done("ch-cf", l, Outcome::Failed(l.pick("The active configuration cannot be deleted", "不能删除使用中的配置档案").into())); }
+        let path = format!("{CONFIGS}/{}", q.act);
+        let o = match run_job(&app, &who, reqwest::Method::POST, &path, json!({"id": id}), l).await {
+            Err(Outcome::Failed(_)) => Outcome::Failed(l.pick("Configuration operation failed; check the source and retry", "配置档案操作失败，请检查来源后重试").into()),
+            Err(o) => o,
+            Ok(_) => finish(&app, &who, CONFIGS, false, l.pick("Configuration updated", "配置档案已更新").into(), |v| {
+                let found = v["profiles"].as_array().is_some_and(|a| a.iter().any(|p| s(p, "id") == id));
+                match q.act.as_str() { "activate" => s(v, "active_id") == id, "delete" => !found, _ => found }
+            }).await,
+        };
+        bump(&app);
+        done("ch-cf", l, o)
+    })
+}
+
+pub async fn config_import(State(app): State<Shared>, req: Request) -> axum::response::Response {
+    use askama::Template;
+    let headers = req.headers().clone();
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let (who, l, _) = who(&app, &req);
+    let mut fields = HashMap::<String, Vec<u8>>::new();
+    let mut valid = true;
+    if let Ok(mut mp) = Multipart::from_request(req, &app).await {
+        loop {
+            let mut field = match mp.next_field().await { Ok(Some(f)) => f, Ok(None) => break, Err(_) => { valid = false; break; } };
+            let name = field.name().unwrap_or("").to_owned();
+            let mut value = Vec::new();
+            loop {
+                match field.chunk().await {
+                    Ok(Some(chunk)) if value.len() + chunk.len() <= if name == "file" { 4 * 1024 * 1024 } else { 8192 } => value.extend_from_slice(&chunk),
+                    Ok(Some(_)) | Err(_) => { valid = false; break; },
+                    Ok(None) => break,
+                }
+            }
+            if !valid { break; }
+            if ["name", "kind", "url", "file"].contains(&name.as_str()) && fields.insert(name, value).is_some() { valid = false; break; }
+        }
+    } else { valid = false; }
+    let text = |key: &str| fields.get(key).and_then(|v| std::str::from_utf8(v).ok()).unwrap_or("");
+    let (name, kind, url, yaml) = (text("name").trim(), text("kind"), text("url").trim(), text("file"));
+    valid &= !name.is_empty() && name.len() <= 128 && match kind { "full_url" | "node_url" => sub_url_ok(url), "local_yaml" => !yaml.is_empty(), _ => false };
+    let o = if valid {
+        let body = if kind == "local_yaml" { json!({"name": name, "kind": kind, "yaml": yaml}) } else { json!({"name": name, "kind": kind, "url": url}) };
+        match run_job(&app, &who, reqwest::Method::POST, &format!("{CONFIGS}/import"), body, l).await {
+            Ok(_) => finish(&app, &who, CONFIGS, false, l.pick("Configuration imported", "配置档案已导入").into(), |v| v["profiles"].as_array().is_some_and(|a| a.iter().any(|p| s(p, "name") == name && s(p, "kind") == kind))).await,
+            Err(_) => Outcome::Failed(l.pick("Import failed; check the source and try again", "导入失败，请检查来源后重试").into()),
+        }
+    } else { Outcome::Failed(l.pick("Enter a name and a valid source (maximum 4 MiB)", "请输入名称及有效来源（最大 4 MiB）").into()) };
+    bump(&app);
+    let tab = crate::auth::random_id();
+    let poll = super::Poll::new(who, l, tab.clone());
+    let shell = app.hub.read(|st| crate::shell::Shell::new(&headers, PATH).live(st, &ctx, Some(format!("{PATH}/events?g={}&t={tab}", st.generation))));
+    let mut ops = AREAS.map(|id| area(id, l, ctx.remote, "", &Phase::Idle));
+    ops[8] = done("ch-cf", l, o);
+    let html = super::Page { shell, l, leaves: poll.leaves(), ops }.render().unwrap();
+    crate::assets::maybe_gzip(&headers, "text/html; charset=utf-8", html.into_bytes(), "no-store")
 }
 
 // ---- subscriptions ----

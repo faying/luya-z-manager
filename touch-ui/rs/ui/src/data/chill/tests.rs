@@ -145,7 +145,7 @@ fn configs_read_sparingly() {
     let c0 = f.c();
     let mut a = agent_ok();
     assert!(c.set_exit(&mut a, "proxy"));
-    assert_eq!(c.mode_raw(), "rule", "shown as asked at once");
+    assert_eq!(c.mode_raw(), "global", "the last /configs read remains authoritative");
     round(&mut c);
     assert_eq!(f.c(), c0 + 1);
     assert_eq!(c.mode_raw(), "global", "then what the core really says");
@@ -187,6 +187,34 @@ fn configs_read_sparingly() {
     round(&mut c);
     assert!(c.online() && f.c() == c0 + 1 && c.mode_raw() == "global");
     f.stop();
+}
+
+#[test]
+fn config_profile_parses_active_and_rejects_incomplete_data() {
+    let body = br#"{"ok":true,"data":{"active_id":"p-2","profiles":[{"id":"p-1","name":"Other","kind":"node_url"},{"id":"p-2","name":"SG2HOME \u56de\u5bb6","kind":"full_url"}]}}"#;
+    assert_eq!(parse_config_profile(body), Some(("SG2HOME 回家".into(), Some("full_url".into()))));
+    assert_eq!(parse_config_profile(br#"{"data":{"active_id":null,"profiles":[]}}"#), Some((String::new(), None)));
+    assert_eq!(parse_config_profile(br#"{"data":{"active_id":"p-2","profiles":[]}}"#), None);
+    assert_eq!(parse_config_profile(br#"{"data":{"active_id":null,"profiles":["#), None);
+}
+
+#[test]
+fn config_profile_failed_read_retains_previous_result() {
+    let mut p = ConfigProfile { name: Some("Previous".into()), kind: Some("local_yaml".into()), last_ms: 0 };
+    let (l, port) = listen();
+    let h = std::thread::spawn(move || {
+        let (mut c, _) = l.accept().unwrap();
+        let req = read_req(&mut c);
+        assert!(req.starts_with("GET /v2/api/services/chill/configs"));
+        reply(&mut c, br#"{"data":{"active_id":"missing","profiles":[]}}"#);
+    });
+    let mut agent = CoreApi::default();
+    agent.config(port);
+    assert!(!p.poll(&mut agent, true));
+    h.join().unwrap();
+    assert_eq!(p.name.as_deref(), Some("Previous"));
+    assert_eq!(p.kind.as_deref(), Some("local_yaml"));
+    assert!(!p.poll(&mut agent, true), "failed reads are throttled");
 }
 
 #[test]

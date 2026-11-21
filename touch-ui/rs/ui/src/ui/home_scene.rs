@@ -3,7 +3,7 @@
 //! cells). Both sit in fixed slots: what changes inside never moves what is below.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-use super::home::{fmt_bytes_total, geo_short, mf_view, midcut, CELL_H, ROW_Y, SCENE_H, SCENE_Y};
+use super::home::{fmt_bytes_total, mf_view, midcut, CELL_H, ROW_Y, SCENE_H, SCENE_Y};
 use super::{Sub, Ui, TAB_SYS, TAB_WIFI};
 use crate::cf;
 use crate::clock;
@@ -12,48 +12,21 @@ use crate::kit::{self, CARD_W, MARGIN};
 use crate::lang::{self, tr, trn};
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
-use crate::trc;
 use ui_model::Model;
 
 /// the header band (scenario, mode pill, why)
 const BAND_H: i32 = 58;
 /// the CHILL column takes the card's full width
 const CH_W: i32 = CARD_W;
-/// exit lines under the CHILL head
-pub const EX_LINES: usize = 3;
-const LINE_H: i32 = 18;
-/// lines start under the head row and end above the card's bottom padding
-const LINES_TOP: i32 = BAND_H + 8 + 22;
-const LINES_BOT: i32 = SCENE_H - 8;
 const CELL_GAP: i32 = 8;
 const CELL_R: i32 = 18;
 /// a battery this warm gets 「▲ 偏热」 in its cell (the banner says more from 50 °C)
 const BATT_WARM_C: i32 = 45;
 
-/// latency on an exit line: ms > 0, or one of these
-pub const LAT_NONE: i32 = -1;
-pub const LAT_PAUSED: i32 = -2;
-pub const LAT_TIMEOUT: i32 = -3;
-/// no latency at all (the exit itself is 「—」)
-pub const LAT_HIDE: i32 = -4;
-
 // Montserrat's symbol range (the device CJK font has none)
 const SYM_HOME: &str = "\u{F015}";
 const SYM_GPS: &str = "\u{F124}";
 const SYM_SHUFFLE: &str = "\u{F074}";
-
-#[derive(Default, Clone, Copy)]
-struct ExRow {
-    tag: Obj,
-    tag_l: Obj,
-    /// the second tag on a shared line (AI + VoWiFi)
-    tag2: Obj,
-    tag2_l: Obj,
-    exit: Obj,
-    place: Obj,
-    dot: Obj,
-    ms: Obj,
-}
 
 #[derive(Default, Clone, Copy)]
 struct Cell {
@@ -85,8 +58,10 @@ pub struct Scene {
     ch_mode: Obj,
     ch_mode_l: Obj,
     ch_run: Obj,
-    rows: [ExRow; EX_LINES],
-    desc: Obj,
+    ch_profile: Obj,
+    ch_node: Obj,
+    ch_speed: Obj,
+    ch_traffic: Obj,
     cells: [Cell; 3],
     ntc: Obj,
     ntc_t: Obj,
@@ -101,209 +76,52 @@ pub struct Scene {
     pill_fill: u32,
 }
 
-/// One traffic class: where it goes now.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ExLine {
-    pub tag: String,
-    pub fill: u32,
-    pub exit: String,
-    pub place: String,
-    pub place_col: u32,
-    pub ms: i32,
-    /// a second tag sharing the line (AI + VoWiFi: same exit, same place); "" = none. Such a
-    /// line shows the place in the exit's place, bold, without the exit word.
-    pub tag2: String,
-    pub fill2: u32,
+/// Compact, readback-only presentation for the home card.
+struct MihomoCard<'a> {
+    status: &'static str,
+    mode: &'static str,
+    profile: &'a str,
+    node: &'a str,
+    speed: &'a str,
+    traffic: &'a str,
 }
 
-fn line(tag: &str, fill: u32, exit: &str, place: impl Into<String>, ms: i32) -> ExLine {
-    ExLine { tag: tag.into(), fill, exit: exit.into(), place: place.into(), place_col: t().t2, ms, tag2: String::new(), fill2: 0 }
+fn card_value(value: &Option<String>) -> &str {
+    value.as_deref().filter(|s| !s.is_empty() && *s != "-").unwrap_or("—")
 }
 
-/// 🤖 AI's region as a place name
-fn region_name(r: &str) -> &'static str {
-    match r {
-        "JP" => tr("日本"),
-        "SG" => tr("新加坡"),
-        "US" => tr("美国"),
-        "HK" => tr("香港"),
-        _ => tr("台湾"),
-    }
-}
-
-/// A pinned group's place: a region name, the flag's letters when not one of ours.
-fn pin_place(code: &str) -> String {
-    match code {
-        "JP" | "SG" | "US" | "HK" | "TW" => region_name(code).into(),
-        "" => tr("节点").into(),
-        c => c.into(),
-    }
-}
-
-/// What CHILL does with each class of traffic now (DESIGN.md §4, CHILL column), plus the
-/// sentence under one or two lines. `dead`: no network at all.
-pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
-    let th = t();
-    let default_ni = ui_model::netinfo_t::default();
-    let n = m.netinfo.as_ref().unwrap_or(&default_ni);
-    let sc = &m.scenario;
-    let ch_on = m.chill_online != 0 && n.proxy.present != 0;
-    let dg: String = if !n.direct.ip.is_empty() {
-        if n.direct.geo.is_empty() { n.direct.ip.clone() } else { geo_short(&n.direct.geo) }
-    } else if n.err.is_empty() {
-        tr("查询中…").into()
+fn mihomo_card(m: &Model) -> MihomoCard<'_> {
+    let online = m.chill_online != 0;
+    let mode = if online {
+        match m.chill_mode_raw.as_deref() {
+            Some("rule") => tr("规则"),
+            Some("global") => tr("全局"),
+            Some("direct") => tr("直连"),
+            _ => "",
+        }
+    } else { "" };
+    let status = if online && m.chill_mode_raw.as_deref() == Some("direct") {
+        tr("直连")
+    } else if online {
+        tr("运行中")
+    } else if m.chill_profile.as_deref() == Some("") {
+        if lang::is_en() { "Not configured" } else { "未配置" }
+    } else if m.scenario.available != 0 && m.scenario.chill_on == 0 {
+        tr("直连")
     } else {
-        "—".into()
+        tr("服务不可用")
     };
-    let pg: String = if !n.proxy.geo.is_empty() {
-        geo_short(&n.proxy.geo)
-    } else if !n.proxy.ip.is_empty() {
-        n.proxy.ip.clone()
-    } else {
-        tr("查询中…").into()
-    };
-    // the direct exit: core 1.50's on-demand probe, while fresh; else 「—」 as before
-    let dms = m
-        .direct_lat
-        .as_ref()
-        .filter(|l| l.ms > 0 && now - l.at < crate::data::latency::SHOW_S && l.at - now < 300)
-        .map_or(LAT_NONE, |l| l.ms);
-    // the main selector's node: the once-a-minute test, else the last one run by hand
-    let node = m.chill_node.as_deref().unwrap_or("");
-    let by_hand = m.chill_nodes.iter().find(|x| x.selected != 0 && x.name == node).map(|x| x.delay);
-    let node_ms = node_latency(m.chill_main_ms, by_hand);
-    if !ch_on {
-        let desc = if m.chill_online != 0 {
-            tr("CHILL 开着，出口还在查")
-        } else if sc.chill_back != 0 {
-            tr("在国外关掉了 · 回国自动打开")
-        } else if sc.chill_on == 0 {
-            tr("CHILL 关着，全部直连")
-        } else {
-            tr("CHILL 没在运行，暂时全部直连")
-        };
-        return (vec![line(tr("全部"), th.fill_grey, tr("直连"), dg, dms)], desc.into());
+    let node = card_value(&m.chill_node);
+    let group = m.chill_groups.iter().find(|g| g.selected != 0)
+        .map(|g| g.name.as_str()).filter(|s| !s.is_empty()).unwrap_or("—");
+    MihomoCard {
+        status,
+        mode,
+        profile: card_value(&m.chill_profile),
+        node: if online { if node == "—" { group } else { node } } else { "—" },
+        speed: if online { card_value(&m.chill_speed) } else { "—" },
+        traffic: if online { card_value(&m.chill_traffic) } else { "—" },
     }
-    let ex = m.chill_exit_raw.as_deref().unwrap_or("");
-    let mut v: Vec<ExLine> = Vec::new();
-    let mut desc = String::new();
-    match ex {
-        "global" => {
-            v.push(line(tr("全部"), th.fill_blue, trc!("route", "节点"), pg, node_ms));
-            desc = tr("全局：所有流量都走这个节点").into();
-        }
-        "direct_all" => {
-            v.push(line(tr("全部"), th.fill_green, tr("直连"), dg.clone(), dms));
-            desc = tr("CHILL 开着，但不经过它").into();
-        }
-        "direct_keep_ai" => v.push(line(tr("其余"), th.fill_green, tr("直连"), dg.clone(), dms)),
-        _ => {
-            v.push(line(tr("国内"), th.fill_green, tr("直连"), dg.clone(), dms));
-            v.push(line(tr("其余"), th.fill_blue, trc!("route", "节点"), pg, node_ms));
-        }
-    }
-    // AI and VoWiFi keep their nodes whatever 🚀 does (touch reads both chains from mihomo);
-    // AI: the gate shuts it while the exit is not checked to be in 🤖 AI's region
-    let pin = |name: &str| m.chill_pins.iter().find(|p| p.name == name);
-    let pin_ms = |ms: i32| if ms > 0 { ms } else if ms == 0 { LAT_TIMEOUT } else { LAT_NONE };
-    let ai = if ex == "direct_all" {
-        None
-    } else if sc.ai_gate != 0 {
-        // gate 1: shut until the exit is checked; gate 2: out the cellular exit, checked there
-        let ms = if sc.ai_gate == 1 { LAT_PAUSED } else { dms };
-        let exit = if sc.ai_gate == 2 { tr("直连") } else { trc!("route", "节点") };
-        Some(line("AI", th.fill_vio, exit, region_name(&sc.ai_region), ms))
-    } else if ex == "global" {
-        None
-    } else if let Some(p) = pin("AI") {
-        Some(if p.region == "DIRECT" {
-            line("AI", th.fill_vio, tr("直连"), dg.clone(), dms)
-        } else {
-            let place = if p.region.is_empty() && !sc.ai_region.is_empty() { region_name(&sc.ai_region).into() } else { pin_place(&p.region) };
-            line("AI", th.fill_vio, trc!("route", "节点"), place, pin_ms(p.ms))
-        })
-    } else if !sc.ai_region.is_empty() || ex == "direct_keep_ai" {
-        Some(line("AI", th.fill_vio, trc!("route", "节点"), region_name(&sc.ai_region), LAT_NONE))
-    } else {
-        None
-    };
-    let vo = match pin("VoWiFi") {
-        Some(p) if ex != "direct_all" && ex != "global" => Some(if p.region == "DIRECT" {
-            line("VoWiFi", th.fill_pink, tr("直连"), dg.clone(), dms)
-        } else {
-            line("VoWiFi", th.fill_pink, trc!("route", "节点"), pin_place(&p.region), pin_ms(p.ms))
-        }),
-        _ => None,
-    };
-    match (ai, vo) {
-        // same exit, same place: one line, two tags, the worse latency
-        (Some(mut a), Some(w)) if a.exit == w.exit && a.place == w.place && a.exit == trc!("route", "节点") && a.ms != LAT_PAUSED => {
-            a.ms = worse_ms(a.ms, w.ms);
-            a.tag2 = w.tag;
-            a.fill2 = w.fill;
-            v.push(a);
-        }
-        (a, w) => v.extend(a.into_iter().chain(w)),
-    }
-    // abroad, 其余 is most of the traffic: first
-    if sc.abroad != 0
-        && let Some(i) = v.iter().position(|x| x.tag == tr("其余"))
-    {
-        let l = v.remove(i);
-        v.insert(0, l);
-    }
-    if v.len() <= 2 && desc.is_empty() && ex == "direct_keep_ai" {
-        desc = tr("直连留 AI：只有 AI 还走节点").into();
-    }
-    (ex_fold(v), desc)
-}
-
-/// The 节点 line's latency: ms, 0 = timed out, a negative = never measured.
-fn node_latency(auto: Option<i32>, by_hand: Option<i32>) -> i32 {
-    match auto.or(by_hand) {
-        Some(ms) if ms > 0 => ms,
-        Some(0) => LAT_TIMEOUT,
-        _ => LAT_NONE,
-    }
-}
-
-/// The worse of two latencies: paused, then timed out, then the slower; unknown loses.
-fn worse_ms(a: i32, b: i32) -> i32 {
-    for bad in [LAT_PAUSED, LAT_TIMEOUT] {
-        if a == bad || b == bad {
-            return bad;
-        }
-    }
-    a.max(b)
-}
-
-/// Four lines or more: the first two, the rest as one grey 「+N」 line (their exit if they
-/// share one, their tags joined with 「/」, the worst latency).
-pub fn ex_fold(mut v: Vec<ExLine>) -> Vec<ExLine> {
-    if v.len() <= EX_LINES {
-        return v;
-    }
-    let rest: Vec<ExLine> = v.split_off(EX_LINES - 1);
-    let same = rest.iter().all(|x| x.exit == rest[0].exit);
-    let ms = if rest.iter().any(|x| x.ms == LAT_PAUSED) {
-        LAT_PAUSED
-    } else if rest.iter().any(|x| x.ms == LAT_TIMEOUT) {
-        LAT_TIMEOUT
-    } else {
-        rest.iter().map(|x| x.ms).max().unwrap_or(LAT_NONE)
-    };
-    let tags: Vec<&str> = rest.iter().flat_map(|x| [x.tag.as_str(), x.tag2.as_str()]).filter(|t| !t.is_empty()).collect();
-    v.push(ExLine {
-        tag: format!("+{}", rest.len()),
-        fill: t().fill_grey,
-        exit: if same { rest[0].exit.clone() } else { String::new() },
-        place: tags.join("/"),
-        place_col: t().t2,
-        ms,
-        tag2: String::new(),
-        fill2: 0,
-    });
-    v
 }
 
 /// minutes as 「14h 51m」「50m」「2h」, to the minute (the battery cell is 72 px wide)
@@ -380,7 +198,7 @@ unsafe extern "C" fn sc_band_cb(_e: *mut sys::lv_event_t) {
 }
 
 unsafe extern "C" fn ch_col_cb(_e: *mut sys::lv_event_t) {
-    super::with(|u| u.exit_row_go());
+    super::with(|u| u.sub_open(Sub::Chill));
 }
 
 unsafe extern "C" fn ntc_text_cb(_e: *mut sys::lv_event_t) {
@@ -426,33 +244,16 @@ impl Ui {
         s.ch_box.set_style_bg_opa(lv::OPA_TRANSP, 0);
         let hy = 8;
         disc(s.ch_box, 12, hy, 22, th.fill_blue, SYM_SHUFFLE, lv::montserrat(12));
-        let chl = kit::label(s.ch_box, f.cj12, th.t2, 40, hy + 3, "CHILL");
+        let chl = kit::label(s.ch_box, f.cj12, th.t2, 40, hy + 3, "Mihomo");
         chl.update_layout();
         let mx = 40 + chl.width() + 6;
         s.ch_mode = kit::bx(s.ch_box, mx, hy + 3, 40, 16, th.bg, 8);
         s.ch_mode_l = kit::label(s.ch_mode, f.cj11, th.t2, 6, 1, "");
         s.ch_run = kit::label_r(s.ch_box, f.cj12, th.t2, CH_W - 10, hy + 3, "");
-        for i in 0..EX_LINES {
-            let y = LINES_TOP - BAND_H + i as i32 * 20;
-            let tag = kit::bx(s.ch_box, 12, y, 34, 17, th.fill_grey, 9);
-            let tag_l = kit::label(tag, f.cj11, 0xffffff, 0, 0, "");
-            tag_l.align(lv::LV_ALIGN_CENTER, 0, 0);
-            let tag2 = kit::bx(s.ch_box, 12, y, 34, 17, th.fill_grey, 9);
-            let tag2_l = kit::label(tag2, f.cj11, 0xffffff, 0, 0, "");
-            tag2_l.align(lv::LV_ALIGN_CENTER, 0, 0);
-            let r = ExRow {
-                tag,
-                tag_l,
-                tag2,
-                tag2_l,
-                exit: kit::label(s.ch_box, f.cj14, th.t1, 53, y, ""),
-                place: kit::label_w(s.ch_box, f.cj12, th.t2, 90, y + 2, 60, false, ""),
-                dot: kit::dot(s.ch_box, 0, y + 6, 7, th.green),
-                ms: kit::label_r(s.ch_box, f.n12, th.t2, CH_W - 10, y + 1, ""),
-            };
-            s.rows[i] = r;
-        }
-        s.desc = kit::label_w(s.ch_box, f.cj12, th.t3, 12, 0, CH_W - 22, false, "");
+        s.ch_profile = kit::label_w(s.ch_box, f.cj14, th.t1, 12, 34, CH_W - 24, false, "");
+        s.ch_node = kit::label_w(s.ch_box, f.cj12, th.t2, 12, 56, CH_W - 24, false, "");
+        s.ch_speed = kit::label_w(s.ch_box, f.cj12, th.t2, 12, 78, (CH_W - 30) / 2, false, "");
+        s.ch_traffic = kit::label_w(s.ch_box, f.cj12, th.t2, 18 + (CH_W - 30) / 2, 78, (CH_W - 30) / 2, false, "");
         kit::tappable(s.ch_box, Some(ch_col_cb), 0);
 
         // bottom row: three cells; a notice over the first two
@@ -612,107 +413,16 @@ impl Ui {
             return;
         }
         kit::show(s.ch_box, true);
-        let dead = self.home.cc_tone >= 2;
-        let (run, run_col): (&str, u32) = if m.chill_online == 0 {
-            if sc.chill_on == 0 { (tr("■ 已关"), th.t3) } else { (tr("▲ 没运行"), th.warn_t) }
-        } else if dead {
-            (tr("▲ 没网"), th.warn_t)
-        } else if m.chill_thermal_eco != 0 && m.chill_profile_effective_raw != m.chill_profile_raw {
-            (tr("▲ 太热省电"), th.warn_t)
-        } else {
-            (tr("● 运行中"), th.ok_t)
-        };
-        self.set(s.ch_run, run);
-        kit::text_color(s.ch_run, run_col);
-        let mode: &str = if m.chill_online == 0 {
-            ""
-        } else {
-            match m.chill_exit_raw.as_deref().unwrap_or("") {
-                "global" => tr("全局"),
-                "direct_all" => tr("全直连"),
-                "direct_keep_ai" => tr("直连留 AI"),
-                _ => tr("规则"),
-            }
-        };
-        self.set(s.ch_mode_l, mode);
-        kit::show(s.ch_mode, !mode.is_empty());
-        s.ch_mode.set_width(lv::text_w(mode.as_bytes(), f.cj11) + 12);
-
-        let (lines, desc) = ex_lines(&m, now);
-        let n = lines.len().min(EX_LINES) as i32;
-        let has_desc = n <= 2 && !desc.is_empty();
-        let room = LINES_BOT - LINES_TOP;
-        let slots = n + has_desc as i32;
-        let gap = (room - slots * LINE_H) / (slots + 1);
-        for (i, &r) in s.rows.iter().enumerate() {
-            let on = (i as i32) < n;
-            for o in [r.tag, r.exit, r.place, r.ms] {
-                kit::show(o, on);
-            }
-            if !on {
-                kit::show(r.dot, false);
-                kit::show(r.tag2, false);
-                continue;
-            }
-            let l = &lines[i];
-            let y = LINES_TOP - BAND_H + gap + i as i32 * (LINE_H + gap);
-            self.set(r.tag_l, &l.tag);
-            let shared = !l.tag2.is_empty();
-            // a shared line's tags hug their text (two must fit), a lone tag is at least 34 wide
-            let tw = if shared { lv::text_w(l.tag.as_bytes(), f.cj11) + 10 } else { (lv::text_w(l.tag.as_bytes(), f.cj11) + 10).max(34) };
-            r.tag.set_pos(12, y);
-            r.tag.set_width(tw);
-            r.tag_l.align(lv::LV_ALIGN_CENTER, 0, 0);
-            kit::bg(r.tag, l.fill);
-            kit::show(r.tag2, shared);
-            let tw = if shared {
-                self.set(r.tag2_l, &l.tag2);
-                let w2 = lv::text_w(l.tag2.as_bytes(), f.cj11) + 10;
-                r.tag2.set_pos(12 + tw + 2, y);
-                r.tag2.set_width(w2);
-                r.tag2_l.align(lv::LV_ALIGN_CENTER, 0, 0);
-                kit::bg(r.tag2, l.fill2);
-                tw + 2 + w2
-            } else {
-                tw
-            };
-            // a shared line: the place, bold, where the exit word goes
-            let ex = if shared { l.place.as_str() } else if l.exit.is_empty() { "—" } else { l.exit.as_str() };
-            self.set(r.exit, ex);
-            kit::text_color(r.exit, if ex == "—" { th.t3 } else { th.t1 });
-            r.exit.set_pos(12 + tw + 7, y);
-            let ex_w = lv::text_w(ex.as_bytes(), f.cj14);
-            // latency on the right: dot + 「28ms」; 「■ 已暂停」; 「—」; nothing
-            let ms = if ex == "—" { LAT_HIDE } else { l.ms };
-            let (mt, mcol, dcol): (String, u32, u32) = match ms {
-                LAT_HIDE => (String::new(), th.t3, 0),
-                LAT_PAUSED => (tr("■ 已暂停").into(), th.bad_t, 0),
-                LAT_TIMEOUT => (tr("超时").into(), th.bad_t, th.red),
-                v if v > 0 => (format!("{v}ms"), th.t2, if v < 150 { th.green } else if v < 400 { th.orange } else { th.red }),
-                _ => ("—".into(), th.t3, 0),
-            };
-            r.ms.set_style_text_font(if ms == LAT_PAUSED || ms == LAT_TIMEOUT { f.cj12 } else { f.n12 }, 0);
-            self.set(r.ms, &mt);
-            kit::text_color(r.ms, mcol);
-            r.ms.set_y(y + 1);
-            let mw = if mt.is_empty() { 0 } else { lv::text_w(mt.as_bytes(), r.ms.style_text_font(0)) };
-            kit::show(r.dot, dcol != 0);
-            if dcol != 0 {
-                kit::bg(r.dot, dcol);
-                r.dot.set_pos(CH_W - 10 - mw - 3 - 7, y + 6);
-            }
-            let rx = CH_W - 10 - mw - if dcol != 0 { 10 } else { 0 } - 6;
-            let px = 12 + tw + 7 + ex_w + 6;
-            self.set(r.place, if shared { "" } else { &l.place });
-            kit::text_color(r.place, l.place_col);
-            r.place.set_pos(px, y + 2);
-            r.place.set_width((rx - px).max(0));
-        }
-        kit::show(s.desc, has_desc);
-        if has_desc {
-            self.set(s.desc, &desc);
-            s.desc.set_y(LINES_TOP - BAND_H + gap + n * (LINE_H + gap) + 2);
-        }
+        let card = mihomo_card(&m);
+        self.set(s.ch_run, card.status);
+        kit::text_color(s.ch_run, if m.chill_online != 0 { th.ok_t } else { th.t2 });
+        self.set(s.ch_mode_l, card.mode);
+        kit::show(s.ch_mode, !card.mode.is_empty());
+        s.ch_mode.set_width(lv::text_w(card.mode.as_bytes(), f.cj11) + 12);
+        self.set(s.ch_profile, card.profile);
+        self.set(s.ch_node, card.node);
+        self.set(s.ch_speed, card.speed);
+        self.set(s.ch_traffic, card.traffic);
     }
 
     /// The bottom row: Wi-Fi · 今日 · 电池; a notice takes the first two cells.
@@ -887,41 +597,37 @@ mod tests {
         assert_eq!(fit_midcut("MyVeryLongHomeNetwork-5G", 12, w).chars().count(), 12);
     }
 
-    fn l(tag: &str, exit: &str, ms: i32) -> ExLine {
-        ExLine { tag: tag.into(), fill: 0, exit: exit.into(), place: String::new(), place_col: 0, ms, tag2: String::new(), fill2: 0 }
-    }
-
     #[test]
-    fn five_lines_fold_into_two_and_plus_n() {
-        let v = vec![l("其余", "节点", 88), l("国内", "直连", 22), l("AI", "节点", 41), l("版权", "家里", 380), l("IP", "家里", 395)];
-        let f = ex_fold(v);
-        assert_eq!(f.len(), 3);
-        assert_eq!(f[2].tag, "+3");
-        assert_eq!(f[2].exit, "");
-        assert_eq!(f[2].place, "AI/版权/IP");
-        assert_eq!(f[2].ms, 395);
-        let v = vec![l("a", "x", 1), l("b", "y", 2), l("c", "z", 3), l("d", "x", LAT_PAUSED), l("e", "y", 9)];
-        let f = ex_fold(v);
-        assert_eq!((f[2].exit.as_str(), f[2].ms), ("", LAT_PAUSED));
-        assert_eq!(ex_fold(vec![l("a", "x", 1); 3]).len(), 3);
-        assert_eq!(ex_fold(vec![l("a", "x", 1); 4])[2].tag, "+2");
-    }
-
-    #[test]
-    fn compact_scene_keeps_exit_lines_and_bottom_row_separate() {
-        assert_eq!(EX_LINES, 3);
-        assert!(LINES_TOP + EX_LINES as i32 * LINE_H <= LINES_BOT);
+    fn mihomo_card_states_and_long_profile() {
+        lang::set_en(false);
+        let mut m = Model::default();
+        assert_eq!(mihomo_card(&m).status, "服务不可用");
+        m.chill_profile = Some(String::new());
+        assert_eq!(mihomo_card(&m).status, "未配置");
+        m.chill_online = 1;
+        m.chill_profile = Some("很长的家庭配置名称包含很多文字和节点信息".into());
+        m.chill_mode_raw = Some("rule".into());
+        m.chill_node = Some("SG2HOME".into());
+        m.chill_speed = Some("↓1M/s ↑2K/s".into());
+        m.chill_traffic = Some("↓3G ↑4M".into());
+        let card = mihomo_card(&m);
+        assert_eq!((card.status, card.mode, card.node), ("运行中", "规则", "SG2HOME"));
+        assert_eq!(card.profile, m.chill_profile.as_deref().unwrap());
+        assert_eq!((card.speed, card.traffic), ("↓1M/s ↑2K/s", "↓3G ↑4M"));
+        m.chill_mode_raw = Some("direct".into());
+        assert_eq!((mihomo_card(&m).status, mihomo_card(&m).mode), ("直连", "直连"));
+        m.chill_mode_raw = Some("global".into());
+        assert_eq!(mihomo_card(&m).mode, "全局");
+        m.chill_online = 0;
+        assert_eq!((mihomo_card(&m).status, mihomo_card(&m).node), ("服务不可用", "—"));
+        lang::set_en(true);
+        assert_eq!(mihomo_card(&m).status, "Unavailable");
+        m.chill_profile = Some(String::new());
+        assert_eq!(mihomo_card(&m).status, "Not configured");
+        lang::set_en(false);
         assert!(SCENE_Y + SCENE_H < ROW_Y);
         assert!(ROW_Y + CELL_H < super::super::home::FOLD_Y);
-    }
-
-    #[test]
-    fn node_line_has_latency_without_a_hand_test() {
-        assert_eq!(node_latency(Some(149), None), 149);
-        assert_eq!(node_latency(Some(0), Some(80)), LAT_TIMEOUT);
-        assert_eq!(node_latency(None, Some(80)), 80);
-        assert_eq!(node_latency(None, Some(-1)), LAT_NONE);
-        assert_eq!(node_latency(None, None), LAT_NONE);
+        assert!(BAND_H + 78 + 18 <= SCENE_H);
     }
 
     #[test]
