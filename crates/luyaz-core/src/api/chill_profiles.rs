@@ -36,6 +36,10 @@ pub struct ProfileMeta {
     pub url: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default)]
+    pub refresh_minutes: Option<u32>,
+    #[serde(default)]
+    pub last_refresh_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -54,6 +58,21 @@ impl ProfileKind {
             Self::LocalYaml => "local_yaml",
         }
     }
+}
+
+fn default_refresh_minutes(kind: ProfileKind) -> u32 {
+    match kind {
+        ProfileKind::FullUrl | ProfileKind::NodeUrl => 360,
+        ProfileKind::LocalYaml => 0,
+    }
+}
+
+fn refresh_minutes(meta: &ProfileMeta) -> u32 {
+    meta.refresh_minutes.unwrap_or_else(|| default_refresh_minutes(meta.kind))
+}
+
+fn valid_refresh_minutes(minutes: u32) -> bool {
+    matches!(minutes, 0 | 60 | 360 | 720 | 1440)
 }
 
 #[derive(Debug)]
@@ -231,10 +250,47 @@ fn profile_view(c: &Compat, meta: &ProfileMeta, active: Option<&str>) -> Value {
         "updated_at": meta.updated_at,
         "source_host": source_host(meta.url.as_deref()),
         "has_url": meta.url.is_some(),
+        "refresh_minutes": refresh_minutes(meta),
+        "auto_refresh": refresh_minutes(meta) != 0,
         "provider_count": provider_count,
         "group_count": group_count,
         "last_error": last_error,
     })
+}
+
+fn save_meta(c: &Compat, meta: &ProfileMeta) -> Result<(), ProfileError> {
+    let bytes = serde_json::to_vec_pretty(meta)
+        .map_err(|_| ProfileError::internal("cannot encode profile metadata"))?;
+    write_atomic(&paths(c, &meta.id).meta, &bytes)
+}
+
+fn due_profile(c: &Compat, current: u64) -> Option<ProfileMeta> {
+    std::fs::read_dir(c.path(PROFILES_ROOT)).ok()?.flatten().find_map(|entry| {
+        let file_name = entry.file_name();
+        let id = file_name.to_str()?;
+        if !valid_id(id) || !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            return None;
+        }
+        let meta = read_meta(c, id).ok()?;
+        let minutes = refresh_minutes(&meta);
+        let last_attempt = meta.last_refresh_at.max(meta.updated_at);
+        (minutes != 0 && current.saturating_sub(last_attempt) >= u64::from(minutes) * 60)
+            .then_some(meta)
+    })
+}
+
+pub(crate) async fn auto_refresh(c: Compat) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        if !c.path(PROFILES_ROOT).is_dir() { continue; }
+        let Some(slot) = jobs::reserve(&c) else {
+            continue;
+        };
+        let Some(meta) = due_profile(&c, now()) else {
+            continue;
+        };
+        let _ = refresh_job(&c, slot, meta, "profile-auto-refresh").await;
+    }
 }
 
 pub(crate) fn summary(c: &Compat) -> Value {
@@ -656,7 +712,17 @@ pub async fn import(State(c): State<Compat>, body: Bytes) -> Response {
     };
     let id = new_id(&c);
     let timestamp = now();
-    let meta = ProfileMeta { version: 1, id: id.clone(), name, kind, url, created_at: timestamp, updated_at: timestamp };
+    let meta = ProfileMeta {
+        version: 1,
+        id: id.clone(),
+        name,
+        kind,
+        url,
+        created_at: timestamp,
+        updated_at: timestamp,
+        refresh_minutes: Some(default_refresh_minutes(kind)),
+        last_refresh_at: timestamp,
+    };
     let files = files.as_ref().map(|(source, runtime)| (source.as_slice(), runtime.as_slice()));
     if let Err(e) = write_profile(&c, &meta, files) {
         let _ = std::fs::remove_dir_all(paths(&c, &id).dir);
@@ -695,6 +761,32 @@ async fn stage_refresh(c: &Compat, meta: &ProfileMeta) -> Result<(), ProfileErro
     write_atomic(&p.runtime_next, &runtime)
 }
 
+async fn refresh_job(
+    c: &Compat,
+    slot: jobs::Slot,
+    mut meta: ProfileMeta,
+    kind: &str,
+) -> Result<u64, ProfileError> {
+    // Persist before contacting the source so a failure or restart does not cause a retry storm.
+    if meta.url.is_some() {
+        meta.last_refresh_at = now();
+        save_meta(c, &meta)?;
+    }
+    if let Err(error) = stage_refresh(c, &meta).await {
+        set_error(c, &meta.id, Some(&error.message));
+        return Err(error);
+    }
+    let work = c.clone();
+    Ok(jobs::spawn(c, slot, kind, async move {
+        let result = jobs::profile_command(&work, "profile-refresh", &meta.id).await;
+        set_error(&work, &meta.id, result.as_ref().err().map(String::as_str));
+        result?;
+        meta.updated_at = now();
+        save_meta(&work, &meta).map_err(|error| error.message)?;
+        Ok("Profile refreshed".into())
+    }))
+}
+
 /// POST /api/services/chill/configs/refresh
 pub async fn refresh(State(c): State<Compat>, body: Bytes) -> Response {
     let value = match parsed(&body) { Ok(v) => v, Err(e) => return e.response() };
@@ -702,23 +794,35 @@ pub async fn refresh(State(c): State<Compat>, body: Bytes) -> Response {
     let Some(slot) = jobs::reserve(&c) else { return jobs::busy() };
     if let Err(e) = validate_id(id) { return e.response(); }
     let meta = match read_meta(&c, id) { Ok(v) => v, Err(e) => return e.response() };
-    if let Err(e) = stage_refresh(&c, &meta).await {
-        set_error(&c, id, Some(&e.message));
+    let profile = profile_view(&c, &meta, active_id(&c).as_deref());
+    let job = match refresh_job(&c, slot, meta, "profile-refresh").await {
+        Ok(job) => job,
+        Err(error) => return error.response(),
+    };
+    reply(200, json!({"ok": true, "data": {"job_id": job, "status": "running", "profile": profile}}))
+}
+
+/// PUT /api/services/chill/configs/schedule
+pub async fn schedule(State(c): State<Compat>, body: Bytes) -> Response {
+    let value = match parsed(&body) { Ok(v) => v, Err(e) => return e.response() };
+    let id = value.get("id").and_then(Value::as_str).unwrap_or("");
+    let minutes = match value.get("refresh_minutes").and_then(Value::as_u64) {
+        Some(minutes) if minutes <= u64::from(u32::MAX) => minutes as u32,
+        _ => return ProfileError::bad("refresh_minutes must be 0, 60, 360, 720 or 1440").response(),
+    };
+    if !valid_refresh_minutes(minutes) {
+        return ProfileError::bad("refresh_minutes must be 0, 60, 360, 720 or 1440").response();
+    }
+    let Some(_slot) = jobs::reserve(&c) else { return jobs::busy() };
+    let mut meta = match read_meta(&c, id) { Ok(v) => v, Err(e) => return e.response() };
+    if minutes != 0 && matches!(meta.kind, ProfileKind::LocalYaml) {
+        return ProfileError::bad("local YAML profiles cannot auto-refresh").response();
+    }
+    meta.refresh_minutes = Some(minutes);
+    if let Err(e) = save_meta(&c, &meta) {
         return e.response();
     }
-    let profile = profile_view(&c, &meta, active_id(&c).as_deref());
-    let work = c.clone();
-    let job = jobs::spawn(&c, slot, "profile-refresh", async move {
-        let mut meta = meta;
-        let result = jobs::profile_command(&work, "profile-refresh", &meta.id).await;
-        set_error(&work, &meta.id, result.as_ref().err().map(String::as_str));
-        result?;
-        meta.updated_at = now();
-        let bytes = serde_json::to_vec_pretty(&meta).map_err(|_| "cannot encode profile metadata")?;
-        write_atomic(&paths(&work, &meta.id).meta, &bytes).map_err(|err| err.message)?;
-        Ok("Profile refreshed".into())
-    });
-    reply(200, json!({"ok": true, "data": {"job_id": job, "status": "running", "profile": profile}}))
+    reply(200, json!({"ok": true, "data": {"profile": profile_view(&c, &meta, active_id(&c).as_deref())}}))
 }
 
 /// POST /api/services/chill/configs/activate
@@ -834,7 +938,17 @@ proxy-groups:
 
     #[test]
     fn profile_summary_masks_url() {
-        let meta = ProfileMeta { version: 1, id: "p-test".into(), name: "Test".into(), kind: ProfileKind::FullUrl, url: Some("https://secret.example/path?token=redacted".into()), created_at: 1, updated_at: 2 };
+        let meta = ProfileMeta {
+            version: 1,
+            id: "p-test".into(),
+            name: "Test".into(),
+            kind: ProfileKind::FullUrl,
+            url: Some("https://secret.example/path?token=redacted".into()),
+            created_at: 1,
+            updated_at: 2,
+            refresh_minutes: Some(360),
+            last_refresh_at: 2,
+        };
         let value = profile_view(&Compat::new("/tmp/no-profile", super::super::Sources::none()), &meta, Some("p-test"));
         assert!(value.get("url").is_none());
         assert_eq!(value["source_host"], "secret.example");

@@ -147,18 +147,6 @@ pub fn exit_label(x: &str, l: Lang) -> &'static str {
     }
 }
 
-pub fn exit_hint(x: &str, l: Lang) -> &'static str {
-    match x {
-        "proxy" => l.pick("Normal, as at home.", "正常状态，和在国内一样。"),
-        "direct_keep_ai" => l.pick(
-            "Abroad on a local SIM: everything direct except AI and VoWiFi.",
-            "在国外用当地卡时：除 AI 和 VoWiFi 外都直连，AI、VoWiFi 照旧走各自的节点。",
-        ),
-        "direct_all" => l.pick("AI and VoWiFi go direct too.", "AI 和 VoWiFi 也直连。"),
-        _ => l.pick("mihomo's global mode, same as before.", "mihomo 全局模式，和原来的「全局」一样。"),
-    }
-}
-
 pub const PROFILES: [&str; 3] = ["eco", "standard", "perf"];
 
 pub fn profile_label(p: &str, l: Lang) -> &'static str {

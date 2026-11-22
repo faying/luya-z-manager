@@ -100,8 +100,8 @@ let switchedOn = true;
 /** chill.env CHILL_BYPASS_IP */
 let bypassIps: string[] = ["192.168.0.105"];
 
-type Config = { id: string; name: string; kind: string; source_host: string; has_url: boolean; updated_at: number; provider_count: number; group_count: number; last_error: null };
-const configs: Config[] = [{ id: "p-initial", name: "Home", kind: "full_url", source_host: "example.net", has_url: true, updated_at: BOOT, provider_count: 4, group_count: 5, last_error: null }];
+type Config = { id: string; name: string; kind: string; source_host: string; has_url: boolean; updated_at: number; provider_count: number; group_count: number; last_error: null; refresh_minutes: number };
+const configs: Config[] = [{ id: "p-initial", name: "Home", kind: "full_url", source_host: "example.net", has_url: true, updated_at: BOOT, provider_count: 4, group_count: 5, last_error: null, refresh_minutes: 360 }];
 let activeConfig = "p-initial";
 let configSerial = 0;
 function configList(): Reply {
@@ -116,7 +116,7 @@ function configAction(ctx: Ctx, action: string): Reply {
     let host = "";
     try { if (kind !== "local_yaml") host = new URL(url).hostname; } catch { return fail("invalid URL", 400); }
     return startJob("config_import", () => {
-      configs.push({ id: `p-mock-${++configSerial}`, name, kind, source_host: host, has_url: !!host, updated_at: deviceNow(), provider_count: 1, group_count: 2, last_error: null });
+      configs.push({ id: `p-mock-${++configSerial}`, name, kind, source_host: host, has_url: !!host, updated_at: deviceNow(), provider_count: 1, group_count: 2, last_error: null, refresh_minutes: kind === "local_yaml" ? 0 : 360 });
       return "Imported";
     });
   }
@@ -255,7 +255,22 @@ function chillStatus(ctx: Ctx): Reply {
       data.mode = null;
     }
   }
-  return ok({ ...data, ipv6_mode: "blocked", profile_id: activeConfig });
+  return ok({
+    ...data,
+    ipv6_mode: "blocked",
+    profile_id: activeConfig,
+    active_profile: configs.find((p) => p.id === activeConfig) ?? null,
+    tun: mihomoUp(ctx) ? { enabled: true, auto_route: true, stack: "system", device: "chill0" } : { enabled: false, auto_route: false, stack: "", device: "" },
+    connections: mihomoUp(ctx) ? {
+      count: 6,
+      upload_total: 1024 * 1024 * 3,
+      download_total: 1024 * 1024 * 27,
+      items: [
+        { id: "c-1", host: "example.com", network: "tcp", rule: "MATCH", upload: 1024, download: 8192 },
+        { id: "c-2", host: "api.example.net", network: "tcp", rule: "🚀 节点选择", upload: 2048, download: 16384 },
+      ],
+    } : null,
+  });
 }
 
 // ── providers ───────────────────────────────────────────────────────────────
@@ -578,6 +593,14 @@ export const routes: Route[] = [
   // (installed/state/job id/secret) and break the pages in unrealistic ways.
   { method: "GET", path: "/api/services/chill", handler: chillStatus, ownMissing: true },
   { method: "GET", path: "/api/services/chill/configs", handler: configList },
+  { method: "PUT", path: "/api/services/chill/configs/schedule", handler: (ctx: Ctx) => {
+    const id = String(bodyField(ctx.body, "id") ?? "");
+    const minutes = Number(bodyField(ctx.body, "refresh_minutes"));
+    const p = configs.find((profile) => profile.id === id);
+    if (!p || ![0, 60, 360, 720, 1440].includes(minutes) || (p.kind === "local_yaml" && minutes !== 0)) return fail("invalid schedule", 400);
+    p.refresh_minutes = minutes;
+    return ok({ profile: { ...p, active: p.id === activeConfig } });
+  } },
   ...["import", "refresh", "activate", "delete"].map((action) => ({ method: "POST" as const, path: `/api/services/chill/configs/${action}`, handler: (ctx: Ctx) => configAction(ctx, action) })),
   { method: "PUT", path: "/api/services/chill/mode", handler: (ctx) => {
     const mode = bodyField(ctx.body, "mode");

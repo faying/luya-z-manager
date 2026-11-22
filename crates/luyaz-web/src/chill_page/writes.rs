@@ -208,7 +208,7 @@ pub async fn power_ask(Query(q): Query<ActQ>, req: Request) -> impl IntoResponse
     let c = inline(
         l.pick(if stop { "Stop CHILL?" } else { "Start CHILL?" }, if stop { "停止 CHILL？" } else { "启动 CHILL？" }).into(),
         if stop {
-            l.pick("All traffic goes direct, AI and VoWiFi too. You can start it again at any time.", "全屋流量改为直连，AI 和 VoWiFi 也直连。随时可以再打开。")
+            l.pick("Stopping restores the router's routing and DNS.", "停止后恢复路由器原有的路由和 DNS。")
         } else {
             l.pick("Traffic starts going through CHILL; it takes about 10 seconds.", "全屋流量开始经过 CHILL，约 10 秒生效。")
         }
@@ -356,7 +356,7 @@ pub async fn profile_set(State(app): State<Shared>, Query(q): Query<ExitQ>, req:
 pub async fn mode_ask(req: Request) -> impl IntoResponse {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let l = ctx.lang;
-    let c = inline(l.pick("Switch to direct mode?", "切到直连模式？").into(), l.pick("All traffic, including AI and VoWiFi, goes direct.", "全屋流量改为直连，AI 和 VoWiFi 也直连。").into(), l.pick("Confirm: direct", "确认：直连").into());
+    let c = inline(l.pick("Switch to direct mode?", "切到直连模式？").into(), l.pick("Traffic goes out directly. TUN and Mihomo DNS stay active.", "流量直接出网，继续使用 TUN 和 Mihomo DNS。").into(), l.pick("Confirm: direct", "确认：直连").into());
     one(ask("ch-md", l, ctx.remote, &format!("{PATH}/mode/set?v=direct"), c))
 }
 
@@ -383,6 +383,7 @@ pub struct ConfigQ {
     #[serde(default)] act: String,
     #[serde(default)] i: usize,
     #[serde(default)] h: String,
+    #[serde(default)] minutes: Option<u32>,
 }
 
 async fn config_at(app: &Shared, who: &Caller, q: &ConfigQ, l: Lang) -> Result<(String, bool), Outcome> {
@@ -397,14 +398,23 @@ async fn config_at(app: &Shared, who: &Caller, q: &ConfigQ, l: Lang) -> Result<(
 
 pub async fn config_ask(State(app): State<Shared>, Query(q): Query<ConfigQ>, req: Request) -> impl IntoResponse {
     let (who, l, remote) = who(&app, &req);
-    let valid = ["activate", "refresh", "delete"].contains(&q.act.as_str());
+    let valid = ["activate", "refresh", "delete"].contains(&q.act.as_str()) || (q.act == "schedule" && q.minutes.is_some_and(|n| [0, 60, 360, 720, 1440].contains(&n)));
     let result = if valid { config_at(&app, &who, &q, l).await } else { Err(Outcome::Failed(l.pick("Unknown action", "未知操作").into())) };
     let html = match result {
         Err(o) => done("ch-cf", l, o),
         Ok((_, active)) if active && q.act == "delete" => done("ch-cf", l, Outcome::Failed(l.pick("The active configuration cannot be deleted", "不能删除使用中的配置档案").into())),
         Ok(_) => {
-            let c = inline(l.pick("Apply this configuration action?", "执行配置档案操作？").into(), l.pick("Switching or refreshing an active configuration can interrupt connections.", "切换或刷新使用中的配置可能中断连接。").into(), l.pick("Confirm", "确认").into());
-            ask("ch-cf", l, remote, &format!("{PATH}/config/set?act={}&i={}&h={}", q.act, q.i, q.h), c)
+            let detail = if q.act == "schedule" {
+                match q.minutes.unwrap_or(0) {
+                    0 => l.pick("Turn off automatic refresh?", "关闭自动刷新？"),
+                    60 => l.pick("Refresh automatically every hour?", "每 1 小时自动刷新？"),
+                    360 => l.pick("Refresh automatically every 6 hours?", "每 6 小时自动刷新？"),
+                    720 => l.pick("Refresh automatically every 12 hours?", "每 12 小时自动刷新？"),
+                    _ => l.pick("Refresh automatically every 24 hours?", "每 24 小时自动刷新？"),
+                }
+            } else { l.pick("Switching or refreshing an active configuration can interrupt connections.", "切换或刷新使用中的配置可能中断连接。") };
+            let c = inline(l.pick("Apply this configuration action?", "执行配置档案操作？").into(), detail.into(), l.pick("Confirm", "确认").into());
+            ask("ch-cf", l, remote, &format!("{PATH}/config/set?act={}&i={}&h={}&minutes={}", q.act, q.i, q.h, q.minutes.unwrap_or(0)), c)
         }
     };
     one(html)
@@ -413,9 +423,19 @@ pub async fn config_ask(State(app): State<Shared>, Query(q): Query<ConfigQ>, req
 pub async fn config_set(State(app): State<Shared>, Query(q): Query<ConfigQ>, req: Request) -> impl IntoResponse {
     let (who, l, _) = who(&app, &req);
     write::respond(pending("ch-cf", l, l.pick("Working…", "正在处理…")), async move {
-        if !["activate", "refresh", "delete"].contains(&q.act.as_str()) { return done("ch-cf", l, Outcome::Failed(l.pick("Unknown action", "未知操作").into())); }
+        if !["activate", "refresh", "delete"].contains(&q.act.as_str()) && !(q.act == "schedule" && q.minutes.is_some_and(|n| [0, 60, 360, 720, 1440].contains(&n))) { return done("ch-cf", l, Outcome::Failed(l.pick("Unknown action", "未知操作").into())); }
         let (id, active) = match config_at(&app, &who, &q, l).await { Ok(v) => v, Err(o) => return done("ch-cf", l, o) };
         if q.act == "delete" && active { return done("ch-cf", l, Outcome::Failed(l.pick("The active configuration cannot be deleted", "不能删除使用中的配置档案").into())); }
+        if q.act == "schedule" {
+            let minutes = q.minutes.unwrap_or(0);
+            let r = agent::send_json(&app, &who, reqwest::Method::PUT, &format!("{CONFIGS}/schedule"), &json!({"id": id, "refresh_minutes": minutes})).await;
+            let o = match sent(r, l) {
+                Err(o) => o,
+                Ok(_) => finish(&app, &who, CONFIGS, false, l.pick("Automatic refresh updated", "自动刷新已更新").into(), |v| v["profiles"].as_array().is_some_and(|profiles| profiles.iter().any(|p| s(p, "id") == id && p["refresh_minutes"].as_u64() == Some(u64::from(minutes))))).await,
+            };
+            bump(&app);
+            return done("ch-cf", l, o);
+        }
         let path = format!("{CONFIGS}/{}", q.act);
         let o = match run_job(&app, &who, reqwest::Method::POST, &path, json!({"id": id}), l).await {
             Err(Outcome::Failed(_)) => Outcome::Failed(l.pick("Configuration operation failed; check the source and retry", "配置档案操作失败，请检查来源后重试").into()),
@@ -681,9 +701,9 @@ pub async fn byp_ask(State(app): State<Shared>, Query(q): Query<BypassQ>, req: R
         Err(_) => q.ip.clone(),
     };
     let (title, what, action) = match (l, on) {
-        (Lang::En, true) => (format!("Bypass {name}?"), format!("{name} goes straight to the internet without CHILL, AI and VoWiFi included."), "Confirm: bypass".to_owned()),
+        (Lang::En, true) => (format!("Bypass {name}?"), format!("{name} uses the router's regular route and DNS."), "Confirm: bypass".to_owned()),
         (Lang::En, false) => (format!("Stop bypassing {name}?"), format!("{name} goes through CHILL again."), "Confirm: stop bypassing".to_owned()),
-        (Lang::Zh, true) => (format!("让 {name} 绕行？"), format!("{name} 不经过 CHILL，直接上网（AI 和 VoWiFi 也一样）。"), "确认：绕行".to_owned()),
+        (Lang::Zh, true) => (format!("让 {name} 绕行？"), format!("{name} 使用路由器原有的路由和 DNS 直接上网。"), "确认：绕行".to_owned()),
         (Lang::Zh, false) => (format!("取消 {name} 的绕行？"), format!("{name} 重新经过 CHILL。"), "确认：取消绕行".to_owned()),
     };
     one(ask("ch-bp", l, remote, &format!("{PATH}/byp/set?ip={}&on={}", q.ip, u8::from(on)), inline(title, what, action)))

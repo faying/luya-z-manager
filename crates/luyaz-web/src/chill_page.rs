@@ -280,10 +280,10 @@ mod tests {
         let mut g = Got::default();
         g.status.set(Ok(json!({"state": "running", "cpuss_c": 47, "mem_avail_mb": 612, "core_pid": 4127, "started_at": "2026-10-13T08:00:00Z",
             "version": "v1.19.14", "mode": "rule", "exit": "proxy", "profile": "standard", "profile_effective": "standard",
-            "region": {"active": "🇹🇼 台湾", "options": ["🇯🇵 日本", "🇹🇼 台湾", "DIRECT"]},
-            "ai_exit": {"active": "🇺🇸 美国", "options": ["🇺🇸 美国"]},
+            "tun": {"enabled": true, "auto_route": true, "stack": "system", "device": "chill0"},
+            "connections": {"count": 2, "upload_total": 1024, "download_total": 4096, "items": [{"host":"example.com", "network":"tcp", "rule":"MATCH", "upload":1, "download":2}]},
             "groups": [{"name": "🚀 节点选择", "now": "🇹🇼 台湾", "size": 6}]})));
-        g.configs.set(Ok(json!({"active_id":"p-home", "profiles":[{"id":"p-home", "name":"Home <safe>", "kind":"full_url", "source_host":"example.net", "has_url":true, "active":true, "updated_at":1790000000, "provider_count":2, "group_count":3}]})));
+        g.configs.set(Ok(json!({"active_id":"p-home", "profiles":[{"id":"p-home", "name":"Home <safe>", "kind":"full_url", "source_host":"example.net", "has_url":true, "active":true, "updated_at":1790000000, "provider_count":2, "group_count":3, "refresh_minutes":360}]})));
         g.prov.set(Ok(json!({"providers": [{"name": "sub", "vehicle_type": "HTTP", "updated_at": "2026-10-13T08:00:00.4Z", "node_count": 24,
             "subscription": {"Upload": 1, "Download": 2, "Total": 100, "Expire": 1798732800}, "editable": true}]})));
         g.bypass.set(Ok(json!({"ips": ["192.168.0.105"], "stale": ["192.168.0.105"]})));
@@ -307,18 +307,36 @@ mod tests {
     fn running_page_shows_its_controls_and_escapes_device_text() {
         let ls = leaves(&got(), Lang::En, "tab1", 1_790_000_000);
         let all: String = ls.iter().map(|(_, h)| h.as_str()).collect();
-        assert!(all.contains("/services/chill/exit/set?v=proxy") && all.contains("/services/chill/exit/ask"));
-        assert!(all.contains("pick/set?g=main&i=1&h=") && all.contains("pick/set?g=ai&i=0&h="));
         assert!(all.contains("byp/ask?ip=192.168.0.105&on=0") && all.contains("prov/edit?i=0&h="));
         assert!(all.contains("a &lt;b&gt;\nc") && !all.contains("a <b>"));
         // a device name never in a URL, an expression or an aria-label
         assert!(!all.contains("%E") && !all.contains("aria-label=\"🇹🇼"));
         // the dashboard secret is never read
         assert!(!all.contains("secret"));
-        assert!(all.contains("Running") && all.contains("mihomo v1.19.14 · mode rule"));
+        assert!(all.contains("Running") && all.contains("mihomo v1.19.14 · mode rule") && all.contains("TUN: Enabled · system · chill0 · Auto route"));
         assert!(all.contains("Home &lt;safe&gt;") && all.contains("example.net"));
+        assert!(all.contains("name=\"refresh_minutes\"") && all.contains("value=\"360\" selected") && all.contains("act=schedule"));
+        assert!(all.contains("id=\"ch-connections\"") && all.contains("example.com") && all.contains("Connections"));
+        assert!(!all.contains("AI exit") && !all.contains("Main exit region") && !all.contains("id=\"ch-region\""));
         assert!(all.contains("id=\"ch-c-delete-0\"") && all.contains(" disabled data-on:click"));
         assert!(all.contains("name=\"mode\" value=\"rule\" required checked") && all.contains("/services/chill/mode/ask"));
+    }
+
+    #[test]
+    fn rule_mode_does_not_follow_the_main_group_and_connections_are_bounded() {
+        let mut g = got();
+        let status = g.status.v.as_mut().unwrap();
+        status["region"] = json!({"active": "DIRECT"});
+        status["exit"] = json!("direct_keep_ai");
+        status["connections"] = json!({"count": 33, "upload_total": 8, "download_total": 16,
+            "items": (0..12).map(|i| json!({"host": if i == 0 { "https://example.net/?token=secret" } else { "host.example" }, "network": "tcp", "rule": "MATCH", "upload": 1, "download": 2})).collect::<Vec<_>>()});
+        let ls = leaves(&g, Lang::Zh, "t", 0);
+        let mode = &ls.iter().find(|(id, _)| id == "ch-mode").unwrap().1;
+        let connections = &ls.iter().find(|(id, _)| id == "ch-connections").unwrap().1;
+        assert!(mode.contains("value=\"rule\" required checked"));
+        assert!(!mode.contains("value=\"direct\" required checked"));
+        assert_eq!(connections.matches("class=\"nd-row ch-connection-row\"").count(), 12);
+        assert!(connections.contains("明细最多显示前 32 条") && !connections.contains("token=secret"));
     }
 
     #[test]
@@ -328,7 +346,7 @@ mod tests {
         let ls = leaves(&g, Lang::En, "t", 0);
         let st = &ls[0].1;
         assert!(st.contains("Not started") && st.contains("power/ask?act=start"), "{st}");
-        assert_eq!(ls.iter().find(|(id, _)| id == "ch-exit").unwrap().1, "<div id=\"ch-exit\"></div>");
+        assert!(ls.iter().all(|(id, _)| id != "ch-exit" && id != "ch-region" && id != "ch-ai"));
     }
 
     #[test]

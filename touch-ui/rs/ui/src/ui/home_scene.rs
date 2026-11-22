@@ -59,6 +59,7 @@ pub struct Scene {
     ch_mode_l: Obj,
     ch_run: Obj,
     ch_profile: Obj,
+    ch_conns: Obj,
     ch_node: Obj,
     ch_speed: Obj,
     ch_traffic: Obj,
@@ -81,6 +82,8 @@ struct MihomoCard<'a> {
     status: &'static str,
     mode: &'static str,
     profile: &'a str,
+    profile_kind: &'a str,
+    connections: &'a str,
     node: &'a str,
     speed: &'a str,
     traffic: &'a str,
@@ -118,6 +121,8 @@ fn mihomo_card(m: &Model) -> MihomoCard<'_> {
         status,
         mode,
         profile: card_value(&m.chill_profile),
+        profile_kind: card_value(&m.chill_profile_kind),
+        connections: card_value(&m.chill_conns),
         node: if online { if node == "—" { group } else { node } } else { "—" },
         speed: if online { card_value(&m.chill_speed) } else { "—" },
         traffic: if online { card_value(&m.chill_traffic) } else { "—" },
@@ -251,7 +256,8 @@ impl Ui {
         s.ch_mode_l = kit::label(s.ch_mode, f.cj11, th.t2, 6, 1, "");
         s.ch_run = kit::label_r(s.ch_box, f.cj12, th.t2, CH_W - 10, hy + 3, "");
         s.ch_profile = kit::label_w(s.ch_box, f.cj14, th.t1, 12, 34, CH_W - 24, false, "");
-        s.ch_node = kit::label_w(s.ch_box, f.cj12, th.t2, 12, 56, CH_W - 24, false, "");
+        s.ch_node = kit::label_w(s.ch_box, f.cj12, th.t2, 12, 56, CH_W - 100, false, "");
+        s.ch_conns = kit::label_r(s.ch_box, f.cj12, th.t2, CH_W - 12, 56, "");
         s.ch_speed = kit::label_w(s.ch_box, f.cj12, th.t2, 12, 78, (CH_W - 30) / 2, false, "");
         s.ch_traffic = kit::label_w(s.ch_box, f.cj12, th.t2, 18 + (CH_W - 30) / 2, 78, (CH_W - 30) / 2, false, "");
         kit::tappable(s.ch_box, Some(ch_col_cb), 0);
@@ -419,8 +425,15 @@ impl Ui {
         self.set(s.ch_mode_l, card.mode);
         kit::show(s.ch_mode, !card.mode.is_empty());
         s.ch_mode.set_width(lv::text_w(card.mode.as_bytes(), f.cj11) + 12);
-        self.set(s.ch_profile, card.profile);
+        let profile = if card.profile_kind == "—" || card.profile == "—" {
+            card.profile.to_owned()
+        } else {
+            // Keep the profile kind beside its name without exposing its source URL.
+            format!("{} · {}", card.profile, card.profile_kind)
+        };
+        self.set(s.ch_profile, &profile);
         self.set(s.ch_node, card.node);
+        self.set(s.ch_conns, format!("{} 连接", card.connections));
         self.set(s.ch_speed, card.speed);
         self.set(s.ch_traffic, card.traffic);
     }
@@ -606,6 +619,8 @@ mod tests {
         assert_eq!(mihomo_card(&m).status, "未配置");
         m.chill_online = 1;
         m.chill_profile = Some("很长的家庭配置名称包含很多文字和节点信息".into());
+        m.chill_profile_kind = Some("full_url".into());
+        m.chill_conns = Some("12".into());
         m.chill_mode_raw = Some("rule".into());
         m.chill_node = Some("SG2HOME".into());
         m.chill_speed = Some("↓1M/s ↑2K/s".into());
@@ -613,6 +628,7 @@ mod tests {
         let card = mihomo_card(&m);
         assert_eq!((card.status, card.mode, card.node), ("运行中", "规则", "SG2HOME"));
         assert_eq!(card.profile, m.chill_profile.as_deref().unwrap());
+        assert_eq!((card.profile_kind, card.connections), ("full_url", "12"));
         assert_eq!((card.speed, card.traffic), ("↓1M/s ↑2K/s", "↓3G ↑4M"));
         m.chill_mode_raw = Some("direct".into());
         assert_eq!((mihomo_card(&m).status, mihomo_card(&m).mode), ("直连", "直连"));

@@ -128,12 +128,11 @@ pub const CHILL_HOME_ROW_H: i32 = 36;
 /// pair rows start here
 pub const CHILL_HOME_TOP: i32 = 100;
 
-const XM_PROXY: usize = 0;
+const XM_RULE: usize = 0;
 const XM_GLOBAL: usize = 1;
-const XM_KEEP_AI: usize = 2;
-const XM_ALL: usize = 3;
-const XM_OFF: usize = 4;
-const XM_N: usize = 5;
+const XM_DIRECT: usize = 2;
+const XM_OFF: usize = 3;
+const XM_N: usize = 4;
 pub const XM_ARM_MS: u32 = 4000;
 const XM_TOP: i32 = 62;
 
@@ -408,25 +407,20 @@ impl Ui {
     }
 
     // ---- 国外时的 CHILL 出口面板 ----
-    // Abroad with a local SIM most traffic can go direct, but AI (regional limits, risk checks
-    // on a sudden IP change) and VoWiFi (operators only take their own country's IP) keep the
-    // old node. Four choices are the states people use; 「关闭」 sends AI and VoWiFi direct too,
-    // so it takes two taps and says the cost.
+    // The sheet is a compact canonical mode picker plus the independent CHILL switch.
     #[allow(clippy::needless_range_loop)]
     pub(super) fn exit_menu_refresh(&mut self) {
-        const LBL: [&str; XM_N] =
-            [n_("代理（和在国内一样）"), n_("全局"), n_("直连 · AI 不动"), n_("全部直连（AI 也直连）"), n_("关闭 CHILL（最省电）")];
+        const LBL: [&str; XM_N] = [n_("规则"), n_("全局"), n_("直连"), n_("关闭 CHILL（最省电）")];
         let th = t();
         let sc = self.model.scenario.clone();
-        let x = self.model.chill_exit_raw.clone().unwrap_or_default();
+        let x = self.model.chill_mode_raw.clone().unwrap_or_default();
         let on = sc.chill_on != 0;
         let e = self.ex.clone();
         for i in 0..XM_N {
             let cur = on
-                && ((i == XM_PROXY && x == "proxy")
+                && ((i == XM_RULE && x == "rule")
                     || (i == XM_GLOBAL && x == "global")
-                    || (i == XM_KEEP_AI && x == "direct_keep_ai")
-                    || (i == XM_ALL && x == "direct_all"));
+                    || (i == XM_DIRECT && x == "direct"));
             let mut text = tr(LBL[i]);
             // CHILL off: the first four mean nothing
             let mut col = if on { th.acc_t } else { th.t3 };
@@ -436,7 +430,7 @@ impl Ui {
                     text = tr("打开 CHILL");
                     col = th.ok_t;
                 } else if self.ex.xm_off_arm.at != 0 {
-                    text = tr("再点一下：关闭（AI、VoWiFi 也直连）");
+                    text = tr("再点一下：关闭 CHILL，全部流量直连");
                     col = 0xffffff;
                     bg = th.fill_orange;
                 } else {
@@ -458,9 +452,9 @@ impl Ui {
             }
         }
         e.xm_foot.set_text(if sc.auto_direct != 0 {
-            tr("换国外卡已自动切到「直连 · AI 不动」，回国自动回到「代理」")
+            tr("情景模式会根据所在地自动调整出口")
         } else {
-            tr("换回国内卡后自动回到「代理」")
+            tr("情景模式可能自动调整出口")
         });
         kit::text_color(e.xm_foot, th.t3);
     }
@@ -481,7 +475,7 @@ impl Ui {
     }
 
     fn exit_pick(&mut self, i: usize) {
-        const STATE: [&str; 4] = ["proxy", "global", "direct_keep_ai", "direct_all"];
+        const STATE: [&str; 3] = ["rule", "global", "direct"];
         let sc = self.model.scenario.clone();
         if i == XM_OFF {
             if sc.chill_on == 0 {
@@ -510,6 +504,7 @@ impl Ui {
         if sc.chill_on == 0 {
             return;
         }
+        if i >= STATE.len() { return; }
         if self.chill_set_exit(STATE[i]) {
             self.exit_menu_set(false);
         } else {
@@ -539,7 +534,7 @@ impl Ui {
     }
 }
 // ---- the CHILL pages ----
-const EXIT_STATE: [&str; 4] = ["proxy", "global", "direct_keep_ai", "direct_all"];
+const EXIT_STATE: [&str; 3] = ["rule", "global", "direct"];
 const PROFILE: [&str; 3] = ["eco", "standard", "perf"];
 /// SC_MAX_NODE (a manual group can have 168 nodes)
 pub const CHILL_MAX_NODES: usize = 200;
@@ -559,12 +554,20 @@ pub struct ChillPage {
     conns: Obj,
     traffic: Obj,
     exit_note: Obj,
-    opt: [kit::Opt; 4],
+    opt: [kit::Opt; 3],
     prof: [kit::Opt; 3],
     prof_sec: Obj,
     prof_note: Obj,
     prof_card: Obj,
     prof_y: i32,
+    configs_card: Obj,
+    configs_note: Obj,
+    configs_rows: Vec<Obj>,
+    configs_names: Vec<Obj>,
+    configs_values: Vec<Obj>,
+    configs_refresh: Obj,
+    configs_refresh_text: Obj,
+    configs_refresh_arm: Arm,
     nav_card: Obj,
     nav_val: [Obj; CHILL_NAV_ROWS],
     content_h: i32,
@@ -603,12 +606,20 @@ impl Default for ChillPage {
             conns: n,
             traffic: n,
             exit_note: n,
-            opt: [kit::Opt::default(); 4],
+            opt: [kit::Opt::default(); 3],
             prof: [kit::Opt::default(); 3],
             prof_sec: n,
             prof_note: n,
             prof_card: n,
             prof_y: 0,
+            configs_card: n,
+            configs_note: n,
+            configs_rows: Vec::new(),
+            configs_names: Vec::new(),
+            configs_values: Vec::new(),
+            configs_refresh: n,
+            configs_refresh_text: n,
+            configs_refresh_arm: Arm::default(),
             nav_card: n,
             nav_val: [n; CHILL_NAV_ROWS],
             content_h: 0,
@@ -640,7 +651,9 @@ unsafe extern "C" fn chill_mode_cb(e: *mut sys::lv_event_t) {
     // SAFETY: LVGL's event
     let i = unsafe { lv::event_user(e) };
     super::with(|u| {
-        u.chill_set_exit(EXIT_STATE[i]);
+        if i < EXIT_STATE.len() {
+            u.chill_set_exit(EXIT_STATE[i]);
+        }
     });
 }
 
@@ -671,6 +684,31 @@ unsafe extern "C" fn chill_profile_cb(e: *mut sys::lv_event_t) {
     // SAFETY: LVGL's event
     let i = unsafe { lv::event_user(e) };
     super::with(|u| u.chill_profile_tap(i));
+}
+
+unsafe extern "C" fn chill_config_cb(e: *mut sys::lv_event_t) {
+    let i = unsafe { lv::event_user(e) };
+    super::with(|u| {
+        let Some(profile) = u.model.chill_config_profiles.get(i) else { return };
+        if profile.active || matches!(u.model.chill_config_status.as_deref(), Some("running" | "refresh_running")) { return; }
+        let action = format!("profile:{}", profile.id);
+        u.src.chill_set_exit(&action);
+        u.sync();
+        u.chill_page_paint();
+    });
+}
+
+unsafe extern "C" fn chill_config_refresh_cb(_e: *mut sys::lv_event_t) {
+    super::with(|u| {
+        if matches!(u.model.chill_config_status.as_deref(), Some("running" | "refresh_running")) { return; }
+        let Some(profile) = u.model.chill_config_profiles.iter().find(|p| p.active) else { return };
+        let action = format!("refresh_profile:{}", profile.id);
+        if u.cp.configs_refresh_arm.tap(0, lv::tick_get(), XM_ARM_MS) {
+            u.src.chill_set_exit(&action);
+            u.sync();
+        }
+        u.chill_page_paint();
+    });
 }
 
 /// The CHILL page's master switch: the agent says no, or does not answer: flip it back.
@@ -736,7 +774,7 @@ impl Ui {
     }
 
     fn chill_profile_tap(&mut self, i: usize) {
-        if self.model.chill_profile_raw.as_deref().unwrap_or("") == PROFILE[i] {
+        if i >= PROFILE.len() || self.model.chill_profile_raw.as_deref().unwrap_or("") == PROFILE[i] {
             return;
         }
         let ok = self.src.chill_set_profile(PROFILE[i]);
@@ -749,15 +787,15 @@ impl Ui {
     }
 
     pub(super) fn build_sub_chill(&mut self, p: Obj) {
-        const LABELS: [&str; 4] = [n_("代理"), n_("全局"), n_("直连 · AI 不动"), n_("全部直连")];
-        const SUBS: [&str; 4] = [n_("规则分流"), n_("全部走代理"), n_("国外卡用"), n_("AI 也直连")];
+        const LABELS: [&str; 3] = [n_("规则"), n_("全局"), n_("直连")];
+        const SUBS: [&str; 3] = [n_("按规则分流"), n_("全部走代理"), n_("全部直连")];
         const PLABELS: [&str; 3] = [n_("省电"), n_("标准"), n_("性能")];
         const PSUBS: [&str; 3] = [n_("更凉更省"), n_("默认"), n_("切换更快")];
         const NAV_CAP: [&str; CHILL_NAV_ROWS] = [n_("节点"), n_("规则 → 节点")];
         const NAV_CHILD: [Sub; CHILL_NAV_ROWS] = [Sub::ChillNodes, Sub::ChillPairs];
         let th = t();
         let f = uf();
-        let content_h = 4 + kit::HERO_H + 80 + 10 + 20 + 124 + 10 + 20 + 70 + 10 + 80 + 16;
+        let content_h = 4 + kit::HERO_H + 80 + 10 + 20 + 100 + 10 + 20 + 70 + 10 + 80 + 16;
         let sc = kit::scroll(p, 0, SUB_VIEW, content_h);
         self.cp.content_h = content_h;
         self.cp.scroll = sc;
@@ -782,16 +820,16 @@ impl Ui {
         let mut y = 4 + kit::HERO_H + 2 * ROW_H + 10;
 
         kit::section(sc, y, tr("出口"));
-        self.cp.exit_note = kit::label_r(sc, f.cj12, th.t3, W - MARGIN - 6, y, "");
         y += 20;
-        let md = kit::card(sc, MARGIN, y, CARD_W, 124);
-        for i in 0..4 {
-            self.cp.opt[i] = kit::opt(md, 12 + (i as i32 % 2) * 142, 12 + (i as i32 / 2) * 54, tr(LABELS[i]), tr(SUBS[i]), Some(chill_mode_cb), i);
+        let md = kit::card(sc, MARGIN, y, CARD_W, 100);
+        for i in 0..3 {
+            self.cp.opt[i] = kit::opt(md, 12 + i as i32 * 94, 12, tr(LABELS[i]), tr(SUBS[i]), Some(chill_mode_cb), i);
+            self.cp.opt[i].obj.set_width(88);
             kit::opt_set(&self.cp.opt[i], false, false);
         }
-        y += 124 + 10;
+        self.cp.exit_note = kit::label_w(md, f.cj12, th.t3, 12, 68, CARD_W - 24, false, "");
+        y += 100 + 10;
 
-        // 档位: three in a row (opt's 134 width is for two columns: 88 here)
         self.cp.prof_y = y;
         self.cp.prof_sec = kit::section(sc, y, tr("档位"));
         self.cp.prof_note = kit::label_r(sc, f.cj12, th.t3, W - MARGIN - 6, y, "");
@@ -801,9 +839,19 @@ impl Ui {
         for i in 0..3 {
             self.cp.prof[i] = kit::opt(pf, 12 + i as i32 * 94, 12, tr(PLABELS[i]), tr(PSUBS[i]), Some(chill_profile_cb), i);
             self.cp.prof[i].obj.set_width(88);
-            kit::opt_set(&self.cp.prof[i], i == 1, false);
+            kit::opt_set(&self.cp.prof[i], false, false);
         }
         y += 70 + 10;
+
+        kit::section(sc, y, tr("配置档案"));
+        self.cp.configs_note = kit::label_r(sc, f.cj12, th.t3, W - MARGIN - 6, y, "");
+        y += 20;
+        self.cp.configs_card = kit::card(sc, MARGIN, y, CARD_W, ROW_H);
+        self.cp.configs_refresh = kit::bx(self.cp.configs_card, 0, 0, CARD_W, ROW_H, th.card, 0);
+        self.cp.configs_refresh.set_style_bg_opa(lv::OPA_TRANSP, 0);
+        kit::tappable(self.cp.configs_refresh, Some(chill_config_refresh_cb), 0);
+        self.cp.configs_refresh_text = kit::label_w(self.cp.configs_refresh, f.cj14, th.acc_t, PAD, 11, CARD_W - 2 * PAD, false, "");
+        y += ROW_H + 10;
 
         let nav = kit::card(sc, MARGIN, y, CARD_W, CHILL_NAV_ROWS as i32 * ROW_H);
         self.cp.nav_card = nav;
@@ -927,13 +975,16 @@ impl Ui {
         self.set(cp.hero.r1, if online { dl.as_slice() } else { b"" });
         let grp = s(&m.chill_group);
         self.set(cp.hero.r2, if online { grp.as_str() } else { tr("打开右上角开关启动") });
-        self.set(cp.conns, s(&m.chill_conn_split));
-        self.set(cp.traffic, s(&m.chill_traffic));
-        let xraw = s(&m.chill_exit_raw);
-        for i in 0..4 {
+        self.set(cp.conns, format!("{} · {}", s(&m.chill_conns), s(&m.chill_conn_split)));
+        self.set(cp.traffic, format!("{} · {}", s(&m.chill_speed), s(&m.chill_traffic)));
+        let xraw = s(&m.chill_mode_raw);
+        for i in 0..3 {
             kit::opt_set(&cp.opt[i], xraw == EXIT_STATE[i], false);
         }
-        self.set(cp.exit_note, if xraw == "direct_all" { tr("AI、VoWiFi 也直连") } else { "" });
+        let note = m.chill_tun.as_ref().map(|t| format!("TUN {} · {} · {}{}",
+            if t.enable { tr("已开启") } else { tr("已关闭") }, t.stack, t.device,
+            if t.auto_route { " · 自动路由" } else { "" })).unwrap_or_default();
+        self.set(cp.exit_note, &note);
         {
             let pr = s(&m.chill_profile_raw);
             for i in 0..3 {
@@ -943,6 +994,48 @@ impl Ui {
             self.set(cp.prof_note, if hot { tr("太热 · 暂按省电") } else { tr("进出省电断网约 10 秒") });
             kit::text_color(cp.prof_note, if hot { th.warn_t } else { th.t3 });
         }
+        let count = m.chill_config_profiles.len();
+        while self.cp.configs_rows.len() < count {
+            let i = self.cp.configs_rows.len();
+            let row = kit::bx(cp.configs_card, 0, i as i32 * ROW_H, CARD_W, ROW_H, th.card, 0);
+            row.set_style_bg_opa(lv::OPA_TRANSP, 0);
+            kit::tappable(row, Some(chill_config_cb), i);
+            if i > 0 { kit::sep(row, 0); }
+            let name = kit::label_w(row, uf().cj14, th.t1, PAD, 11, 150, false, "");
+            let value = kit::label_r(row, uf().cj12, th.t2, CARD_W - PAD, 12, "");
+            self.cp.configs_rows.push(row);
+            self.cp.configs_names.push(name);
+            self.cp.configs_values.push(value);
+        }
+        for i in 0..self.cp.configs_rows.len() {
+            kit::show(self.cp.configs_rows[i], i < count);
+            if let Some(p) = m.chill_config_profiles.get(i) {
+                let name = self.cp.configs_names[i];
+                let value = self.cp.configs_values[i];
+                self.set(name, &p.name);
+                self.set(value, format!("{}{}", p.kind, if p.active { " · 当前" } else { " ›" }));
+            }
+        }
+        let can_refresh = m.chill_config_profiles.iter().any(|p| p.active);
+        kit::show(cp.configs_refresh, can_refresh);
+        cp.configs_refresh.set_y(count as i32 * ROW_H);
+        let refresh_armed = self.cp.configs_refresh_arm.live(0, lv::tick_get(), XM_ARM_MS);
+        self.set(cp.configs_refresh_text, if refresh_armed {
+            tr("再点一次：刷新当前档案（可能短暂断网）")
+        } else { tr("刷新当前档案 ›") });
+        let configs_h = (count + usize::from(can_refresh)).max(1) as i32 * ROW_H;
+        cp.configs_card.set_height(configs_h);
+        cp.nav_card.set_y(cp.configs_card.style_y(0) + configs_h + 10);
+        kit::scroll_extent(cp.scroll, cp.nav_card.style_y(0) + CHILL_NAV_ROWS as i32 * ROW_H + 16);
+        self.set(cp.configs_note, match m.chill_config_status.as_deref() {
+            Some("running") => tr("正在切换…"),
+            Some("refresh_running") => tr("正在刷新…"),
+            Some("error") | Some("timeout") => tr("操作失败，请重试"),
+            Some("done") => tr("已切换"),
+            Some("refresh_done") => tr("已刷新"),
+            _ if count == 0 => tr("未配置档案"),
+            _ => "",
+        });
         let ng = m.chill_groups.len().min(CHILL_MAX_GROUPS);
         let mut names: Vec<String> = Vec::new();
         for i in 0..CHILL_MAX_GROUPS {

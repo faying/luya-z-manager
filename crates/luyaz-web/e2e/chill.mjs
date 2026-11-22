@@ -50,7 +50,7 @@ const sel = (p, s) => p.locator(s).first().getAttribute("aria-checked");
 async function own(p, net) {
   // ---- values ----
   ok(/运行中/.test(await txt(p, "#ch-status .nd-status__state")), `status: ${await txt(p, "#ch-status .nd-status")}`);
-  ok(/mihomo v[\d.]+ · mode rule/.test(await txt(p, "#ch-status .nd-status__meta")), "meta: mihomo version and mode");
+  ok(/mihomo v[\d.]+ · 模式: 规则/.test(await txt(p, "#ch-status .nd-status__meta")), "meta: mihomo version and mode");
   const mode = p.locator("#ch-mode");
   const applyMode = mode.getByRole("button", { name: "应用" });
   ok(await mode.getByRole("radio").count() === 3 && await mode.getByRole("radio", {name:"规则"}).isChecked(), "canonical mode read back");
@@ -74,11 +74,28 @@ async function own(p, net) {
   await mode.getByRole("radio", {name:"规则"}).check();
   await applyMode.click();
   await p.waitForFunction(() => document.querySelector('#ch-mode [value=rule]')?.defaultChecked);
-  await until(p, "#ch-exit [aria-checked=true]", /^代理$/);
-  ok(await p.locator("#ch-exit [role=radio]").count() === 4 && await txt(p, "#ch-exit [aria-checked=true]") === "代理", "exit: four, 代理 selected");
-  ok(await p.locator("#ch-region [role=radio]").count() === 6 && await p.locator("#ch-region [aria-checked=true]").count() === 1, "region: six members, one selected");
-  ok(await p.locator("#ch-ai [role=radio]").count() === 4, "AI exit: four members");
+  ok(await p.locator("#ch-exit, #ch-region, #ch-ai").count() === 0, "legacy exit and region controls are hidden");
+  const totals = await txt(p, "#ch-connections .ch-connection-summary");
+  ok(/当前连接: 6 · 总上传: 3\.15 MB · 总下载: 28\.3 MB/.test(totals), `connections: ${totals}`);
+  ok(await p.locator("#ch-connections .ch-connection-row").count() === 2 && /example\.com/.test(await txt(p, "#ch-connections")), "connections: limited rows");
+  ok(/已开启.*system.*chill0.*自动路由/.test(await txt(p, "#ch-status .nd-status__meta")), "TUN: fixed enabled system chill0 auto-route");
   ok(await txt(p, "#ch-profile [aria-checked=true]") === "标准", "profile: 标准");
+  const schedule = p.locator("#ch-configs .ch-config-row").first().locator("select[name=refresh_minutes]");
+  ok(await schedule.locator("option").count() === 5 && (await schedule.locator("option").evaluateAll((options) => options.map((o) => o.value))).join(",") === "0,60,360,720,1440", "profile schedule options");
+  ok(await schedule.inputValue() === "360", "profile schedule starts at six hours");
+  await schedule.selectOption("60");
+  await p.locator("#ch-configs .ch-config-row").first().getByRole("button", { name: "设置" }).click();
+  await p.waitForSelector("#ch-cf-op .nd-confirm");
+  ok(/每 1 小时/.test(await txt(p, "#ch-cf-op .nd-confirm")), "schedule asks before writing");
+  await p.click("#ch-cf-op .nd-btn--secondary");
+  await p.reload({ waitUntil: "load" });
+  ok(await schedule.inputValue() === "360", "cancel leaves schedule unchanged after reload");
+  await schedule.selectOption("60");
+  await p.locator("#ch-configs .ch-config-row").first().getByRole("button", { name: "设置" }).click();
+  await p.click("#ch-cf-op .nd-btn--confirm");
+  await until(p, "#ch-cf-op", /自动刷新已更新/);
+  await p.reload({ waitUntil: "load" });
+  ok(await schedule.inputValue() === "60", "schedule confirmed and read back after reload");
   ok(await p.locator("#ch-prov .nd-row").count() >= 4 && /sub/.test(await txt(p, "#ch-prov")) && /GB/.test(await txt(p, "#ch-prov")) && /到期 \d/.test(await txt(p, "#ch-prov")), `providers: rows, usage, expiry: ${(await txt(p, "#ch-prov")).slice(0, 300)}`);
   ok(await p.locator("#ch-prov .ch-bar").count() === 1, "providers: one usage bar");
   ok(/温度.*47.*°C/.test(await txt(p, "#ch-vitals")) && /可用内存\s*(598|612)\s*MB/.test(await txt(p, "#ch-vitals")) && !/PID/.test(await txt(p, "#ch-vitals")) && /运行时间(—|\d+[hdm])/.test(await txt(p, "#ch-vitals")), `vitals: ${await txt(p, "#ch-vitals")}`);
@@ -86,35 +103,6 @@ async function own(p, net) {
   ok(await p.locator("#ch-groups .nd-row").count() === 5, "proxy groups: five");
   const rows = await p.locator("#ch-byp .nd-row").count();
   ok(rows >= 6 && await p.locator("#ch-byp [role=switch][aria-checked=true]").count() === 1 && /192\.168\.0\.105/.test(await txt(p, "#ch-byp")), `bypass: ${rows} rows, the bypassed IP without a lease is listed`);
-
-  // ---- tier 1: exit ----
-  await p.click("#ch-exit [role=radio]:has-text('直连 · AI 不动')");
-  await until(p, "#ch-ex-op", /出口：/);
-  ok(/出口：直连 · AI 不动/.test(await txt(p, "#ch-ex-op")), `exit tier 1 applied: ${await txt(p, "#ch-ex-op")}`);
-  ok(await txt(p, "#ch-exit [aria-checked=true]") === "直连 · AI 不动", "exit read back into the page");
-  await p.click("#ch-exit [role=radio]:has-text('代理')");
-  await until(p, "#ch-ex-op", /出口：代理/);
-  // ---- tier 2: all direct (cancel, then confirm) ----
-  await p.click("#ch-exit [role=radio]:has-text('全部直连')");
-  await p.waitForSelector("#ch-ex-op .nd-confirm");
-  ok(/AI 和 VoWiFi 也直连/.test(await txt(p, "#ch-ex-op .nd-confirm__text")), "all direct asks first");
-  await p.click("#ch-ex-op .nd-btn--secondary");
-  await p.waitForFunction(() => !document.querySelector("#ch-ex-op .nd-confirm"), null, { timeout: 5000 });
-  ok(await txt(p, "#ch-exit [aria-checked=true]") === "代理", "Cancel: nothing changed");
-  await p.click("#ch-exit [role=radio]:has-text('全部直连')");
-  await p.click("#ch-ex-op .nd-btn--confirm");
-  await until(p, "#ch-ex-op", /出口：全部直连/);
-  ok(/出口：全部直连/.test(await txt(p, "#ch-ex-op")), "all direct confirmed and read back");
-  await p.click("#ch-exit [role=radio]:has-text('代理')");
-  await until(p, "#ch-ex-op", /出口：代理/);
-
-  // ---- tier 1: region, AI exit ----
-  await p.click("#ch-region [role=radio]:has-text('日本')");
-  await until(p, "#ch-rg-op", /已切到/);
-  ok(/已切到 🇯🇵 日本/.test(await txt(p, "#ch-rg-op")) && /日本/.test(await txt(p, "#ch-region [aria-checked=true]")), `region: ${await txt(p, "#ch-rg-op")}`);
-  await p.click("#ch-ai [role=radio]:has-text('新加坡')");
-  await until(p, "#ch-ax-op", /已切到/);
-  ok(/新加坡/.test(await txt(p, "#ch-ai [aria-checked=true]")), "AI exit switched and read back");
 
   // ---- tier 1 job: profile ----
   await p.click("#ch-profile [role=radio]:has-text('性能')");
@@ -185,6 +173,7 @@ async function own(p, net) {
     await until(p, "#ch-configs", new RegExp(name), 15000);
     ok(!(await p.content()).includes("zzTOKENzz") && !(await txt(p, "body")).includes("zzTOKENzz"), `${kind}: source token not rendered`);
   }
+  ok(/本地 YAML 不支持/.test(await txt(p, "#ch-configs")), "local YAML has no auto refresh control");
   await p.click("#ch-c-activate-1");
   await p.waitForSelector("#ch-cf-op .nd-confirm");
   await p.click("#ch-cf-op .nd-btn--confirm");
@@ -262,17 +251,17 @@ async function own(p, net) {
   // ---- refused: not running ----
   await p.click("#ch-status button");
   await p.waitForSelector("#ch-pw-op .nd-confirm");
-  ok(/AI 和 VoWiFi 也直连/.test(await txt(p, "#ch-pw-op .nd-confirm__text")), "stop asks first");
+  ok(/恢复路由器原有的路由和 DNS/.test(await txt(p, "#ch-pw-op .nd-confirm__text")), "stop asks first");
   await p.click("#ch-pw-op .nd-btn--confirm");
   await until(p, "#ch-pw-op", /停止中/, 3000);
   ok(/停止中/.test(await txt(p, "#ch-pw-op")), "stop: progress while the job runs");
   await until(p, "#ch-pw-op", /CHILL 已停止/, 20000);
-  await until(p, "#ch-status .nd-status__state", /直连/);
-  ok(/CHILL 已停止/.test(await txt(p, "#ch-pw-op")) && /直连/.test(await txt(p, "#ch-status .nd-status__state")), `stop applied and read back: ${await txt(p, "#ch-status .nd-status__state")}`);
-  ok(await p.locator("#ch-exit [role=radio]").count() === 0 && await p.locator("#ch-prov .nd-row").count() === 0, "stopped: exit and subscriptions are hidden");
+  await until(p, "#ch-status .nd-status__state", /已停止/);
+  ok(/CHILL 已停止/.test(await txt(p, "#ch-pw-op")) && /已停止/.test(await txt(p, "#ch-status .nd-status__state")), `stop applied and read back: ${await txt(p, "#ch-status .nd-status__state")}`);
+  ok(await p.locator("#ch-exit, #ch-region, #ch-ai").count() === 0 && await p.locator("#ch-prov .nd-row").count() === 0, "stopped: legacy exits and subscriptions are hidden");
   ok(/已手动停用/.test(await txt(p, "#ch-status .nd-status__reason")), "direct reason said");
-  const refused = await (await fetch(`${WEB}/services/chill/exit/set?v=global`, { method: "POST", headers: { ...hdr, "datastar-request": "true" } })).text();
-  ok(/没有生效/.test(await sseText(refused)) && /not running/.test(refused), "exit while stopped: refused by the agent, not 「成功」");
+  const refused = await (await fetch(`${WEB}/services/chill/mode/set?v=global`, { method: "POST", headers: { ...hdr, "datastar-request": "true" } })).text();
+  ok(/没有生效/.test(await sseText(refused)) && /invalid mode/.test(refused), "mode while stopped: refused by the agent, not 「成功」");
   await p.screenshot({ path: `${OUT}/chill-stopped.png`, fullPage: true });
   await p.click("#ch-status button");
   await p.click("#ch-pw-op .nd-btn--confirm");
@@ -282,9 +271,7 @@ async function own(p, net) {
   // the one-time token of a link save is gone once used
   const gone = await (await fetch(`${WEB}/services/chill/prov/save/set?t=nope`, { method: "POST", headers: { ...hdr, "datastar-request": "true" } })).text();
   ok(/表单已过期/.test(gone), "an unknown save token says the form expired");
-  // a list that changed since the page drew it
-  const stale = await (await fetch(`${WEB}/services/chill/pick/set?g=main&i=1&h=00000000`, { method: "POST", headers: { ...hdr, "datastar-request": "true" } })).text();
-  ok(/列表变了/.test(stale), "a pick whose name no longer matches is not sent");
+  ok(await p.locator("#ch-mode input[type=radio]").count() === 3, "canonical mode controls remain after restart");
 }
 // SSE payload text without markup noise
 async function sseText(s) { return s.replace(/\\u([0-9a-f]{4})/gi, (_, h) => String.fromCharCode(parseInt(h, 16))); }
@@ -293,15 +280,15 @@ async function states(p) {
   // the unread state, the notice with its link, the core down, the agent down
   await scenario("mf-alldown");
   await p.evaluate(() => fetch("/services/chill/refresh", { method: "POST", headers: { "datastar-request": "true" } }));
-  await until(p, "#ch-status", /去选节点/, 12000);
-  ok(/去选节点/.test(await txt(p, "#ch-status .ch-notice")) && await p.locator("#ch-status .ch-notice a[href='#chill-nodes']").count() === 1, `notice with the node link: ${await txt(p, "#ch-status .ch-notice")}`);
+  await until(p, "#ch-status", /打开面板/, 12000);
+  ok(/打开面板/.test(await txt(p, "#ch-status .ch-notice")) && await p.locator("#ch-status .ch-notice a[href='#ch-dash']").count() === 1, `notice with the dashboard link: ${await txt(p, "#ch-status .ch-notice")}`);
   await p.screenshot({ path: `${OUT}/chill-notice.png`, fullPage: true });
   await scenario("fakesuccess");
   await p.evaluate(() => fetch("/services/chill/refresh", { method: "POST", headers: { "datastar-request": "true" } }));
   await until(p, "#ch-status", /没有回应/, 12000);
   ok(/代理核心没有回应/.test(await txt(p, "#ch-status")), `core not answering: ${await txt(p, "#ch-status .nd-status__reason")}`);
   ok(/没有找到订阅/.test(await txt(p, "#ch-prov")), "empty provider list says 「没有找到订阅」");
-  ok(/没有配置任何成员/.test(await txt(p, "#ch-region")), "empty region says 「没有配置任何成员」");
+  ok(/连接信息不可用/.test(await txt(p, "#ch-connections")), "empty connections says unavailable");
   await p.screenshot({ path: `${OUT}/chill-core-down.png`, fullPage: true });
   await scenario("down");
   await p.evaluate(() => fetch("/services/chill/refresh", { method: "POST", headers: { "datastar-request": "true" } }));
@@ -315,7 +302,12 @@ async function states(p) {
 }
 
 const browser = await chromium.launch({ channel: "chrome" });
-for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "en", "dark"], [390, 844, "phone", "zh", "light"], [390, 844, "phone", "en", "dark"]]) {
+for (const [w, h, name, lang, theme] of [
+  [1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "zh", "dark"],
+  [1280, 900, "desk", "en", "light"], [1280, 900, "desk", "en", "dark"],
+  [390, 844, "phone", "zh", "light"], [390, 844, "phone", "zh", "dark"],
+  [390, 844, "phone", "en", "light"], [390, 844, "phone", "en", "dark"],
+]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });
   await ctx.addCookies([{ name: "lw_sid", value: sid, url: WEB }, { name: "u60_lang", value: lang, url: WEB }]);
   await ctx.addInitScript((t) => localStorage.setItem("u60.theme", t), theme);
@@ -326,9 +318,9 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
   p.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) errs.push(m.text()); });
   p.on("request", (rq) => net.push(rq.url()));
   await p.goto(WEB + "/services/chill", { waitUntil: "load" });
-  await p.waitForSelector("#ch-exit [role=radio]", { timeout: 15000 });
+  await p.waitForSelector("#ch-mode input[type=radio]", { timeout: 15000 });
   await p.waitForSelector("#ch-log pre:not(:has(.nd-console__muted))", { timeout: 15000 });
-  if (name === "desk" && lang === "zh") {
+  if (name === "desk" && lang === "zh" && theme === "light") {
     const kb = (await firstLoad(p)) / 1024;
     ok(kb <= 40, `first load ${kb.toFixed(1)} KiB gzip without fonts (≤ 40)`);
     const raw = await (await fetch(WEB + "/services/chill", { headers: { cookie: `lw_sid=${sid}` } })).text();
@@ -336,7 +328,7 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
     ok(!raw.includes("chill-node") || true, "(page loaded)");
   }
   if (lang === "en") {
-    ok(/CHILL/.test(await txt(p, "h1")) && /Running/.test(await txt(p, "#ch-status")) && /Exit/.test(await txt(p, "#ch-exit")), "English status and exit");
+    ok(/CHILL/.test(await txt(p, "h1")) && /Running/.test(await txt(p, "#ch-status")) && /Mode/.test(await txt(p, "#ch-mode")) && /Connections/.test(await txt(p, "#ch-connections")), "English status, mode and connections");
     const left = (await mainText(p)).match(CJK) ?? [];
     ok(left.length === 0, `English body without Chinese outside device text (${[...new Set(left)].join("") || "none"})`);
     ok(await p.getAttribute("html", "lang") === "en", "html lang=en");
@@ -357,7 +349,7 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
   }
   await p.screenshot({ path: `${OUT}/chill-${name}-${lang}-${theme}.png`, fullPage: true });
   await p.click("#ch-bp-op .nd-btn--secondary");
-  if (name === "desk" && lang === "zh") {
+  if (name === "desk" && lang === "zh" && theme === "light") {
     await own(p, net);
     await states(p);
   }

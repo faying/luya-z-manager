@@ -53,6 +53,12 @@ const SC_PIN_TTL_MS: i64 = 60000;
 pub struct ConfigProfile {
     pub name: Option<String>,
     pub kind: Option<String>,
+    pub profiles: Vec<ui_model::ChillConfigProfile>,
+    pub status: Option<String>,
+    job: i64,
+    target: String,
+    refreshing: bool,
+    started_ms: i64,
     last_ms: i64,
 }
 
@@ -61,19 +67,106 @@ impl super::background::ReadCopy for ConfigProfile {
 }
 
 impl ConfigProfile {
+    pub fn activate(&mut self, agent: &mut CoreApi, id: &str) -> bool {
+        self.start_job(agent, id, false)
+    }
+
+    pub fn refresh(&mut self, agent: &mut CoreApi, id: &str) -> bool {
+        self.start_job(agent, id, true)
+    }
+
+    fn start_job(&mut self, agent: &mut CoreApi, id: &str, refreshing: bool) -> bool {
+        if self.job != 0 || !self.profiles.iter().any(|p| p.id == id && p.active == refreshing)
+            || id.is_empty() || id.len() > 32
+            || !id.bytes().enumerate().all(|(i, b)| b.is_ascii_lowercase() || b.is_ascii_digit() || (i > 0 && (b == b'_' || b == b'-'))) {
+            return false;
+        }
+        let path = if refreshing { "/api/services/chill/configs/refresh" } else { "/api/services/chill/configs/activate" };
+        let (code, body) = agent.api("POST", path, Some(&format!("{{\"id\":\"{id}\"}}")), 4096);
+        let job = body.filter(|_| code == 200).and_then(|b| json::get(&b, "data", 4096))
+            .map_or(0, |d| json::get_int(&d, "job_id", 0));
+        if job <= 0 { self.status = Some("error".into()); return false; }
+        self.job = job;
+        self.target = id.into();
+        self.refreshing = refreshing;
+        self.started_ms = mono_ms();
+        self.last_ms = 0;
+        self.status = Some(if refreshing { "refresh_running" } else { "running" }.into());
+        true
+    }
+
     pub fn poll(&mut self, agent: &mut CoreApi, active: bool) -> bool {
-        if !active { return false; }
+        if !active && self.job == 0 { return false; }
         let now = mono_ms();
-        if self.last_ms != 0 && now - self.last_ms < SC_PROFILE_TTL_MS { return false; }
+        let interval = if self.job != 0 { 1000 } else { SC_PROFILE_TTL_MS };
+        if self.last_ms != 0 && now - self.last_ms < interval { return false; }
         self.last_ms = now.max(1);
+        if self.job != 0 {
+            if now - self.started_ms > 180000 {
+                self.job = 0;
+                self.status = Some("timeout".into());
+                return true;
+            }
+            let (code, body) = agent.api("GET", "/api/services/chill/job", None, 8192);
+            let Some(data) = body.filter(|_| code == 200).and_then(|b| json::get(&b, "data", 8192)) else { return false };
+            if json::get_int(&data, "id", 0) != self.job {
+                self.job = 0;
+                self.status = Some("error".into());
+                return true;
+            }
+            match json::get_str(&data, "status", 32).as_deref() {
+                Some("running") => return false,
+                Some("done") => {},
+                _ => { self.job = 0; self.status = Some("error".into()); return true; }
+            }
+        }
         let (status, body) = agent.api("GET", "/api/services/chill/configs", None, SC_RESP_MAX);
         if status != 200 { return false; }
-        let Some((name, kind)) = body.as_deref().and_then(parse_config_profile) else { return false };
-        let changed = self.name.as_ref() != Some(&name) || self.kind != kind;
+        let Some(body) = body else { return false };
+        let Some((name, kind)) = parse_config_profile(&body) else { return false };
+        let Some(profiles) = parse_config_profiles(&body) else { return false };
+        let mut changed = self.name.as_ref() != Some(&name) || self.kind != kind || self.profiles != profiles;
         self.name = Some(name);
         self.kind = kind;
+        self.profiles = profiles;
+        if self.job != 0 {
+            let ok = self.profiles.iter().any(|p| p.active && p.id == self.target);
+            self.job = 0;
+            self.status = Some(if ok { if self.refreshing { "refresh_done" } else { "done" } } else { "error" }.into());
+            changed = true;
+        }
         changed
     }
+}
+
+fn parse_config_profiles(body: &[u8]) -> Option<Vec<ui_model::ChillConfigProfile>> {
+    let data = json::get(body, "data", SC_RESP_MAX)?;
+    let active = json::get_str(&data, "active_id", 128)?;
+    let entries = json::get(&data, "profiles", SC_RESP_MAX)?;
+    if entries.first() != Some(&b'[') || entries.last() != Some(&b']') { return None; }
+    let mut profiles = Vec::new();
+    let mut pos = 0;
+    while let Some((entry, next)) = json::arr_next(&entries, pos, SC_RESP_MAX) {
+        pos = next;
+        let id = json::get_str(&entry, "id", 128)?;
+        let name = json::get_str(&entry, "name", 512)?;
+        let kind = json::get_str(&entry, "kind", 64)?;
+        profiles.push(ui_model::ChillConfigProfile { active: id == active, id, name: sanitize_name(&name, SC_NAME_MAX), kind });
+    }
+    Some(profiles)
+}
+
+fn parse_tun(body: &[u8]) -> Option<ui_model::ChillTun> {
+    let tun = json::get(body, "tun", SC_RESP_MAX)?;
+    let boolean = |key| match json::get_str(&tun, key, 8)?.as_str() {
+        "true" => Some(true), "false" => Some(false), _ => None,
+    };
+    Some(ui_model::ChillTun {
+        enable: boolean("enable")?,
+        stack: json::get_str(&tun, "stack", 64)?,
+        device: json::get_str(&tun, "device", 64)?,
+        auto_route: boolean("auto-route")?,
+    })
 }
 
 /// A missing active ID is distinct from a failed or incomplete response.
@@ -125,6 +218,7 @@ pub struct Chill {
 
     online: bool,
     mode_raw: String,
+    tun: Option<ui_model::ChillTun>,
     profile: String,
     profile_eff: String,
     thermal_eco: bool,
@@ -189,6 +283,7 @@ impl super::background::ReadCopy for Chill {
             absent_ms: self.absent_ms,
             online: self.online,
             mode_raw: self.mode_raw.clone(),
+            tun: self.tun.clone(),
             profile: self.profile.clone(),
             profile_eff: self.profile_eff.clone(),
             thermal_eco: self.thermal_eco,
@@ -332,6 +427,7 @@ impl Default for Chill {
             absent_ms: 0,
             online: false,
             mode_raw: String::new(),
+            tun: None,
             profile: "standard".into(),
             profile_eff: "standard".into(),
             thermal_eco: false,
@@ -752,6 +848,7 @@ impl Chill {
         if let Some(mode) = json::get(&b, "mode", 16).filter(|m| [&b"rule"[..], b"global", b"direct"].contains(&&m[..])) {
             self.mode_raw = text(&mode);
         }
+        self.tun = parse_tun(&b);
     }
 
     /// /connections: the totals and the rate since the last read, then each connection.
@@ -877,6 +974,7 @@ impl Chill {
     pub fn mode_raw(&self) -> &str {
         &self.mode_raw
     }
+    pub fn tun(&self) -> Option<ui_model::ChillTun> { self.tun.clone() }
     pub fn ipv6(&self) -> Option<String> {
         self.ipv6.clone()
     }
@@ -927,10 +1025,9 @@ impl Chill {
     }
 
     pub fn mode(&self) -> &'static str {
-        match self.exit_raw() {
-            "proxy" => tr("代理"),
-            "direct_keep_ai" => tr("直连 · AI 不动"),
-            "direct_all" => tr("全部直连"),
+        match self.mode_raw.as_str() {
+            "rule" => tr("规则"),
+            "direct" => tr("直连"),
             "global" => tr("全局"),
             _ => "-",
         }
@@ -941,7 +1038,12 @@ impl Chill {
         if state.is_empty() {
             return false;
         }
-        let code = agent.request_status("PUT", "/api/services/chill/exit", Some(&trunc(&format!("{{\"state\":\"{state}\"}}"), 48)));
+        let (path, body) = if matches!(state, "rule" | "global" | "direct") {
+            ("/api/services/chill/mode", format!("{{\"mode\":\"{state}\"}}"))
+        } else if matches!(state, "proxy" | "direct_keep_ai" | "direct_all") {
+            ("/api/services/chill/exit", format!("{{\"state\":\"{state}\"}}"))
+        } else { return false };
+        let code = agent.request_status("PUT", path, Some(&body));
         if !(200..300).contains(&code) {
             return false;
         }

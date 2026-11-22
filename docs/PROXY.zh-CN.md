@@ -17,6 +17,8 @@ CHILL 是本项目的透明代理。设备上跑原生 Mihomo（Clash.Meta），
 用装机包：`GATEWAY=<设备地址> ./install.sh chill`；用源码：`scripts/chill/install-chill.sh`（默认干跑，加 `--apply` 才真做）。
 安装后在管理网页导入完整配置链接、节点订阅链接或本地 YAML。可保留多份档案并切换，运行中的切换失败会恢复上一份可用档案。首启用 `sh /data/chill/chill.sh safe-start`，确认网络正常后在 5 分钟内执行 `sh /data/chill/chill.sh confirm`。超时会停用 CHILL 并还原 DNS。
 
+在「配置档案」中手动刷新或设置自动刷新周期。远程档案默认每 6 小时刷新一次，可选 1、6、12 或 24 小时，也可关闭。刷新非当前档案会更新其配置或缓存，当前运行档案保持原样。
+
 `template.yaml` 和 `chill.sh` 的注释里写了这台设备上的特殊做法（不用 `auto-redirect`、DNS 经 dnsmasq 转发、国内路由）。
 触屏这边见 [touch-ui/docs/CHILL.md](../touch-ui/docs/CHILL.md)。
 
@@ -25,5 +27,5 @@ CHILL 是本项目的透明代理。设备上跑原生 Mihomo（Clash.Meta），
 - 开机自启只走 `/etc/rc.local`（安装脚本会先备份、改完 `sh -n` 检查）；**绝不** `/etc/init.d/<原厂服务> disable`。
 - 透明代理接管的是整个家里的网络：一律先 `safe-start`，并保证 SSH 能连上把它停掉。
 - 控制口（`:9999`）默认只听本机，面板经管理网页走。
-- 「规则」按档案分流，「全局」使用 Mihomo 的 `GLOBAL` 组，「直连」保留网关并让流量直出。关闭 CHILL 会还原设备 DNS 和路由。zashboard 用于详细的节点和连接管理。
+- 「规则」按档案分流，「全局」使用 Mihomo 的 `GLOBAL` 组，「直连」让流量直出。三种模式都保留 TUN 透明接管和 Mihomo DNS。关闭 CHILL 会还原设备 DNS 和路由。管理页显示当前连接和流量，zashboard 提供完整的连接与节点详情。
 - 完整配置保留原本的规则和 DNS 策略。设备只生成自己的网关运行副本，各档案的源文件和缓存独立保存在 `/data/chill/profiles/`。订阅链接和密钥仅存在设备端。

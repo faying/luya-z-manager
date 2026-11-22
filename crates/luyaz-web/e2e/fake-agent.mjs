@@ -126,17 +126,16 @@ function handler(req, res) {
     up.on("error", () => { res.writeHead(502); res.end(); });
     return req.pipe(up);
   }
-  // / (e2e/home.mjs): POST /__lw/home?hold=1 makes GET /api/services/chill keep saying exit "proxy"
-  // (the exit write is accepted but the readback never shows it); ?hold=0 undoes it.
+  // Keep GET /api/services/chill reporting Rule while testing an unconfirmed mode write.
   if (req.url.startsWith("/__lw/home")) {
     const q = new URL(req.url, "http://x").searchParams;
     if (q.has("hold")) holdExit = q.get("hold") === "1";
-    // ?slow=<ms>: the exit PUT answers that much later, so the pending state is there to be seen
+    // Delay the mode PUT so the test can observe the pending state.
     if (q.has("slow")) slowExit = Number(q.get("slow")) || 0;
     res.writeHead(204);
     return res.end();
   }
-  if (slowExit && req.method === "PUT" && req.url.split("?")[0] === "/api/services/chill/exit" && !req.__slowed) {
+  if (slowExit && req.method === "PUT" && req.url.split("?")[0] === "/api/services/chill/mode" && !req.__slowed) {
     req.__slowed = true;
     req.pause();
     return void setTimeout(() => { req.resume(); handler(req, res); }, slowExit);
@@ -147,7 +146,7 @@ function handler(req, res) {
       r.setEncoding("utf8");
       r.on("data", (c) => (body += c));
       r.on("end", () => {
-        try { const v = JSON.parse(body); if (v?.data?.exit) v.data.exit = "proxy"; body = JSON.stringify(v); } catch { /* as it is */ }
+        try { const v = JSON.parse(body); if (v?.data?.mode) v.data.mode = "rule"; body = JSON.stringify(v); } catch { /* as it is */ }
         const h = { ...r.headers };
         delete h["content-length"];
         delete h["content-encoding"];

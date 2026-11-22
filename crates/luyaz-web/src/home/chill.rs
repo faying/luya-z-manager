@@ -1,14 +1,4 @@
-//! The CHILL card of the home page (the old `ChillModule`) and its exit control.
-//!
-//! ```text
-//!  poll  GET /api/services/chill (u60d first, 10 s; a write asks again at once)
-//!  leaves hm-chill-t (head) · hm-chill-body · hm-chill-seg (the three exits)
-//!  write POST /home/chill/exit?x=proxy|global|direct_keep_ai  (tier 1: no confirm)
-//!        ─▶ "正在切换…" ─▶ PUT /api/services/chill/exit {"state":x} ─▶ read GET /api/services/chill
-//!           until exit == x (≤ 15 s) ─▶ result line in #hm-chill-op
-//! ```
-//! Only the write's own replies touch `#hm-chill-op`; a push sends the exit control alone and not at
-//! all while a write is in flight, so a result line or the pending choice survives every push.
+//! Home status and quick mode control. Only a write's own replies touch its result line.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -26,11 +16,11 @@ use crate::i18n::Lang;
 use crate::pages::Shared;
 use crate::write;
 
-const EXITS: [&str; 3] = ["proxy", "global", "direct_keep_ai"];
+const MODES: [&str; 3] = ["rule", "global", "direct"];
 const AREA: &str = "hm-chill";
 const STATUS: &str = "/api/services/chill";
 
-/// Writes in flight (any tab): a push must not put the old exit back under a pending choice.
+/// Writes in flight (any tab): a push must not put the old mode back under a pending choice.
 static WRITING: AtomicUsize = AtomicUsize::new(0);
 
 struct Writing;
@@ -47,16 +37,15 @@ impl Drop for Writing {
 }
 
 pub(super) fn routes(r: Router<Shared>) -> Router<Shared> {
-    r.route("/home/chill/exit", post(exit_set))
+    r.route("/home/chill/mode", post(mode_set))
         .route("/home/chill/cancel", post(exit_cancel))
 }
 
-fn exit_label(l: Lang, x: &str) -> &'static str {
+fn mode_label(l: Lang, x: &str) -> &'static str {
     match x {
-        "proxy" => l.pick("Proxy", "代理"),
+        "rule" => l.pick("Rule", "规则"),
         "global" => l.pick("Global", "全局"),
-        "direct_keep_ai" => l.pick("Direct · AI stays", "直连 · AI 不动"),
-        "direct_all" => l.pick("All direct", "全部直连"),
+        "direct" => l.pick("Direct", "直连"),
         _ => "—",
     }
 }
@@ -77,7 +66,7 @@ pub(super) fn frame(l: Lang) -> String {
     }
     .html();
     format!(
-        "<section id=\"hm-chill\" class=\"nd-module nd-module--lilac hm-o2\"><a class=\"nd-module__head\" href=\"/services/chill\"><span id=\"hm-chill-t\">CHILL</span>{}</a><div id=\"hm-chill-body\"><span class=\"nd-skel\" style=\"width:12ch\"></span></div><div id=\"hm-chill-seg\" hidden></div>{idle}</section>",
+        "<section id=\"hm-chill\" class=\"nd-module nd-module--lilac hm-o2\"><a class=\"nd-module__head\" href=\"/services/chill\"><span id=\"hm-chill-t\">Mihomo</span>{}</a><div id=\"hm-chill-body\"><span class=\"nd-skel\" style=\"width:12ch\"></span></div><div id=\"hm-chill-seg\" hidden></div>{idle}</section>",
         caret()
     )
 }
@@ -152,11 +141,11 @@ impl Chill {
         let state = c.and_then(|c| c["state"].as_str());
         let running = state == Some("running");
         let head = match state {
-            Some("running") => mark("ok", &format!("CHILL · {}", l.pick("Running", "运行中"))),
-            Some("direct") => mark("warn", &format!("CHILL · {}", l.pick("Direct", "直连"))),
-            Some("stopped") => mark("neutral", &format!("CHILL · {}", l.pick("Stopped", "已停止"))),
-            Some("unknown") => mark("neutral", &format!("CHILL · {}", l.pick("Not started", "还没启动"))),
-            _ => "CHILL".to_owned(),
+            Some("running") => mark("ok", &format!("Mihomo · {}", l.pick("Running", "运行中"))),
+            Some("direct") => mark("warn", &format!("Mihomo · {}", l.pick("Bypassed", "已旁路"))),
+            Some("stopped") => mark("neutral", &format!("Mihomo · {}", l.pick("Stopped", "已停止"))),
+            Some("unknown") => mark("neutral", &format!("Mihomo · {}", l.pick("Not started", "还没启动"))),
+            _ => "Mihomo".to_owned(),
         };
         let mut body = String::new();
         match c {
@@ -185,9 +174,6 @@ impl Chill {
                         "<p class=\"nd-body text-nd-t2\">{}</p>",
                         l.pick("Start it on the CHILL page.", "到 CHILL 页启动。")
                     ));
-                }
-                if let Some(line) = notice.as_ref().and_then(|n| ai_gate_line(l, &n["ai_gate"])) {
-                    body.push_str(&line);
                 }
                 if running {
                     if let Some(n) = &notice
@@ -219,25 +205,8 @@ impl Chill {
                     }
                     body.push_str(&format!(
                         "<p class=\"nd-body\" data-data>{}</p>",
-                        agent::esc(c["region"]["active"].as_str().unwrap_or("—"))
+                        agent::esc(c["active_profile"]["name"].as_str().unwrap_or("—"))
                     ));
-                    if c["exit"] == "direct_all" {
-                        let gated = notice.as_ref().is_some_and(|n| n["ai_gate"].is_object());
-                        body.push_str(&format!(
-                            "<p class=\"nd-aux mt-2\">{}</p>",
-                            if gated {
-                                l.pick(
-                                    "Everything else is going direct (VoWiFi too). Change it on the CHILL page.",
-                                    "其余全部直连（VoWiFi 也直连）。到 CHILL 页修改。"
-                                )
-                            } else {
-                                l.pick(
-                                    "Everything is going direct (AI and VoWiFi too). Change it on the CHILL page.",
-                                    "现在是全部直连（AI 和 VoWiFi 也直连）。到 CHILL 页修改。"
-                                )
-                            }
-                        ));
-                    }
                     if stale {
                         body.push_str(&format!(
                             "<p class=\"nd-aux mt-2\">{}</p>",
@@ -263,50 +232,13 @@ impl Chill {
         // the control: not while a write is in flight (its own replies show the pending choice)
         if WRITING.load(Ordering::SeqCst) == 0 {
             let current = c
-                .and_then(|c| c["exit"].as_str())
-                .filter(|x| EXITS.contains(x));
+                .and_then(|c| c["mode"].as_str())
+                .filter(|x| MODES.contains(x));
             self.seg = seg_html(l, running, current, None);
         }
         out.push(("hm-chill-seg".to_owned(), self.seg.clone()));
         out
     }
-}
-
-/// The AI gate (`services.chill.ai_gate`, luyaz-core engines/chill_ai_gate.rs): one line while AI is
-/// not going through 🤖 AI — blocked, or out the other way with its exit checked in the region.
-fn ai_gate_line(l: Lang, g: &Value) -> Option<String> {
-    if !g.is_object() || g["way"] == "ai" {
-        return None;
-    }
-    let region = match g["region"].as_str().unwrap_or("TW") {
-        "JP" => l.pick("Japan", "日本"),
-        "SG" => l.pick("Singapore", "新加坡"),
-        "US" => l.pick("the US", "美国"),
-        _ => l.pick("Taiwan", "台湾"),
-    };
-    let (tone, sym, text) = if g["open"] == true {
-        (
-            "ok",
-            "●",
-            match l {
-                Lang::En => format!("AI on: exit checked in {region}"),
-                Lang::Zh => format!("AI 可用：出口已确认在{region}"),
-            },
-        )
-    } else {
-        (
-            "warn",
-            "▲",
-            match l {
-                Lang::En => format!("AI paused: exit not in {region} (AI only leaves through the AI group's region)"),
-                Lang::Zh => format!("AI 已暂停：出口不在{region}（AI 只走 AI 策略组选的地区）"),
-            },
-        )
-    };
-    Some(format!(
-        "<p role=\"status\" class=\"hm-note\"><span class=\"nd-mark nd-mark--{tone}\"><span class=\"nd-mark__sym\" aria-hidden=\"true\">{sym}</span><span>{}</span></span></p>",
-        agent::esc(&text)
-    ))
 }
 
 fn pick_notice(n: &Value, l: Lang) -> Option<String> {
@@ -333,7 +265,7 @@ fn reason_text(l: Lang, r: &str) -> &str {
     }
 }
 
-/// The exit control. `busy` = a write towards this exit is in flight: that exit shows selected and
+/// The mode control. `busy` = a write towards this mode is in flight: that mode shows selected and
 /// the control is off. Hidden unless CHILL runs.
 fn seg_html(l: Lang, running: bool, current: Option<&str>, busy: Option<&str>) -> String {
     if !running {
@@ -341,22 +273,22 @@ fn seg_html(l: Lang, running: bool, current: Option<&str>, busy: Option<&str>) -
     }
     let shown = busy.or(current);
     let mut items = String::new();
-    for x in EXITS {
+    for x in MODES {
         let on = shown == Some(x);
         items.push_str(&format!(
-            "<button type=\"button\" role=\"radio\" class=\"nd-seg__item\" aria-checked=\"{on}\"{}{} data-write=\"{AREA}\" data-on:click=\"{}\">{}</button>",
+            "<button type=\"button\" class=\"nd-seg__item\" aria-pressed=\"{on}\"{}{} data-write=\"{AREA}\" data-on:click=\"{}\">{}</button>",
             if on { " data-selected=\"true\"" } else { "" },
             if busy.is_some() { " disabled data-disabled=\"true\"" } else { "" },
             write::post_once(&format!(
-                "/home/chill/exit?x={x}{}",
+                "/home/chill/mode?x={x}{}",
                 current.map(|c| format!("&was={c}")).unwrap_or_default()
             )),
-            exit_label(l, x)
+            mode_label(l, x)
         ));
     }
     format!(
-        "<div id=\"hm-chill-seg\" class=\"hm-seg\"><div class=\"nd-seg nd-seg--block\" role=\"radiogroup\" aria-label=\"{}\"><div class=\"nd-seg__track\">{items}</div></div></div>",
-        l.pick("Exit", "出口")
+        "<div id=\"hm-chill-seg\" class=\"hm-seg\"><div class=\"nd-seg nd-seg--block\" role=\"group\" aria-label=\"{}\"><div class=\"nd-seg__track\">{items}</div></div></div>",
+        l.pick("Proxy mode", "代理模式")
     )
 }
 
@@ -373,28 +305,28 @@ fn area(l: Lang, phase: &write::Phase) -> String {
 }
 
 #[derive(Deserialize)]
-struct ExitQuery {
+struct ModeQuery {
     x: String,
-    /// The exit that was selected when the button was pressed: what to show again if the status
+    /// The selected mode when the button was pressed: what to show again if the status
     /// cannot be read after the write.
     #[serde(default)]
     was: String,
 }
 
-/// What the card says about the exit now (a fresh read, not the page's cache).
-async fn read_exit(app: &Shared, who: &Caller) -> (bool, Option<String>) {
+/// Fresh mode readback from Core.
+async fn read_mode(app: &Shared, who: &Caller) -> (bool, Option<String>) {
     match agent::get(app, who, STATUS).await {
         Ok(v) => (
             v["state"] == "running",
-            v["exit"].as_str().map(str::to_owned),
+            v["mode"].as_str().map(str::to_owned),
         ),
         Err(_) => (false, None),
     }
 }
 
-async fn exit_set(
+async fn mode_set(
     State(app): State<Shared>,
-    Query(q): Query<ExitQuery>,
+    Query(q): Query<ModeQuery>,
     req: Request,
 ) -> impl IntoResponse {
     let ctx = crate::topbar::Ctx::of_request(&req, "/");
@@ -408,8 +340,8 @@ async fn exit_set(
             l,
             &write::Phase::Pending(
                 match l {
-                    Lang::En => format!("Switching the exit to {}…", exit_label(l, &x)),
-                    Lang::Zh => format!("正在把出口切到{}…", exit_label(l, &x)),
+                    Lang::En => format!("Switching mode to {}…", mode_label(l, &x)),
+                    Lang::Zh => format!("正在切换到{}模式…", mode_label(l, &x)),
                 }
             )
         )
@@ -418,14 +350,14 @@ async fn exit_set(
     write::respond(pending, async move {
         let _guard = guard;
         let o = run(&app, &who, l, &x).await;
-        let (running, now) = read_exit(&app, &who).await;
+        let (running, now) = read_mode(&app, &who).await;
         let _ = app.kick.send("/");
         format!(
             "{}{}",
             seg_html(
                 l,
                 running,
-                now.as_deref().filter(|e| EXITS.contains(e)).or(Some(was.as_str()).filter(|e| EXITS.contains(e))),
+                now.as_deref().filter(|e| MODES.contains(e)).or(Some(was.as_str()).filter(|e| MODES.contains(e))),
                 None
             ),
             area(l, &write::Phase::Done(o))
@@ -433,12 +365,12 @@ async fn exit_set(
     })
 }
 
-/// Tier 1: PUT, then read the status until `exit` shows it. No confirm.
+/// Tier 1: PUT, then read the status until Mihomo reports the requested mode.
 async fn run(app: &Shared, who: &Caller, l: Lang, x: &str) -> write::Outcome {
-    if !EXITS.contains(&x) {
-        return write::Outcome::Failed(l.pick("unknown exit", "不认识这个出口").into());
+    if !MODES.contains(&x) {
+        return write::Outcome::Failed(l.pick("unknown mode", "不认识这个模式").into());
     }
-    let sent_ok = match agent::put_raw(app, who, "/api/services/chill/exit", &json!({"state": x})).await {
+    let sent_ok = match agent::put_raw(app, who, "/api/services/chill/mode", &json!({"mode": x})).await {
         Ok((code, v)) if (200..300).contains(&code) && v["ok"].as_bool() != Some(false) => true,
         Ok((code, v)) => return write::Outcome::Failed(agent::refused(code, &v).text(l)),
         // no answer: it may have happened; read back anyway
@@ -450,13 +382,13 @@ async fn run(app: &Shared, who: &Caller, l: Lang, x: &str) -> write::Outcome {
         write::READBACK,
         Duration::from_secs(1),
         Duration::from_secs(2),
-        || async move { read_exit(app, who).await.1.as_deref() == Some(x) },
+        || async move { read_mode(app, who).await.1.as_deref() == Some(x) },
     )
     .await;
     match (held, sent_ok) {
         (true, _) => write::Outcome::Applied(match l {
-            Lang::En => format!("Exit is now {}", exit_label(l, x)),
-            Lang::Zh => format!("出口已改为{}", exit_label(l, x)),
+            Lang::En => format!("Mode is now {}", mode_label(l, x)),
+            Lang::Zh => format!("已切换到{}模式", mode_label(l, x)),
         }),
         (false, true) => write::Outcome::Accepted,
         (false, false) => write::Outcome::Unknown,
@@ -477,11 +409,11 @@ async fn exit_cancel(
 ) -> impl IntoResponse {
     let ctx = crate::topbar::Ctx::of_request(&req, "/");
     let who = Caller::of(&app, &req);
-    let (running, now) = read_exit(&app, &who).await;
+    let (running, now) = read_mode(&app, &who).await;
     let phase = write::cancel_phase(&write::CancelQuery { lost: q.lost });
     let html = format!(
         "{}{}",
-        seg_html(ctx.lang, running, now.as_deref().filter(|e| EXITS.contains(e)), None),
+        seg_html(ctx.lang, running, now.as_deref().filter(|e| MODES.contains(e)), None),
         area(ctx.lang, &phase)
     );
     axum::response::sse::Sse::new(futures_util::stream::once(async move {
@@ -489,18 +421,3 @@ async fn exit_cancel(
     }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn the_ai_gate_line_only_while_ai_is_not_going_through_its_group() {
-        assert_eq!(ai_gate_line(Lang::Zh, &Value::Null), None, "gate off");
-        assert_eq!(ai_gate_line(Lang::Zh, &json!({"way": "ai", "open": true, "region": "TW"})), None);
-        let closed = ai_gate_line(Lang::Zh, &json!({"way": "cellular", "open": false, "region": "TW"})).unwrap();
-        assert!(closed.contains("AI 已暂停：出口不在台湾") && closed.contains("nd-mark--warn"), "{closed}");
-        let open = ai_gate_line(Lang::En, &json!({"way": "global", "open": true, "region": "JP"})).unwrap();
-        assert!(open.contains("AI on: exit checked in Japan") && open.contains("nd-mark--ok"), "{open}");
-    }
-}

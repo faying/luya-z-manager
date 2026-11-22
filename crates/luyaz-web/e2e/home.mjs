@@ -91,8 +91,9 @@ async function own(p) {
   ok(/SIM/.test(await txt(p, "#hi-reg-s")), `SIM line under Registered on: ${await txt(p, "#hi-reg-s")}`);
   ok(/信道 \d+/.test(await txt(p, "#hw-2")) && /MHz/.test(await txt(p, "#hw-5")), `Wi-Fi lines (actual channel + width): ${await txt(p, "#hw-2")} | ${await txt(p, "#hw-5")}`);
   ok(/国外/.test(await txt(p, "#hm-scene")) && /切换/.test(await txt(p, "#hm-scene")), `scenario: ${await txt(p, "#hm-scene")}`);
-  ok(/运行中/.test(await txt(p, "#hm-chill-t")) && await p.locator("#hm-chill-seg [role=radio]").count() === 3, `CHILL card: ${await txt(p, "#hm-chill")}`);
-  ok(await p.locator("#hm-chill-seg [aria-checked=true]").count() === 1, "one exit selected");
+  const modes = p.locator("#hm-chill-seg button");
+  ok(/Mihomo.*运行中/.test(await txt(p, "#hm-chill-t")) && await modes.count() === 3, `Mihomo card: ${await txt(p, "#hm-chill")}`);
+  ok(await p.locator("#hm-chill-seg [aria-pressed=true]").count() === 1, "one mode selected");
   // the diagnose link is hidden when the verdict is ok, and follows the verdict
   await p.waitForFunction(() => document.querySelector("#hm-why")?.hidden, null, { timeout: 15000 }).catch(() => {}); // the finding line from the common checks goes with the next status read
   ok(await p.locator("#hm-why").isHidden(), "no 查原因 link with an ok verdict");
@@ -126,51 +127,51 @@ async function own(p) {
   ok(await p.locator("#hm-why").isHidden(), "finding closed: line gone");
   await hook({ reset: true });
 
-  // the exit control: ok
-  const aria = (x) => p.locator(`#hm-chill-seg [role=radio]:has-text("${x}")`);
+  const mode = (name) => p.locator("#hm-chill-seg").getByRole("button", { name, exact: true });
   await p.evaluate(() => {
     window.__dis = false;
     // the pending patch and the result can land in one batch (a fast agent): look at what was added, not only the DOM now
-    const seen = (n) => n.nodeType === 1 && (n.querySelectorAll?.("[role=radio][disabled]").length === 3 || /正在把出口切到全局/.test(n.textContent ?? ""));
-    new MutationObserver((recs) => { if (recs.some((r) => [...r.addedNodes].some(seen) || (r.type === "attributes" && r.attributeName === "disabled" && r.target.matches?.("#hm-chill-seg [role=radio]") && r.target.hasAttribute("disabled")) || (r.type === "characterData" && /正在把出口切到全局/.test(r.target.data ?? ""))) || document.querySelectorAll("#hm-chill-seg [role=radio][disabled]").length === 3 || /正在把出口切到全局/.test(document.querySelector("#hm-chill-op")?.textContent ?? "")) window.__dis = true; })
+    const seen = (n) => n.nodeType === 1 && /正在切换到全局模式/.test(n.textContent ?? "");
+    new MutationObserver((records) => {
+      if (records.some((r) => [...r.addedNodes].some(seen)) || document.querySelectorAll("#hm-chill-seg button[disabled]").length === 3) window.__dis = true;
+    })
       .observe(document.body, { subtree: true, attributes: true, childList: true, characterData: true });
   });
   await fetch(`${AGENT}/__lw/home?slow=1500`, { method: "POST" });
-  await aria("全局").click();
-  await until(p, "#hm-chill-op", /出口已改为全局/, 20000);
+  await mode("全局").click();
+  await until(p, "#hm-chill-op", /已切换到全局模式/, 20000);
   await fetch(`${AGENT}/__lw/home?slow=0`, { method: "POST" });
-  ok(/出口已改为全局/.test(await txt(p, "#hm-chill-op")), `exit applied: ${await txt(p, "#hm-chill-op")}`);
+  ok(/已切换到全局模式/.test(await txt(p, "#hm-chill-op")), `mode applied: ${await txt(p, "#hm-chill-op")}`);
   ok(await p.evaluate(() => window.__dis), "while it runs: the control is off and the pending line is said");
-  ok(await aria("全局").getAttribute("aria-checked") === "true", "全局 is selected after the readback");
+  ok(await mode("全局").getAttribute("aria-pressed") === "true", "全局 is selected after the readback");
   await p.screenshot({ path: `${OUT}/home-exit-ok.png`, fullPage: true });
   // a push (here: a kick from another event) keeps the result line
   await hook({ clients: 4 });
   await p.waitForFunction(() => document.querySelector("#hd-cl")?.textContent.trim() === "4", null, { timeout: 8000 }).catch(() => {});
-  ok(/出口已改为全局/.test(await txt(p, "#hm-chill-op")), "a push does not wipe the result line");
+  ok(/已切换到全局模式/.test(await txt(p, "#hm-chill-op")), "a push does not wipe the result line");
   await hook({ clients: 3 });
-  // back to proxy
-  await aria("代理").click();
-  await until(p, "#hm-chill-op", /出口已改为代理/, 20000);
-  ok(await aria("代理").getAttribute("aria-checked") === "true", "back to 代理");
+  await mode("规则").click();
+  await until(p, "#hm-chill-op", /已切换到规则模式/, 20000);
+  ok(await mode("规则").getAttribute("aria-pressed") === "true", "back to 规则");
 
   // refused: the proxy core does not answer (the typed mock refuses the PUT with 409)
   await scenario("fakesuccess");
-  await aria("全局").click();
+  await mode("全局").click();
   await until(p, "#hm-chill-op", /没有生效/, 20000);
-  ok(/没有生效/.test(await txt(p, "#hm-chill-op")) && !/出口已改为/.test(await txt(p, "#hm-chill-op")), `refused: ${await txt(p, "#hm-chill-op")}`);
-  ok(await aria("代理").getAttribute("aria-checked") === "true", "refused: the control keeps the real exit");
+  ok(/没有生效/.test(await txt(p, "#hm-chill-op")) && !/已切换到/.test(await txt(p, "#hm-chill-op")), `refused: ${await txt(p, "#hm-chill-op")}`);
+  ok(await mode("规则").getAttribute("aria-pressed") === "true", "refused: the control keeps the real mode");
   await p.screenshot({ path: `${OUT}/home-exit-refused.png`, fullPage: true });
   await scenario("normal");
 
   // accepted but the readback never shows it
   await fetch(`${AGENT}/__lw/home?hold=1`, { method: "POST" });
-  await aria("全局").click();
+  await mode("全局").click();
   await until(p, "#hm-chill-op", /设备已接受/, 30000);
-  ok(/设备已接受，还没读回/.test(await txt(p, "#hm-chill-op")) && !/出口已改为/.test(await txt(p, "#hm-chill-op")), `readback not held: ${await txt(p, "#hm-chill-op")}`);
+  ok(/设备已接受，还没读回/.test(await txt(p, "#hm-chill-op")) && !/已切换到/.test(await txt(p, "#hm-chill-op")), `readback not held: ${await txt(p, "#hm-chill-op")}`);
   await fetch(`${AGENT}/__lw/home?hold=0`, { method: "POST" });
-  await aria("代理").click();
-  await until(p, "#hm-chill-op", /出口已改为代理/, 20000);
-  ok(await aria("代理").getAttribute("aria-checked") === "true", "restored 代理");
+  await mode("规则").click();
+  await until(p, "#hm-chill-op", /已切换到规则模式/, 20000);
+  ok(await mode("规则").getAttribute("aria-pressed") === "true", "restored 规则");
 }
 
 async function layout(browser) {
@@ -180,7 +181,7 @@ async function layout(browser) {
     const p = await ctx.newPage();
     await p.goto(WEB + "/", { waitUntil: "load" });
     await p.waitForFunction(() => /^-?\d/.test(document.querySelector("#ro-rsrp")?.textContent.trim() ?? ""), null, { timeout: 15000 });
-    await p.waitForSelector("#hm-chill-seg [role=radio]", { timeout: 15000 });
+    await p.waitForSelector("#hm-chill-seg button", { timeout: 15000 });
     return [ctx, p];
   };
   let [ctx, p] = await mk(1280, 900);

@@ -677,15 +677,13 @@ impl Ui {
             kit::text_color(note, note_col);
         }
 
-        // 出口: CHILL off → one row; on with the same exit (direct main group) → one row, noted;
-        // different → two rows
+        // 出口: CHILL off → one row; on with the same exit → one row; different → two rows.
         let two = n.proxy.present != 0 && n.proxy.ip != n.direct.ip;
         let same = n.proxy.present != 0 && !two;
         for i in 0..2 {
             let e = if i == 1 { &n.proxy } else { &n.direct };
-            // 直连 · AI 不动: the agent looked up the 🤖 AI group's exit
             let key: &str = if i == 1 {
-                if m.chill_exit_raw.as_deref().unwrap_or("") != "direct_keep_ai" { "CHILL" } else { "CHILL · AI" }
+                "CHILL"
             } else if two {
                 tr("蜂窝直连")
             } else {

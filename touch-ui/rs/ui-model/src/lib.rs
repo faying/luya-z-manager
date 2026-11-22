@@ -10,6 +10,22 @@ pub use structs::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChillConfigProfile {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChillTun {
+    pub enable: bool,
+    pub stack: String,
+    pub device: String,
+    pub auto_route: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Model {
     pub data_ok: i32,
     pub data: core_snapshot_t,
@@ -46,6 +62,12 @@ pub struct Model {
     pub chill_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chill_profile_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chill_config_profiles: Vec<ChillConfigProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chill_config_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chill_tun: Option<ChillTun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chill_ipv6: Option<String>,
     /// The auto group 🚀 points at: its hand-picked node ("" = none). None = 🚀 is not on one.
@@ -196,11 +218,15 @@ mod tests {
         assert!(old.get("chill_profile").is_none());
         assert!(old.get("chill_profile_kind").is_none());
         assert!(old.get("chill_ipv6").is_none());
+        assert!(old.get("chill_tun").is_none());
+        assert!(old.get("chill_config_profiles").is_none());
         let mut model: Model = serde_json::from_value(old).unwrap();
         assert_eq!((model.chill_profile.as_deref(), model.chill_profile_kind.as_deref(), model.chill_ipv6.as_deref()), (None, None, None));
         model.chill_profile = Some("SG2HOME".into());
         model.chill_profile_kind = Some("full_url".into());
         model.chill_ipv6 = Some("blocked".into());
+        model.chill_tun = Some(ChillTun { enable: true, stack: "system".into(), device: "chill0".into(), auto_route: true });
+        model.chill_config_profiles.push(ChillConfigProfile { id: "p-1".into(), name: "SG2HOME".into(), kind: "full_url".into(), active: true });
         let restored: Model = serde_json::from_value(serde_json::to_value(&model).unwrap()).unwrap();
         assert_eq!(restored, model);
     }

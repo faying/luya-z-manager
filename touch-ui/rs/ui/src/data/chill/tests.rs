@@ -190,6 +190,92 @@ fn configs_read_sparingly() {
 }
 
 #[test]
+fn canonical_mode_does_not_follow_rule_group_direct() {
+    crate::lang::set_en(false);
+    let mut c = Chill { mode_raw: "rule".into(), main_now: "DIRECT".into(), ..Default::default() };
+    assert_eq!(c.exit_raw(), "direct_keep_ai");
+    assert_eq!(c.mode(), "规则");
+    c.mode_raw = "global".into();
+    assert_eq!(c.mode(), "全局");
+    c.mode_raw = "direct".into();
+    assert_eq!(c.mode(), "直连");
+}
+
+#[test]
+fn tun_and_profile_list_are_read_without_source_urls() {
+    let tun = parse_tun(br#"{"tun":{"enable":true,"stack":"system","device":"chill0","auto-route":true}}"#).unwrap();
+    assert!(tun.enable && tun.auto_route);
+    assert_eq!((tun.stack.as_str(), tun.device.as_str()), ("system", "chill0"));
+    assert!(parse_tun(br#"{"tun":{"enable":true}}"#).is_none());
+    let list = parse_config_profiles(br#"{"data":{"active_id":"p-a","profiles":[{"id":"p-a","name":"SG2HOME","kind":"full_url","url":"https://example.invalid/secret"},{"id":"p-b","name":"Other","kind":"local_yaml"}]}}"#).unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(list[0].active && !list[1].active);
+    assert_eq!(list[0].name, "SG2HOME");
+    assert!(!format!("{list:?}").contains("secret"));
+}
+
+#[test]
+fn profile_activation_waits_for_job_and_confirms_active_id() {
+    let (l, port) = listen();
+    let h = std::thread::spawn(move || {
+        for step in 0..3 {
+            let (mut c, _) = l.accept().unwrap();
+            let req = read_req(&mut c);
+            match step {
+                0 => {
+                    assert!(req.starts_with("POST /v2/api/services/chill/configs/activate"));
+                    reply(&mut c, br#"{"data":{"job_id":7}}"#);
+                }
+                1 => {
+                    assert!(req.starts_with("GET /v2/api/services/chill/job"));
+                    reply(&mut c, br#"{"data":{"id":7,"status":"done"}}"#);
+                }
+                _ => {
+                    assert!(req.starts_with("GET /v2/api/services/chill/configs"));
+                    reply(&mut c, br#"{"data":{"active_id":"p-b","profiles":[{"id":"p-a","name":"A","kind":"full_url"},{"id":"p-b","name":"B","kind":"local_yaml"}]}}"#);
+                }
+            }
+        }
+    });
+    let mut agent = CoreApi::default();
+    agent.config(port);
+    let mut p = ConfigProfile { profiles: vec![ui_model::ChillConfigProfile { id: "p-b".into(), name: "B".into(), kind: "local_yaml".into(), active: false }], ..Default::default() };
+    assert!(p.activate(&mut agent, "p-b"));
+    assert_eq!(p.status.as_deref(), Some("running"));
+    assert!(p.poll(&mut agent, true));
+    assert_eq!(p.status.as_deref(), Some("done"));
+    assert_eq!(p.name.as_deref(), Some("B"));
+    h.join().unwrap();
+}
+
+#[test]
+fn active_profile_refresh_uses_job_and_active_readback() {
+    let (l, port) = listen();
+    let h = std::thread::spawn(move || {
+        for step in 0..3 {
+            let (mut c, _) = l.accept().unwrap();
+            let req = read_req(&mut c);
+            match step {
+                0 => {
+                    assert!(req.starts_with("POST /v2/api/services/chill/configs/refresh"));
+                    reply(&mut c, br#"{"data":{"job_id":8}}"#);
+                }
+                1 => reply(&mut c, br#"{"data":{"id":8,"status":"done"}}"#),
+                _ => reply(&mut c, br#"{"data":{"active_id":"p-a","profiles":[{"id":"p-a","name":"A","kind":"full_url"}]}}"#),
+            }
+        }
+    });
+    let mut agent = CoreApi::default();
+    agent.config(port);
+    let mut p = ConfigProfile { profiles: vec![ui_model::ChillConfigProfile { id: "p-a".into(), name: "A".into(), kind: "full_url".into(), active: true }], ..Default::default() };
+    assert!(p.refresh(&mut agent, "p-a"));
+    assert_eq!(p.status.as_deref(), Some("refresh_running"));
+    assert!(p.poll(&mut agent, true));
+    assert_eq!(p.status.as_deref(), Some("refresh_done"));
+    h.join().unwrap();
+}
+
+#[test]
 fn config_profile_parses_active_and_rejects_incomplete_data() {
     let body = br#"{"ok":true,"data":{"active_id":"p-2","profiles":[{"id":"p-1","name":"Other","kind":"node_url"},{"id":"p-2","name":"SG2HOME \u56de\u5bb6","kind":"full_url"}]}}"#;
     assert_eq!(parse_config_profile(body), Some(("SG2HOME 回家".into(), Some("full_url".into()))));
@@ -200,7 +286,7 @@ fn config_profile_parses_active_and_rejects_incomplete_data() {
 
 #[test]
 fn config_profile_failed_read_retains_previous_result() {
-    let mut p = ConfigProfile { name: Some("Previous".into()), kind: Some("local_yaml".into()), last_ms: 0 };
+    let mut p = ConfigProfile { name: Some("Previous".into()), kind: Some("local_yaml".into()), ..Default::default() };
     let (l, port) = listen();
     let h = std::thread::spawn(move || {
         let (mut c, _) = l.accept().unwrap();

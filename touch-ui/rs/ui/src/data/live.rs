@@ -138,6 +138,9 @@ impl Live {
             chill_chain: Some(self.chill.chain().into()),
             chill_profile: self.chill_config.name.clone(),
             chill_profile_kind: self.chill_config.kind.clone(),
+            chill_config_profiles: self.chill_config.profiles.clone(),
+            chill_config_status: self.chill_config.status.clone(),
+            chill_tun: self.chill.tun(),
             chill_ipv6: self.chill.ipv6(),
             chill_pin: self.chill.exit_pin(),
             chill_conns: Some(self.chill.conns().into()),
@@ -498,7 +501,13 @@ impl Source for Live {
         self.scenario.chill_set(&mut self.agent, on)
     }
     fn chill_set_exit(&mut self, state: &str) -> bool {
-        self.chill.set_exit(&mut self.agent, state)
+        if let Some(id) = state.strip_prefix("profile:") {
+            self.chill_config.activate(&mut self.agent, id)
+        } else if let Some(id) = state.strip_prefix("refresh_profile:") {
+            self.chill_config.refresh(&mut self.agent, id)
+        } else {
+            self.chill.set_exit(&mut self.agent, state)
+        }
     }
     fn chill_select_node(&mut self, i: usize) -> bool {
         self.chill.select_node(i)

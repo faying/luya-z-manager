@@ -40,6 +40,9 @@
 .ch-config-row .nd-row__text { min-width: 0; overflow-wrap: anywhere; }
 .ch-config-actions, .ch-import-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
 .ch-config-actions button { min-height: 44px; }
+.ch-config-schedule { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.ch-config-schedule select { min-height: 44px; max-width: 100%; font-size: 16px; }
+.ch-config-schedule button { min-height: 44px; }
 .ch-import { display: grid; gap: 8px; padding: 16px; min-width: 0; }
 .ch-import fieldset { border: 0; padding: 0; margin: 8px 0; min-width: 0; }
 .ch-import-kinds label { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
@@ -49,3 +52,7 @@
 .ch-mode fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .ch-mode label { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
 .ch-mode input:checked + span { font-weight: 700; }
+.ch-connection-summary, .ch-connection-row { flex-wrap: wrap; gap: 8px 16px; }
+.ch-connection-row .nd-row__text { min-width: 0; overflow-wrap: anywhere; }
+.ch-connection-list { margin: 0; padding: 0; list-style: none; }
+.ch-mode input:focus-visible, .ch-import input:focus-visible { outline: 2px solid var(--nd-t1); outline-offset: 3px; }

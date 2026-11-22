@@ -314,6 +314,7 @@ impl Compat {
             crate::plugin::charge_policy::set_executor(tx);
             tokio::spawn(charge::run(self.clone(), rx));
             tokio::spawn(health::run(self.clone()));
+            tokio::spawn(chill_profiles::auto_refresh(self.clone()));
             // 短信先进日志，sms-forward 和插件才看得到（luyaz-phone 设计 O-2、R22）
             crate::sms_journal::init(
                 self.path(crate::sms_journal::JOURNAL_PATH),
@@ -609,6 +610,7 @@ impl Compat {
                     post(chill_page::providers_refresh),
                 )
                 .route("/api/services/chill/configs/refresh", post(chill_profiles::refresh))
+                .route("/api/services/chill/configs/schedule", axum::routing::put(chill_profiles::schedule))
                 .route("/api/services/chill/configs/activate", post(chill_profiles::activate))
                 .route("/api/services/chill/configs/delete", post(chill_profiles::delete))
                 .route("/api/services/chill/mode", axum::routing::put(chill_profiles::mode));

@@ -51,21 +51,22 @@ pub async fn status(State(c): State<Compat>) -> Response {
         .and_then(|v| v.get("state"))
         .and_then(Value::as_str)
         == Some("running");
-    let (mut version, mut proxies, mut mode, mut providers) = (None, None, None, None);
+    let (mut version, mut proxies, mut mode, mut configs_raw, mut providers, mut connections_raw) = (None, None, None, None, None, None);
     if running && let Some((client, secret)) = mihomo(&c, 3) {
         let api = &c.src.mihomo;
         let version_url = format!("{api}/version");
         let proxies_url = format!("{api}/proxies");
         let configs_url = format!("{api}/configs");
         let providers_url = format!("{api}/providers/proxies");
-        let configs;
-        (version, proxies, configs, providers) = tokio::join!(
+        let connections_url = format!("{api}/connections");
+        (version, proxies, configs_raw, providers, connections_raw) = tokio::join!(
             get_json(&client, &secret, &version_url),
             get_json(&client, &secret, &proxies_url),
             get_json(&client, &secret, &configs_url),
             get_json(&client, &secret, &providers_url),
+            get_json(&client, &secret, &connections_url),
         );
-        mode = configs.and_then(|v| v["mode"].as_str().map(str::to_owned));
+        mode = configs_raw.as_ref().and_then(|v| v["mode"].as_str().map(str::to_owned));
     }
     let mut data = ch::status_data(
         st,
@@ -86,11 +87,46 @@ pub async fn status(State(c): State<Compat>) -> Response {
         _ => "unavailable",
     };
     data["ipv6_mode"] = json!(ipv6_mode);
+    data["tun"] = tun_data(configs_raw.as_ref());
+    data["connections"] = connections_data(connections_raw.as_ref());
     let mut stats = providers_data(providers.as_ref());
     data["provider_count"] = json!(stats["providers"].as_array().map_or(0, Vec::len));
     data["group_count"] = json!(data["groups"].as_array().map_or(0, Vec::len));
     data["providers"] = stats["providers"].take();
     reply(200, json!({"ok": true, "data": data}))
+}
+
+fn tun_data(config: Option<&Value>) -> Value {
+    let tun = config.and_then(|v| v.get("tun"));
+    json!({
+        "enabled": tun.and_then(|v| v.get("enable")).and_then(Value::as_bool).unwrap_or(false),
+        "auto_route": tun.and_then(|v| v.get("auto-route")).and_then(Value::as_bool).unwrap_or(false),
+        "stack": tun.and_then(|v| v.get("stack")).and_then(Value::as_str).unwrap_or(""),
+        "device": tun.and_then(|v| v.get("device")).and_then(Value::as_str).unwrap_or(""),
+    })
+}
+
+fn connections_data(raw: Option<&Value>) -> Value {
+    let Some(raw) = raw else {
+        return Value::Null;
+    };
+    let list = raw["connections"].as_array().map_or(&[][..], Vec::as_slice);
+    let upload = raw["uploadTotal"].as_u64().unwrap_or(0);
+    let download = raw["downloadTotal"].as_u64().unwrap_or(0);
+    let items = list.iter().take(32).map(|conn| {
+        let metadata = &conn["metadata"];
+        json!({
+            "id": conn.get("id").and_then(Value::as_str).unwrap_or(""),
+            "host": metadata["host"].as_str().filter(|host| !host.is_empty())
+                .or_else(|| metadata["destinationIP"].as_str()).unwrap_or(""),
+            "network": metadata["network"].as_str().unwrap_or(""),
+            "rule": conn.get("rule").and_then(Value::as_str).unwrap_or(""),
+            "chains": conn.get("chains").cloned().unwrap_or_else(|| json!([])),
+            "upload": conn.get("upload").and_then(Value::as_u64).unwrap_or(0),
+            "download": conn.get("download").and_then(Value::as_u64).unwrap_or(0),
+        })
+    }).collect::<Vec<_>>();
+    json!({"count": list.len(), "upload_total": upload, "download_total": download, "items": items})
 }
 
 /// The backup region manual-first holds, if any (its live engine, or its file).
