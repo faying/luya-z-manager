@@ -422,7 +422,7 @@ impl Ui {
                     || (i == XM_GLOBAL && x == "global")
                     || (i == XM_DIRECT && x == "direct"));
             let mut text = tr(LBL[i]);
-            // CHILL off: the first four mean nothing
+            // CHILL off: the three mode buttons are inactive.
             let mut col = if on { th.acc_t } else { th.t3 };
             let mut bg = 0;
             if i == XM_OFF {
@@ -799,7 +799,7 @@ impl Ui {
         let sc = kit::scroll(p, 0, SUB_VIEW, content_h);
         self.cp.content_h = content_h;
         self.cp.scroll = sc;
-        // status block: node (big), delay, group; the master switch top right
+        // Current mode and configuration, with the service switch at the top right.
         let st = kit::card(sc, MARGIN, 4, CARD_W, kit::HERO_H + 2 * ROW_H);
         let hero = kit::hero(st, f.cj22b);
         hero.big.set_width(180);
@@ -807,10 +807,8 @@ impl Ui {
         hero.big.set_height(f.cj22b.line_height());
         self.cp.hero = hero;
         self.cp.core = hero.st;
-        // the switch sits over the delay (hero r1): 2 px up, the delay and its caption 2 px
-        // down, so they no longer touch (10-02)
         self.cp.sw = kit::toggle(st, CARD_W - PAD, 4, Some(chill_master_cb), 0);
-        hero.r1.set_y(32);
+        kit::show(hero.r1, false);
         hero.r2.set_y(54);
         kit::show(self.cp.sw, false); // shown once its state is known
         self.home_sc_force(); // the next refresh syncs it
@@ -819,7 +817,7 @@ impl Ui {
         self.cp.traffic = kit::row(st, kit::HERO_H + ROW_H, tr("流量"), false);
         let mut y = 4 + kit::HERO_H + 2 * ROW_H + 10;
 
-        kit::section(sc, y, tr("出口"));
+        kit::section(sc, y, tr("代理模式"));
         y += 20;
         let md = kit::card(sc, MARGIN, y, CARD_W, 100);
         for i in 0..3 {
@@ -956,30 +954,20 @@ impl Ui {
         let m = self.model.clone();
         let s = |o: &Option<String>| o.clone().unwrap_or_default();
         let online = m.chill_online != 0;
-        let node = s(&m.chill_node);
         let cp = self.cp.clone();
         self.set(cp.core, s(&m.chill_core));
         if online as i32 != self.cp.on_shown {
             self.cp.on_shown = online as i32;
             kit::hero_tone(&cp.hero, if online { 0 } else { 3 });
         }
-        let mut dl: Vec<u8> = "-".into();
-        if let Some(ni) = m.chill_nodes.iter().find(|ni| ni.selected != 0 && ni.name == node) {
-            if ni.delay > 0 {
-                dl = cf!("%d ms", ni.delay);
-            } else if ni.delay == 0 {
-                dl = tr("超时").into();
-            }
-        }
-        self.set(cp.hero.big, if online && !node.is_empty() { node.as_str() } else { "—" });
-        self.set(cp.hero.r1, if online { dl.as_slice() } else { b"" });
-        let grp = s(&m.chill_group);
-        self.set(cp.hero.r2, if online { grp.as_str() } else { tr("打开右上角开关启动") });
+        let raw_mode = m.chill_mode_raw.as_deref().unwrap_or("");
+        self.set(cp.hero.big, if online { m.chill_mode.as_deref().unwrap_or("—") } else { "—" });
+        let name = m.chill_profile.as_deref().filter(|name| !name.is_empty());
+        self.set(cp.hero.r2, if online { name.unwrap_or("—") } else { tr("打开右上角开关启动") });
         self.set(cp.conns, format!("{} · {}", s(&m.chill_conns), s(&m.chill_conn_split)));
         self.set(cp.traffic, format!("{} · {}", s(&m.chill_speed), s(&m.chill_traffic)));
-        let xraw = s(&m.chill_mode_raw);
         for i in 0..3 {
-            kit::opt_set(&cp.opt[i], xraw == EXIT_STATE[i], false);
+            kit::opt_set(&cp.opt[i], online && raw_mode == EXIT_STATE[i], false);
         }
         let note = m.chill_tun.as_ref().map(|t| format!("TUN {} · {} · {}{}",
             if t.enable { tr("已开启") } else { tr("已关闭") }, t.stack, t.device,
@@ -1013,7 +1001,7 @@ impl Ui {
                 let name = self.cp.configs_names[i];
                 let value = self.cp.configs_values[i];
                 self.set(name, &p.name);
-                self.set(value, format!("{}{}", p.kind, if p.active { " · 当前" } else { " ›" }));
+                self.set(value, if p.active { tr("当前") } else { "›" });
             }
         }
         let can_refresh = m.chill_config_profiles.iter().any(|p| p.active);
