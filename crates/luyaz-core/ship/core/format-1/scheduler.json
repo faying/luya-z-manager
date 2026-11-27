@@ -1,0 +1,14 @@
+{
+  "jobs": [
+    {"id": 1, "name": "example once", "enabled": true, "schedule": {"type": "once", "at": 1794500000},
+     "action": {"method": "POST", "path": "/api/wifi/radio", "body": {"main_5g": false}},
+     "restore": {"time": "07:00", "body": {"main_5g": true}},
+     "last_run": 1794400000, "last_status": 200, "last_error": "example",
+     "last_restore": 1794410000, "last_restore_status": 500, "last_restore_error": "example",
+     "created_at": 1794300000},
+    {"id": 2, "name": "example recurring", "enabled": false, "schedule": {"type": "recurring", "time": "23:30", "days": [1, 2, 3, 4, 5]},
+     "action": {"method": "POST", "path": "/api/device/reboot"},
+     "last_run": null, "last_status": null, "last_restore": null, "last_restore_status": null,
+     "created_at": 1794300100}
+  ]
+}

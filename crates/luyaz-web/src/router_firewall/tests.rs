@@ -84,7 +84,7 @@ fn reads_the_router_block_and_says_dash_for_null() {
         v.level_dis(),
         "B31's empty level: the level buttons are off"
     );
-    assert_eq!(v.level_text, "—");
+    assert_eq!(v.level_text, "not reported by the device", "words, not 「—」 (11-14)");
     let s = html(&v);
     assert!(
         s.contains("Couldn&#39;t read UPnP") || s.contains("Couldn't read UPnP"),

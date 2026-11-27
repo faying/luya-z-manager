@@ -53,7 +53,7 @@ fn join_path(parent: &str, key: &str) -> String {
 
 /// Flatten `value` into dotted path -> type name. Objects are walked into and
 /// never appear themselves; arrays are leaves (their contents are not listed).
-fn shape(value: &Value, path: &str, out: &mut BTreeMap<String, &'static str>) {
+pub(crate) fn shape(value: &Value, path: &str, out: &mut BTreeMap<String, &'static str>) {
     if let Value::Object(members) = value {
         for (key, member) in members {
             shape(member, &join_path(path, key), out);

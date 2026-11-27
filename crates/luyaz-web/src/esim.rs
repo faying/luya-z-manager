@@ -29,6 +29,15 @@
 //! random token server-side; the confirm posts the token. The activation code and nickname travel
 //! only in the ask's POST body (page-local `_es…` signals, sent with `filterSignals`); no URL, HTML
 //! or push carries them, and nothing here logs them.
+//!
+//! Per card (dual-slot design §6, `seats.rs`): the single-slot unit is one card, addressed as
+//! before (no `eid`, the element ids above). A dual-slot unit shows one block per slot holding an
+//! eUICC (from the `cards` block), headed 「卡槽 N · 上网中/待机/…」; every element id, area and
+//! page-local signal of a block carries its slot (`-s2`, `_esCode2`), every URL `s=<slot>`, and
+//! every request to the core names the card by that slot (`?slot=` / `"slot"`; the core resolves
+//! it to the eUICC it identified there: 503 while identifying, 404 no eSIM card), bound into the
+//! ask's stash so the send, its readback and the reboot verifier stay on the slot that was
+//! confirmed. The core runs one job at a time across both cards, so the other card reads busy too.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -49,7 +58,7 @@ use serde_json::{Value, json};
 use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::i18n::Lang;
-use crate::pages::{Shared, StreamQuery, async_stream, patch, split_leaves};
+use crate::pages::{Shared, async_stream, patch, split_leaves};
 use crate::write;
 
 const PATH: &str = "/router/esim";
@@ -79,6 +88,9 @@ const REBOOT_WAIT: Duration = Duration::from_secs(300);
 /// The job said "rebooting" and this process is still alive after this long: no reboot happened.
 const NO_REBOOT_AFTER: Duration = Duration::from_secs(30);
 const STASH_TTL: Duration = Duration::from_secs(600);
+
+pub mod seats;
+pub use seats::Layout;
 
 /// This page's routes (the page, its stream, its buttons).
 pub fn routes() -> Router<Shared> {
@@ -237,10 +249,112 @@ pub fn notifs(v: &Value) -> Option<Vec<Notif>> {
     })
 }
 
-async fn read_list(app: &Shared, who: &Caller) -> Result<Listed, Fail> {
-    crate::agent::get(app, who, "/api/esim/profiles")
+async fn read_list(app: &Shared, who: &Caller, aim: &Aim) -> Result<Listed, Fail> {
+    crate::agent::get(app, who, &format!("/api/esim/profiles{}", aim.q()))
         .await
         .map(|v| profiles(&v))
+}
+
+// ---- which card ----
+
+/// The card a request is for: slot 0 = the single-slot unit's one card (nothing named, as
+/// before); a dual-slot unit's card is named by its slot (`?slot=N` / `"slot": N`), which the
+/// core resolves to the eUICC it identified there (503 while identifying, 404: no eSIM card).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Aim {
+    pub n: u8,
+}
+
+impl Aim {
+    /// The query of a GET (`?slot=N`, or nothing).
+    pub fn q(&self) -> String {
+        if self.n == 0 { String::new() } else { format!("?slot={}", self.n) }
+    }
+    /// A write's body with the card named.
+    pub fn body(&self, mut v: Value) -> Value {
+        if let (1.., Some(o)) = (self.n, v.as_object_mut()) {
+            o.insert("slot".into(), json!(self.n));
+        }
+        v
+    }
+}
+
+/// The element-id suffix of slot `n`'s block ("" for the single-slot unit).
+pub fn sx(n: u8) -> String {
+    if n == 0 { String::new() } else { format!("-s{n}") }
+}
+
+/// A URL's `&s=<n>` ("" for the single-slot unit).
+pub fn sq(n: u8) -> String {
+    if n == 0 { String::new() } else { format!("&s={n}") }
+}
+
+/// Why a dual-slot unit's card can't be read or changed right now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hold {
+    /// The core is still identifying the cards (`pending`, 503, no table yet).
+    Identifying,
+    /// The core could not tell whether this card is an eSIM card (`unknown`).
+    Unknown,
+    /// The page was built for other cards (one was put in or taken out): reload.
+    Moved,
+}
+
+impl Hold {
+    /// The status block's state words.
+    pub fn state(self, l: Lang) -> &'static str {
+        match self {
+            Hold::Identifying => l.pick("Identifying the card…", "正在识别卡…"),
+            Hold::Unknown => l.pick("Card not recognised", "认不出这张卡"),
+            Hold::Moved => l.pick("The cards have changed", "卡变了"),
+        }
+    }
+    /// What it means (the status reason, the list's line).
+    pub fn text(self, l: Lang) -> &'static str {
+        match self {
+            Hold::Identifying => l.pick(
+                "Identifying the card in this slot…",
+                "正在识别这个卡槽里的卡…",
+            ),
+            Hold::Unknown => l.pick(
+                "The device can't tell whether this card is an eSIM card. Take it out and put it back if it should be one.",
+                "设备认不出这张卡是不是 eSIM 卡。如果它是，把卡拔出来再插回去。",
+            ),
+            Hold::Moved => l.pick(
+                "The cards have changed since this page was opened: reload the page.",
+                "打开这页之后卡变了：重新载入这一页。",
+            ),
+        }
+    }
+}
+
+/// What a dual-slot card's failed read says about the card (None: an ordinary failure): 503 the
+/// core is still identifying it, 404 the slot holds no eSIM card (the table is about to say so).
+fn hold_of(f: &Fail) -> Option<Hold> {
+    match f {
+        Fail::Refused(503 | 404, ..) => Some(Hold::Identifying),
+        _ => None,
+    }
+}
+
+/// The card in slot `n` as a request target, when the card table says it can be one: the
+/// single-slot unit's (n 0) as is; a dual-slot unit's slot holding an identified eUICC.
+fn resolve(app: &Shared, n: u8) -> Result<Aim, Hold> {
+    let lay = app.hub.read(seats::layout);
+    match (&lay, n) {
+        (Layout::Single, 0) => return Ok(Aim::default()),
+        (Layout::Single, _) | (Layout::Dual { .. }, 0) => return Err(Hold::Moved),
+        _ => {}
+    }
+    let Some(seat) = lay.seat(n) else {
+        return Err(Hold::Moved);
+    };
+    match seat.id.as_str() {
+        "pending" => return Err(Hold::Identifying),
+        "unknown" => return Err(Hold::Unknown),
+        _ => {}
+    }
+    Ok(Aim { n })
 }
 
 // ---- one tab's picture of the card ----
@@ -265,6 +379,12 @@ pub struct Card {
     pub notifs: Option<Vec<Notif>>,
     /// The core's re-send of the receipts (`resend`, core 1.38.0 on; None = older core)
     pub resend: Option<Resend>,
+    /// The slot of a dual-slot unit's card (0 = the single-slot unit's one card).
+    pub n: u8,
+    /// A dual-slot card that can't be read now, and why.
+    pub hold: Option<Hold>,
+    /// A dual-slot card's role in its slot (`cards.slots[].role`).
+    pub role: String,
 }
 
 /// Where the core's bounded re-send of the receipts is.
@@ -356,7 +476,11 @@ fn bump(app: &Shared) {
 // ---- the view ----
 
 pub struct Row {
-    pub i: usize,
+    /// This row's element-id part (`0`; `-s2-0` in a dual-slot block).
+    pub rid: String,
+    /// What `_esEdit` holds while this row is renamed (the key; `2-<key>` in a dual-slot block:
+    /// the ISD-P AIDs are the same on every card).
+    pub ek: String,
     pub key: String,
     pub name: String,
     pub nick: String,
@@ -394,6 +518,20 @@ pub struct View {
     /// one line on the automatic re-send, when the core runs one
     pub resend: Option<String>,
     pub chip: Vec<ChipRow>,
+    /// Element-id suffix, URL suffix (`&s=2`) and page-local signal suffix of this card's block.
+    pub sx: String,
+    pub sq: String,
+    pub sig: String,
+    /// `?s=2` for a URL without a query of its own.
+    pub q1: String,
+    /// The download's signal filter.
+    pub code_re: String,
+    /// A dual-slot card's heading (「卡槽 2 · 待机」).
+    pub heading: Option<String>,
+    /// The line the list shows while the card is held.
+    pub hold: Option<&'static str>,
+    /// The level of the block's group titles (h3 under a dual-slot card's heading).
+    pub h: &'static str,
 }
 
 impl View {
@@ -441,6 +579,14 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
     let mut reason_data = false;
     let mut retry = false;
     match (&c.chip, &c.chip_fail) {
+        _ if c.hold.is_some() => {
+            let h = c.hold.unwrap_or(Hold::Identifying);
+            if h != Hold::Identifying {
+                tone = "warn";
+                reason = Some(h.text(l).into());
+            }
+            state = h.state(l).into();
+        }
         (None, Some(f)) => {
             tone = "bad";
             state = l
@@ -470,10 +616,17 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
         (Some(_), _) if c.busy => {
             state = said(&c.job_say, l).unwrap_or_else(|| job_word(c.job.as_deref(), l).into());
             reason = Some(
-                l.pick(
-                    "The card handles one operation at a time; the other actions wait until this one ends.",
-                    "卡片一次只能做一件事，其他操作要等这件做完。",
-                )
+                if c.n == 0 {
+                    l.pick(
+                        "The card handles one operation at a time; the other actions wait until this one ends.",
+                        "卡片一次只能做一件事，其他操作要等这件做完。",
+                    )
+                } else {
+                    l.pick(
+                        "The eSIM cards in both slots take one operation at a time between them (it may be the other card's); the other actions wait until it ends.",
+                        "两个卡槽的 eSIM 卡加起来一次只能做一件事（可能是另一张卡在做），其他操作要等这件做完。",
+                    )
+                }
                 .into(),
             );
         }
@@ -524,6 +677,7 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
             },
         },
     }
+    let installed = installed && c.hold.is_none();
     if let Some(age) = c.settling
         && installed
         && !stale
@@ -559,11 +713,13 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
         retry = true;
     }
     let rows = match (&c.list, &c.list_fail) {
+        _ if c.hold.is_some() => None,
         (Some(ps), _) => Some(Ok(ps
             .iter()
             .enumerate()
             .map(|(i, p)| Row {
-                i,
+                rid: if c.n == 0 { i.to_string() } else { format!("-s{}-{i}", c.n) },
+                ek: if c.n == 0 { p.key.clone() } else { format!("{}-{}", c.n, p.key) },
                 key: p.key.clone(),
                 name: p.name(),
                 nick: p.nick.clone().unwrap_or_default(),
@@ -575,11 +731,11 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
         (None, Some(_)) => Some(Err(())),
         (None, None) => None,
     };
-    let busy = c.busy || reboot;
-    let notifs = c.notifs.clone().unwrap_or_default();
+    let busy = c.busy || reboot || c.hold.is_some();
+    let notifs = if c.hold.is_some() { Vec::new() } else { c.notifs.clone().unwrap_or_default() };
     let dash = || "—".to_string();
     let chip = match &c.chip {
-        Some(ch) if ch.installed => vec![
+        Some(ch) if ch.installed && c.hold.is_none() => vec![
             ChipRow {
                 label: "EID",
                 sub: None,
@@ -627,6 +783,14 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
         rows,
         stale,
         locked: c.list.is_none() || stale || busy || c.settling.is_some(),
+        sx: sx(c.n),
+        sq: sq(c.n),
+        sig: if c.n == 0 { String::new() } else { c.n.to_string() },
+        q1: if c.n == 0 { String::new() } else { format!("?s={}", c.n) },
+        code_re: if c.n == 0 { "/^_esCo/".into() } else { format!("/^_esCo(de|nf){}$/", c.n) },
+        heading: (c.n != 0).then(|| seats::heading(c.n, &c.role, l)),
+        h: if c.n == 0 { "h2" } else { "h3" },
+        hold: c.hold.map(|h| h.text(l)),
         notif_dis: busy || notifs.is_empty(),
         resend: c.resend.as_ref().map(|r| match r {
             Resend::In(s) => {
@@ -676,16 +840,30 @@ pub fn render(c: &Card, l: Lang) -> Vec<(String, String)> {
 pub struct Poll {
     l: Lang,
     who: Caller,
-    card: Card,
+    /// One per card the page was built for (`built`), in that order.
+    seats: Vec<SeatPoll>,
+    /// The slots the page's blocks are for (`Layout::ns` when the page was rendered).
+    built: Vec<u8>,
+    /// The page was rendered before the hub had any block (see [`cards_html`]).
+    cold: bool,
     seen_gen: u64,
+    /// The `sim` block's (epoch, phase) the last read saw.
+    seen_sim: Option<(u64, String)>,
+    /// The `cards` block the last step saw.
+    seen_cards: Option<Value>,
+}
+
+/// One card's reads and their schedule.
+pub struct SeatPoll {
+    card: Card,
     first: bool,
     next_chip: Option<Instant>,
     /// The next profile read; None = only on a trigger (see the module doc).
     next_prof: Option<Instant>,
     /// Re-read until then (the card was busy or settling).
     settle_until: Option<Instant>,
-    /// The `sim` block's (epoch, phase) the last read saw.
-    seen_sim: Option<(u64, String)>,
+    /// The card table's EID tail for this slot when last read: another tail = another card.
+    tail: String,
 }
 
 /// The `sim` block's identity epoch and phase (u60d stamps them every round).
@@ -696,24 +874,54 @@ fn sim_mark(app: &Shared) -> Option<(u64, String)> {
     })
 }
 
-impl Poll {
-    async fn chip(&mut self, app: &Shared) {
-        match crate::agent::get(app, &self.who, "/api/esim/status").await {
+impl SeatPoll {
+    fn new(n: u8) -> SeatPoll {
+        SeatPoll {
+            card: Card { n, ..Card::default() },
+            first: true,
+            next_chip: None,
+            next_prof: None,
+            settle_until: None,
+            tail: String::new(),
+        }
+    }
+    fn n(&self) -> u8 {
+        self.card.n
+    }
+    async fn chip(&mut self, app: &Shared, who: &Caller, aim: &Aim) {
+        let r = crate::agent::get(app, who, &format!("/api/esim/status{}", aim.q())).await;
+        let n = self.n();
+        match r {
             Ok(v) => {
                 self.card.chip = Some(chip(&v));
                 self.card.chip_fail = None;
+                self.card.hold = None;
                 self.next_chip = None;
             }
-            Err(f) => {
-                self.card.chip_fail = Some(f);
-                self.next_chip = Some(Instant::now() + CHIP_RETRY);
-            }
+            Err(f) => match (n, hold_of(&f)) {
+                (1.., Some(h)) => {
+                    self.card.hold = Some(h);
+                    self.next_chip = Some(Instant::now() + PROFILES_EVERY);
+                }
+                _ => {
+                    self.card.chip_fail = Some(f);
+                    self.next_chip = Some(Instant::now() + CHIP_RETRY);
+                }
+            },
         }
     }
-    async fn list(&mut self, app: &Shared) {
-        self.card.take_list(read_list(app, &self.who).await);
+    async fn list(&mut self, app: &Shared, who: &Caller, aim: &Aim) {
+        let r = read_list(app, who, aim).await;
+        if let (1.., Err(f)) = (self.n(), &r)
+            && let Some(h) = hold_of(f)
+        {
+            self.card.hold = Some(h);
+            self.next_chip = Some(Instant::now() + PROFILES_EVERY);
+            return;
+        }
+        self.card.take_list(r);
         if self.card.busy {
-            let j = crate::agent::get(app, &self.who, "/api/esim/job")
+            let j = crate::agent::get(app, who, "/api/esim/job")
                 .await
                 .ok()
                 .filter(|j| j["status"] == "running");
@@ -729,25 +937,142 @@ impl Poll {
             .filter(|t| now < *t)
             .map(|_| now + PROFILES_EVERY);
     }
-    async fn notifs(&mut self, app: &Shared) {
+    async fn notifs(&mut self, app: &Shared, who: &Caller, aim: &Aim) {
         // null while a job runs: keep the last list
-        if let Ok(v) = crate::agent::get_whole(app, &self.who, "/api/esim/notifications").await
+        if let Ok(v) = crate::agent::get_whole(app, who, &format!("/api/esim/notifications{}", aim.q())).await
             && let Some(n) = notifs(&v["data"])
         {
             self.card.notifs = Some(n);
             self.card.resend = resend_of(&v);
         }
     }
+
+    /// Read what is due; `all`: everything (first step, Refresh, a write ended).
+    async fn step(&mut self, app: &Shared, who: &Caller, lay: &Layout, all: bool, moved: bool) {
+        let n = self.n();
+        let now = Instant::now();
+        // which card, on a dual-slot unit
+        let aim = match lay.seat(n) {
+            None if n == 0 && *lay == Layout::Single => Aim::default(),
+            None => {
+                self.card.hold = Some(Hold::Moved);
+                return;
+            }
+            Some(seat) => {
+                self.card.role = seat.role.clone();
+                match seat.id.as_str() {
+                    "pending" => {
+                        self.card.hold = Some(Hold::Identifying);
+                        return;
+                    }
+                    "unknown" => {
+                        self.card.hold = Some(Hold::Unknown);
+                        return;
+                    }
+                    _ => {}
+                }
+                if seat.eid_tail != self.tail {
+                    // another card in this slot: what was shown is the last card's
+                    self.card = Card { n, role: seat.role.clone(), ..Card::default() };
+                    self.tail = seat.eid_tail.clone();
+                    self.next_chip = None;
+                    self.next_prof = None;
+                    self.settle_until = None;
+                    self.first = true;
+                }
+                Aim { n }
+            }
+        };
+        let all = all || std::mem::take(&mut self.first);
+        let held = self.card.hold.is_some();
+        // a held card (pending/unknown just now, 503/404) is read again as soon as the table
+        // says it is an eUICC
+        if all || held && self.next_chip.is_none() || self.next_chip.is_some_and(|t| now >= t) {
+            self.chip(app, who, &aim).await;
+        }
+        if self.card.hold.is_some() {
+            return;
+        }
+        if self.card.installed() && (all || held || moved || self.next_prof.is_some_and(|t| now >= t)) {
+            self.list(app, who, &aim).await;
+            // null while busy, so only worth asking when the list is real
+            if !self.card.busy && self.card.hold.is_none() {
+                self.notifs(app, who, &aim).await;
+            }
+        }
+    }
+
+    fn next(&self) -> Option<Instant> {
+        match (self.next_chip, self.next_prof.filter(|_| self.card.installed())) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+}
+
+/// The page-level line above the cards (`es-cards`): no table yet, no eSIM card in either slot,
+/// or the cards changed since the page was built. `cold`: the page was built before luyaz-web had
+/// heard from the core at all (first tab after a restart), so it guessed "one card": it reloads
+/// itself at once instead of asking (nothing can have been typed yet).
+pub fn cards_html(lay: &Layout, built: &[u8], cold: bool, l: Lang) -> String {
+    let note = |t: &str, reload: bool| {
+        format!(
+            "<div id=\"es-cards\"{}><p class=\"t-note\" role=\"status\">{}</p>{}</div>",
+            if reload && cold { " data-init=\"window.location.reload()\"" } else { "" },
+            crate::agent::esc(t),
+            if reload {
+                format!(
+                    "<a class=\"nd-btn nd-btn--secondary nd-btn--sm mt-2\" href=\"{PATH}\">{}</a>",
+                    l.pick("Reload", "重新载入")
+                )
+            } else {
+                String::new()
+            }
+        )
+    };
+    match lay {
+        _ if lay.ns() != built => note(Hold::Moved.text(l), true),
+        Layout::Dual { table: false, .. } => note(
+            l.pick(
+                "Identifying the cards in both slots…",
+                "正在识别两个卡槽里的卡…",
+            ),
+            false,
+        ),
+        Layout::Dual { seats, .. } if seats.is_empty() => note(
+            l.pick(
+                "Neither slot holds an eSIM card. Put a removable eUICC card (eSTK.me / 5ber and similar) into a slot to manage its profiles here.",
+                "两个卡槽里都没有 eSIM 卡。插一张可插拔 eUICC 卡（eSTK.me / 5ber 等）进卡槽，就能在这里管理它的配置。",
+            ),
+            false,
+        ),
+        _ => "<div id=\"es-cards\" hidden></div>".into(),
+    }
+}
+
+impl Poll {
+    fn new(l: Lang, who: Caller, built: Vec<u8>, cold: bool) -> Poll {
+        Poll {
+            l,
+            who,
+            seats: built.iter().map(|&n| SeatPoll::new(n)).collect(),
+            built,
+            cold,
+            seen_gen: GEN.load(Ordering::Relaxed),
+            seen_sim: None,
+            seen_cards: None,
+        }
+    }
 }
 
 impl Polled for Poll {
     fn watches(&self, block: &str) -> bool {
-        block == "sim"
+        block == "sim" || block == "cards"
     }
 
     /// The card may have changed under us: every tab on this page reads it again.
     fn render(&mut self, app: &Shared) -> Option<Vec<(String, String)>> {
-        if sim_mark(app) != self.seen_sim {
+        if sim_mark(app) != self.seen_sim || app.hub.read(seats::mark) != self.seen_cards {
             let _ = app.kick.send(PATH);
         }
         None
@@ -757,33 +1082,37 @@ impl Polled for Poll {
         let g = GEN.load(Ordering::Relaxed);
         let sim = sim_mark(app);
         let moved = sim != self.seen_sim;
-        let all = self.first || g != self.seen_gen;
-        self.first = false;
+        let all = g != self.seen_gen;
         self.seen_gen = g;
         self.seen_sim = sim;
-        self.card.sim_say = app
+        let (lay, cards) = app.hub.read(|st| (seats::layout(st), seats::mark(st)));
+        let cards_moved = cards != self.seen_cards;
+        self.seen_cards = cards;
+        let sim_say = app
             .hub
             .read(|st| st.blocks.get("sim").and_then(|b| say_of(&b.data)));
-        let now = Instant::now();
-        if all || self.next_chip.is_some_and(|t| now >= t) {
-            self.chip(app).await;
+        let mut out = Vec::new();
+        if self.built != [0] || self.cold {
+            out.push(("es-cards".to_owned(), cards_html(&lay, &self.built, self.cold, self.l)));
         }
-        if self.card.installed() && (all || moved || self.next_prof.is_some_and(|t| now >= t)) {
-            self.list(app).await;
-            // null while busy, so only worth asking when the list is real
-            if !self.card.busy {
-                self.notifs(app).await;
-            }
+        let mut next: Option<Instant> = None;
+        for sp in &mut self.seats {
+            // the SIM identity words are the data card's
+            sp.card.sim_say = sim_say
+                .clone()
+                .filter(|_| sp.n() == 0 || sp.card.role == "data");
+            sp.step(app, &self.who, &lay, all, moved || cards_moved).await;
+            out.extend(render(&sp.card, self.l));
+            next = match (next, sp.next()) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
         }
-        let next = match (self.next_chip, self.next_prof.filter(|_| self.card.installed())) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
         let wait = next.map_or(Duration::from_secs(3600), |t| {
             t.saturating_duration_since(Instant::now())
                 .max(Duration::from_millis(200))
         });
-        (render(&self.card, self.l), wait)
+        (out, wait)
     }
 }
 
@@ -832,6 +1161,11 @@ pub struct Req {
     pub word: Option<String>,
     /// Nick: the name the card had when asked (the core refuses if it changed since).
     pub was: Option<String>,
+    /// The card asked about: the send, its readback and the verifier stay on it.
+    pub aim: Aim,
+    /// Switch: the card's slot is not the data slot (a dual-slot unit's standby / voice / off
+    /// card): only the card changes, mobile data is not touched (dual-slot design §2).
+    pub standby: bool,
 }
 
 type Stash = Mutex<HashMap<String, (Instant, Act, Req)>>;
@@ -904,6 +1238,32 @@ pub fn confirm(act: Act, r: &Req, from: Option<&str>, n_notifs: usize, l: Lang) 
         revert: crate::write::Revert::No,
     };
     match act {
+        Act::Switch if r.standby => write::Confirm {
+            tier: write::Tier::Dialog,
+            title: match l {
+                Lang::En => format!("Switch to “{name}”?"),
+                Lang::Zh => format!("切换到「{name}」？"),
+            },
+            what: match (l, from) {
+                (Lang::En, Some(f)) => format!("The card enables “{name}” instead of “{f}”. This slot isn't the one in use for data: mobile data isn't interrupted, and the new profile takes effect after a restart (in dual SIM mode this card may not be read at all until then)."),
+                (Lang::En, None) => format!("The card enables “{name}”. This slot isn't the one in use for data: mobile data isn't interrupted, and the new profile takes effect after a restart (in dual SIM mode this card may not be read at all until then)."),
+                (Lang::Zh, Some(f)) => format!("卡片启用「{name}」，替换「{f}」。这个卡槽现在不在上网：移动数据不会中断，新配置在重启设备后生效（双卡模式下，重启前这张卡可能会读不到）。"),
+                (Lang::Zh, None) => format!("卡片启用「{name}」。这个卡槽现在不在上网：移动数据不会中断，新配置在重启设备后生效（双卡模式下，重启前这张卡可能会读不到）。"),
+            },
+            downtime: None,
+            recovery: from.map(|f| match l {
+                Lang::En => format!("Switch back to “{f}” here or on the touchscreen's eSIM page."),
+                Lang::Zh => format!("在这里或触屏的 eSIM 页切回「{f}」。"),
+            }),
+            action: match l {
+                Lang::En => format!("Switch to “{name}”"),
+                Lang::Zh => format!("确认：切换到「{name}」"),
+            },
+            cuts_uplink: false,
+            word: None,
+            danger: false,
+            revert: crate::write::Revert::No,
+        },
         Act::Switch => write::Confirm {
             tier: write::Tier::Dialog,
             title: match l {
@@ -1190,13 +1550,13 @@ async fn readback(app: &Shared, who: &Caller, act: Act, r: &Req) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let shown = if act == Act::Notif {
-            crate::agent::get(app, who, "/api/esim/notifications")
+            crate::agent::get(app, who, &format!("/api/esim/notifications{}", r.aim.q()))
                 .await
                 .ok()
                 .and_then(|v| notifs(&v))
                 .is_some_and(|n| n.is_empty())
         } else {
-            matches!(read_list(app, who).await, Ok(Listed::List(ps)) if shows(act, r, &ps))
+            matches!(read_list(app, who, &r.aim).await, Ok(Listed::List(ps)) if shows(act, r, &ps))
         };
         if shown {
             return true;
@@ -1251,13 +1611,14 @@ async fn wait_job(
     app: &Shared,
     who: &Caller,
     ours: u64,
-    act: Act,
+    (act, n): (Act, u8),
     say: &mut Option<String>,
     l: Lang,
     tx: &tokio::sync::mpsc::Sender<Event>,
 ) -> JobEnd {
     let mut seen = None;
-    let mut shown = RETRY_EMPTY.to_string();
+    let empty = reid(RETRY_EMPTY, "es-retry", n);
+    let mut shown = empty.clone();
     let since = now_unix();
     let every = if act == Act::Notif {
         NOTIF_JOB_EVERY
@@ -1283,7 +1644,7 @@ async fn wait_job(
             *say = job_say(ours, &j, l);
             if act == Act::Switch {
                 let r = busy_retry(ours, &j, since, now_unix(), &mut seen);
-                let html = retry_html(r.as_ref(), r.is_some() && stopping(), l);
+                let html = retry_in(n, retry_html(r.as_ref(), r.is_some() && stopping(), l));
                 if html != shown {
                     let _ = tx.send(patch(&html)).await;
                     shown = html;
@@ -1298,8 +1659,8 @@ async fn wait_job(
             }
         }
     };
-    if shown != RETRY_EMPTY {
-        let _ = tx.send(patch(RETRY_EMPTY)).await;
+    if shown != empty {
+        let _ = tx.send(patch(&empty)).await;
     }
     end
 }
@@ -1439,18 +1800,23 @@ pub fn stop_reply(r: Result<(u16, &Value), &Fail>, l: Lang) -> String {
 
 /// POST /router/esim/stop: stop a switch's busy-card retries. Answers at once; the switch's own
 /// reply then ends with "retries stopped".
-pub async fn stop(State(app): State<Shared>, req: axum::extract::Request) -> impl IntoResponse {
+pub async fn stop(
+    State(app): State<Shared>,
+    Query(q): Query<SeatQuery>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
     let who = Caller::of(&app, &req);
     let r = crate::agent::post_raw(&app, &who, "/api/esim/cancel", &json!({})).await;
     if matches!(&r, Ok((c, v)) if (200..300).contains(c) && v["ok"] != false) {
         *stop_mark().lock().unwrap() = Some(Instant::now());
     }
-    one(stop_reply(r.as_ref().map(|(c, v)| (*c, v)), l))
+    one(retry_in(q.s, stop_reply(r.as_ref().map(|(c, v)| (*c, v)), l)))
 }
 
 fn area_html(
     act: Act,
+    n: u8,
     l: Lang,
     remote: Via,
     set: &str,
@@ -1458,7 +1824,7 @@ fn area_html(
     phase: &write::Phase,
 ) -> String {
     write::Area {
-        id: act.area(),
+        id: &format!("{}{}", act.area(), sx(n)),
         l,
         remote,
         set,
@@ -1468,12 +1834,40 @@ fn area_html(
     .html()
 }
 
-fn cancel_url(act: Act) -> String {
-    format!("{PATH}/cancel?a={}", act.area())
+fn cancel_url(act: Act, n: u8) -> String {
+    format!("{PATH}/cancel?a={}{}", act.area(), sq(n))
 }
 
-fn area(act: Act, l: Lang, remote: Via, phase: &write::Phase) -> String {
-    area_html(act, l, remote, "", &cancel_url(act), phase)
+fn area(act: Act, n: u8, l: Lang, remote: Via, phase: &write::Phase) -> String {
+    area_html(act, n, l, remote, "", &cancel_url(act, n), phase)
+}
+
+/// `html`'s element `id="<base>"` as slot `n`'s (`<base>-s2`).
+fn reid(html: &str, base: &str, n: u8) -> String {
+    if n == 0 {
+        return html.to_owned();
+    }
+    html.replacen(&format!("id=\"{base}\""), &format!("id=\"{base}{}\"", sx(n)), 1)
+}
+
+/// The retry progress of slot `n`'s block (its Stop retrying patches that block's element).
+fn retry_in(n: u8, html: String) -> String {
+    if n == 0 {
+        return html;
+    }
+    reid(&html, "es-retry", n).replace(&format!("'{STOP}'"), &format!("'{STOP}?s={n}'"))
+}
+
+/// [`after_html`] for slot `n`'s block.
+pub fn after_in(key: &str, n: u8) -> String {
+    reid(&after_html(key), "es-after", n).replace(&format!("after?k={key}'"), &format!("after?k={key}{}'", sq(n)))
+}
+
+/// `?s=<slot>` of a button's URL (absent: the single-slot unit's card).
+#[derive(Deserialize, Default)]
+pub struct SeatQuery {
+    #[serde(default)]
+    s: u8,
 }
 
 fn signals(v: Value) -> Event {
@@ -1502,6 +1896,7 @@ async fn run(
     l: Lang,
     tx: tokio::sync::mpsc::Sender<Event>,
 ) {
+    let n = r.aim.n;
     let pending_text = match (act, l) {
         (Act::Switch, Lang::En) => format!("Switching to “{}”… usually about 40 s.", r.name),
         (Act::Switch, Lang::Zh) => format!("正在切换到「{}」…通常约 40 秒。", r.name),
@@ -1518,12 +1913,13 @@ async fn run(
     };
     // a reply lost during a switch (the device rebooted under it) gets the verifier
     let cancel = if act == Act::Switch {
-        format!("{}&k={}", cancel_url(act), r.key)
+        format!("{}&k={}", cancel_url(act, n), r.key)
     } else {
-        cancel_url(act)
+        cancel_url(act, n)
     };
     let pend = area_html(
         act,
+        n,
         l,
         Via::Local,
         "",
@@ -1533,7 +1929,8 @@ async fn run(
     if tx.send(patch(&pend)).await.is_err() {
         return; // the tab went away before anything was sent: don't write
     }
-    let body = match act {
+    // a dual-slot card is always written with its slot (`r.aim`, bound at the ask)
+    let body = r.aim.body(match act {
         Act::Switch | Act::Delete => json!({"iccid": r.iccid}),
         Act::Nick => match &r.was {
             Some(was) => json!({"iccid": r.iccid, "nickname": r.nick, "expect": was}),
@@ -1542,7 +1939,7 @@ async fn run(
         Act::Download if r.conf.is_empty() => json!({"code": r.code}),
         Act::Download => json!({"code": r.code, "confirmation_code": r.conf}),
         Act::Notif => json!({}),
-    };
+    });
     let o = match crate::agent::post_raw(&app, &who, act.job_path(), &body).await {
         Err(Fail::Unreachable) => write::Outcome::Unknown,
         Err(f) => write::Outcome::Failed(f.text(l)),
@@ -1559,7 +1956,7 @@ async fn run(
             None => write::Outcome::Unknown,
             Some(id) => {
                 let mut say = None;
-                let end = wait_job(&app, &who, id, act, &mut say, l, &tx).await;
+                let end = wait_job(&app, &who, id, (act, n), &mut say, l, &tx).await;
                 // the core's shared word for a switch (`sim_say`); only on outcomes it describes
                 let say = say.filter(|_| act == Act::Switch);
                 let said = |o| with_say(o, say.as_deref(), l);
@@ -1580,6 +1977,7 @@ async fn run(
                             "{}\n{}",
                             area(
                                 act,
+                                n,
                                 l,
                                 Via::Local,
                                 &write::Phase::Pending(format!(
@@ -1591,7 +1989,7 @@ async fn run(
                                     )
                                 ))
                             ),
-                            after_html(&r.key)
+                            after_in(&r.key, n)
                         );
                         // close the reply now: the reboot must not cut it (a cut reply reads as lost)
                         let _ = tx.send(patch(&html)).await;
@@ -1622,7 +2020,7 @@ async fn run(
     let ok = matches!(o, write::Outcome::Applied(_));
     bump(&app);
     let _ = tx
-        .send(patch(&area(act, l, Via::Local, &write::Phase::Done(o))))
+        .send(patch(&area(act, n, l, Via::Local, &write::Phase::Done(o))))
         .await;
     if ok {
         match act {
@@ -1630,8 +2028,9 @@ async fn run(
                 let _ = tx.send(signals(json!({"_esEdit": ""}))).await;
             }
             Act::Download => {
+                let sig = if n == 0 { String::new() } else { n.to_string() };
                 let _ = tx
-                    .send(signals(json!({"_esCode": "", "_esConf": ""})))
+                    .send(signals(json!({format!("_esCode{sig}"): "", format!("_esConf{sig}"): ""})))
                     .await;
             }
             _ => {}
@@ -1641,46 +2040,136 @@ async fn run(
 
 // ---- the page ----
 
+/// One card's block (the single-slot unit's: exactly the page as it was).
 #[derive(Template)]
-#[template(path = "esim.html")]
-struct Page {
-    shell: crate::shell::Shell,
+#[template(path = "esim_card.html")]
+struct Block {
     l: Lang,
+    n: u8,
+    sx: String,
+    sig: String,
+    h: &'static str,
     leaves: Vec<(String, String)>,
     prof_op: String,
     dl_op: String,
     nt_op: String,
 }
 
-impl Page {
+impl Block {
     fn leaf(&self, id: &str) -> &str {
+        let id = format!("{id}{}", self.sx);
         self.leaves
             .iter()
-            .find(|(k, _)| k == id)
+            .find(|(k, _)| *k == id)
             .map_or("", |(_, h)| h.as_str())
     }
+}
+
+#[derive(Template)]
+#[template(path = "esim.html")]
+struct Page {
+    shell: crate::shell::Shell,
+    l: Lang,
+    /// The page-local signals (each dual-slot card has its own activation code fields).
+    signals: String,
+    cards: String,
+    blocks: Vec<String>,
+}
+
+/// The page-local signals for the cards in `ns`.
+fn signals_init(ns: &[u8]) -> String {
+    let mut s = String::from("{_esEdit: '', _esNick: ''");
+    for &n in ns {
+        let k = if n == 0 { String::new() } else { n.to_string() };
+        s.push_str(&format!(", _esCode{k}: '', _esConf{k}: ''"));
+    }
+    s.push('}');
+    s
+}
+
+/// `b=` of the stream's URL: the slots the page was built for ("" for the single-slot unit's
+/// one card, the URL as it always was).
+fn built_arg(ns: &[u8]) -> String {
+    if ns.is_empty() {
+        return "-".into();
+    }
+    if ns == [0] {
+        return String::new();
+    }
+    ns.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+}
+
+fn built_of(b: &str) -> Vec<u8> {
+    let ns: Vec<u8> = b
+        .split(',')
+        .filter_map(|x| x.parse().ok())
+        .filter(|n| *n <= 2)
+        .take(2)
+        .collect();
+    if b.is_empty() { vec![0] } else { ns }
 }
 
 pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Response {
     let headers = req.headers().clone();
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let l = ctx.lang;
-    let shell = app.hub.read(|st| {
-        crate::shell::Shell::new(&headers, PATH).live(
+    let (shell, lay, cold) = app.hub.read(|st| {
+        let lay = seats::layout(st);
+        // nothing heard from the core yet (first tab after a restart): the layout is a guess
+        let cold = !st.blocks.contains_key("sim");
+        let shell = crate::shell::Shell::new(&headers, PATH).live(
             st,
             &ctx,
-            Some(format!("{PATH}/events?g={}", st.generation)),
-        )
+            Some(format!(
+                "{PATH}/events?g={}{}{}",
+                st.generation,
+                match built_arg(&lay.ns()) {
+                    b if b.is_empty() => b,
+                    b => format!("&b={b}"),
+                },
+                if cold { "&c=1" } else { "" }
+            )),
+        );
+        (shell, lay, cold)
     });
+    let ns = lay.ns();
     let idle = write::Phase::Idle;
+    let blocks = ns
+        .iter()
+        .map(|&n| {
+            // the card is read by the stream (lpac takes a while): the first screen is the skeleton
+            let card = Card {
+                n,
+                role: lay.seat(n).map(|s| s.role.clone()).unwrap_or_default(),
+                hold: lay.seat(n).and_then(|s| match s.id.as_str() {
+                    "pending" => Some(Hold::Identifying),
+                    "unknown" => Some(Hold::Unknown),
+                    _ => None,
+                }),
+                ..Card::default()
+            };
+            Block {
+                l,
+                n,
+                sx: sx(n),
+                sig: if n == 0 { String::new() } else { n.to_string() },
+                h: if n == 0 { "h2" } else { "h3" },
+                leaves: render(&card, l),
+                prof_op: area(Act::Switch, n, l, ctx.remote, &idle),
+                dl_op: area(Act::Download, n, l, ctx.remote, &idle),
+                nt_op: area(Act::Notif, n, l, ctx.remote, &idle),
+            }
+            .render()
+            .unwrap()
+        })
+        .collect();
     let html = Page {
         shell,
         l,
-        // the card is read by the stream (lpac takes a while): the first screen is the skeleton
-        leaves: render(&Card::default(), l),
-        prof_op: area(Act::Switch, l, ctx.remote, &idle),
-        dl_op: area(Act::Download, l, ctx.remote, &idle),
-        nt_op: area(Act::Notif, l, ctx.remote, &idle),
+        signals: signals_init(&ns),
+        // the single-slot unit's page as it always was, unless it was a guess (cold)
+        cards: if ns == [0] && !cold { String::new() } else { cards_html(&lay, &ns, cold, l) },
+        blocks,
     }
     .render()
     .unwrap();
@@ -1692,23 +2181,25 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
     )
 }
 
+/// The stream's query: the hub generation and the slots the page was built for.
+#[derive(Deserialize, Default)]
+pub struct EventsQuery {
+    #[serde(default)]
+    g: u64,
+    #[serde(default)]
+    b: String,
+    /// `1`: the page was rendered before the hub had heard from the core.
+    #[serde(default)]
+    c: u8,
+}
+
 pub async fn events(
     State(app): State<Shared>,
-    Query(q): Query<StreamQuery>,
+    Query(q): Query<EventsQuery>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
-    let p = Poll {
-        l: ctx.lang,
-        who: Caller::of(&app, &req),
-        card: Card::default(),
-        seen_gen: GEN.load(Ordering::Relaxed),
-        first: true,
-        next_chip: None,
-        next_prof: None,
-        settle_until: None,
-        seen_sim: None,
-    };
+    let p = Poll::new(ctx.lang, Caller::of(&app, &req), built_of(&q.b), q.c == 1);
     crate::agent::stream(app, ctx, q.g, PATH, p)
 }
 
@@ -1726,19 +2217,24 @@ fn one(html: String) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
 pub struct KeyQuery {
     #[serde(default)]
     k: String,
+    /// The card's slot (dual-slot unit; absent = the single-slot unit's card).
+    #[serde(default)]
+    s: u8,
 }
 
 /// The card now, for an ask: the profile asked about and the one in use, or why not now.
 async fn gate(
     app: &Shared,
     who: &Caller,
+    n: u8,
     key: Option<&str>,
     l: Lang,
-) -> Result<(Vec<Profile>, Option<Profile>), write::Outcome> {
+) -> Result<(Aim, Vec<Profile>, Option<Profile>), write::Outcome> {
     if rebooting() {
         return Err(write::Outcome::NotYet(reboot_banner(l).into()));
     }
-    let ps = match read_list(app, who).await {
+    let aim = resolve(app, n).map_err(|h| write::Outcome::NotYet(h.text(l).into()))?;
+    let ps = match read_list(app, who, &aim).await {
         Ok(Listed::List(ps)) => ps,
         Ok(Listed::Busy) => {
             return Err(write::Outcome::NotYet(job_clash(l).into()));
@@ -1763,7 +2259,7 @@ async fn gate(
         }
     };
     let Some(k) = key else {
-        return Ok((ps, None));
+        return Ok((aim, ps, None));
     };
     let p = ps.iter().find(|p| p.key == k).cloned();
     if p.is_none() {
@@ -1775,39 +2271,47 @@ async fn gate(
             .into(),
         ));
     }
-    Ok((ps, p))
+    Ok((aim, ps, p))
 }
 
 fn ask_reply(
     act: Act,
+    n: u8,
     l: Lang,
     remote: Via,
     r: Result<(write::Confirm, Req), write::Outcome>,
 ) -> String {
     match r {
         Ok((c, req)) => {
-            let set = format!("{PATH}/set?a={}&t={}", act.area(), put(act, req));
+            let set = format!("{PATH}/set?a={}&t={}{}", act.area(), put(act, req), sq(n));
             area_html(
                 act,
+                n,
                 l,
                 remote,
                 &set,
-                &cancel_url(act),
+                &cancel_url(act, n),
                 &write::Phase::Ask(c),
             )
         }
-        Err(o) => area(act, l, remote, &write::Phase::Done(o)),
+        Err(o) => area(act, n, l, remote, &write::Phase::Done(o)),
     }
 }
 
-async fn row_ask(app: Shared, act: Act, key: String, req: axum::extract::Request) -> String {
+async fn row_ask(app: Shared, act: Act, key: String, n: u8, req: axum::extract::Request) -> String {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let (l, remote) = (ctx.lang, ctx.remote);
     let who = Caller::of(&app, &req);
-    if !valid_key(&key) {
-        return area(act, l, remote, &write::Phase::Idle);
+    if !valid_key(&key) || n > 2 {
+        return area(act, 0, l, remote, &write::Phase::Idle);
     }
-    let r = gate(&app, &who, Some(&key), l).await.and_then(|(ps, p)| {
+    let standby = n != 0
+        && app
+            .hub
+            .read(seats::layout)
+            .seat(n)
+            .is_some_and(|s| s.role != "data");
+    let r = gate(&app, &who, n, Some(&key), l).await.and_then(|(aim, ps, p)| {
         let p = p.expect("gate found it");
         let from = ps.iter().find(|x| x.enabled).map(Profile::name);
         if p.enabled {
@@ -1828,6 +2332,8 @@ async fn row_ask(app: Shared, act: Act, key: String, req: axum::extract::Request
             key: p.key.clone(),
             name: p.name(),
             word: (act == Act::Delete).then(|| delete_word(l).into()),
+            aim,
+            standby,
             ..Req::default()
         };
         Ok((confirm(act, &req, from.as_deref(), 0, l), req))
@@ -1835,7 +2341,7 @@ async fn row_ask(app: Shared, act: Act, key: String, req: axum::extract::Request
     if r.is_err() {
         bump(&app);
     }
-    ask_reply(act, l, remote, r)
+    ask_reply(act, n, l, remote, r)
 }
 
 pub async fn switch_ask(
@@ -1843,7 +2349,7 @@ pub async fn switch_ask(
     Query(q): Query<KeyQuery>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
-    one(row_ask(app, Act::Switch, q.k, req).await)
+    one(row_ask(app, Act::Switch, q.k, q.s, req).await)
 }
 
 pub async fn delete_ask(
@@ -1851,25 +2357,33 @@ pub async fn delete_ask(
     Query(q): Query<KeyQuery>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
-    one(row_ask(app, Act::Delete, q.k, req).await)
+    one(row_ask(app, Act::Delete, q.k, q.s, req).await)
 }
 
 /// The page-local signals an ask posts (`filterSignals`).
-#[derive(Deserialize, Default)]
+#[derive(Default)]
 pub struct FormIn {
-    #[serde(default, rename = "_esNick")]
     nick: String,
-    #[serde(default, rename = "_esCode")]
     code: String,
-    #[serde(default, rename = "_esConf")]
     conf: String,
 }
 
-async fn form_in(req: axum::extract::Request) -> FormIn {
+/// The signals of slot `n`'s block (`_esCode2`; the single-slot unit's `_esCode`).
+pub fn form_of(v: &Value, n: u8) -> FormIn {
+    let k = if n == 0 { String::new() } else { n.to_string() };
+    let s = |name: &str| v[name].as_str().unwrap_or("").to_owned();
+    FormIn {
+        nick: s("_esNick"),
+        code: s(&format!("_esCode{k}")),
+        conf: s(&format!("_esConf{k}")),
+    }
+}
+
+async fn form_in(req: axum::extract::Request, n: u8) -> FormIn {
     let body = axum::body::to_bytes(req.into_body(), 16 * 1024)
         .await
         .unwrap_or_default();
-    serde_json::from_slice(&body).unwrap_or_default()
+    form_of(&serde_json::from_slice(&body).unwrap_or_default(), n)
 }
 
 /// "Save" of a nickname: unchanged closes the box; else the inline confirm.
@@ -1881,28 +2395,29 @@ pub async fn nick_ask(
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let (l, remote) = (ctx.lang, ctx.remote);
     let who = Caller::of(&app, &req);
-    let f = form_in(req).await;
+    let n = q.s;
+    let f = form_in(req, n).await;
     let act = Act::Nick;
-    if !valid_key(&q.k) {
-        return one(area(act, l, remote, &write::Phase::Idle)).into_response();
+    if !valid_key(&q.k) || n > 2 {
+        return one(area(act, 0, l, remote, &write::Phase::Idle)).into_response();
     }
     let nick = f.nick.trim().to_owned();
     if let Some(say) = nick_problem(&nick, l) {
         let o = write::Outcome::NotYet(say.into());
-        return one(area(act, l, remote, &write::Phase::Done(o))).into_response();
+        return one(area(act, n, l, remote, &write::Phase::Done(o))).into_response();
     }
-    let r = gate(&app, &who, Some(&q.k), l).await;
-    if let Ok((_, Some(p))) = &r
+    let r = gate(&app, &who, n, Some(&q.k), l).await;
+    if let Ok((_, _, Some(p))) = &r
         && p.nick.clone().unwrap_or_default() == nick
     {
-        let html = area(act, l, remote, &write::Phase::Idle);
+        let html = area(act, n, l, remote, &write::Phase::Idle);
         return Sse::new(futures_util::stream::iter([
             Ok::<_, Infallible>(patch(&html)),
             Ok(signals(json!({"_esEdit": ""}))),
         ]))
         .into_response();
     }
-    let r = r.map(|(_, p)| {
+    let r = r.map(|(aim, _, p)| {
         let p = p.expect("gate found it");
         let req = Req {
             iccid: p.iccid.clone(),
@@ -1910,11 +2425,12 @@ pub async fn nick_ask(
             name: p.name(),
             nick,
             was: Some(p.nick.clone().unwrap_or_default()),
+            aim,
             ..Req::default()
         };
         (confirm(act, &req, None, 0, l), req)
     });
-    one(ask_reply(act, l, remote, r)).into_response()
+    one(ask_reply(act, n, l, remote, r)).into_response()
 }
 
 /// Why a nickname cannot be saved, before asking the card: the core's limits (64 bytes,
@@ -1953,12 +2469,14 @@ pub fn code_ok(c: &str) -> bool {
 
 pub async fn download_ask(
     State(app): State<Shared>,
+    Query(q): Query<SeatQuery>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let (l, remote) = (ctx.lang, ctx.remote);
     let who = Caller::of(&app, &req);
-    let f = form_in(req).await;
+    let n = q.s.min(2);
+    let f = form_in(req, n).await;
     let act = Act::Download;
     let code = f.code.trim().to_owned();
     if !code_ok(&code) {
@@ -1969,47 +2487,53 @@ pub async fn download_ask(
             )
             .into(),
         );
-        return one(area(act, l, remote, &write::Phase::Done(o)));
+        return one(area(act, n, l, remote, &write::Phase::Done(o)));
     }
-    let r = gate(&app, &who, None, l).await.map(|(ps, _)| {
+    let r = gate(&app, &who, n, None, l).await.map(|(aim, ps, _)| {
         let req = Req {
             code,
             conf: f.conf.trim().to_owned(),
             before: ps.len(),
+            aim,
             ..Req::default()
         };
         (confirm(act, &req, None, 0, l), req)
     });
-    one(ask_reply(act, l, remote, r))
+    one(ask_reply(act, n, l, remote, r))
 }
 
 pub async fn notif_ask(
     State(app): State<Shared>,
+    Query(q): Query<SeatQuery>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let (l, remote) = (ctx.lang, ctx.remote);
     let who = Caller::of(&app, &req);
     let act = Act::Notif;
+    let n = q.s.min(2);
     let r = if rebooting() {
         Err(write::Outcome::NotYet(reboot_banner(l).into()))
     } else {
-        match crate::agent::get(&app, &who, "/api/esim/notifications").await {
-            Ok(v) => match notifs(&v) {
-                None => Err(write::Outcome::NotYet(job_clash(l).into())),
-                Some(n) if n.is_empty() => Err(write::Outcome::NotYet(
-                    l.pick("Nothing pending.", "没有待发送的通知。").into(),
-                )),
-                Some(n) => Ok(n.len()),
+        match resolve(&app, n) {
+            Err(h) => Err(write::Outcome::NotYet(h.text(l).into())),
+            Ok(aim) => match crate::agent::get(&app, &who, &format!("/api/esim/notifications{}", aim.q())).await {
+                Ok(v) => match notifs(&v) {
+                    None => Err(write::Outcome::NotYet(job_clash(l).into())),
+                    Some(ns) if ns.is_empty() => Err(write::Outcome::NotYet(
+                        l.pick("Nothing pending.", "没有待发送的通知。").into(),
+                    )),
+                    Some(ns) => Ok((aim, ns.len())),
+                },
+                Err(f) => Err(write::Outcome::NotYet(f.text(l))),
             },
-            Err(f) => Err(write::Outcome::NotYet(f.text(l))),
         }
     };
-    let r = r.map(|n| {
-        let req = Req::default();
-        (confirm(act, &req, None, n, l), req)
+    let r = r.map(|(aim, count)| {
+        let req = Req { aim, ..Req::default() };
+        (confirm(act, &req, None, count, l), req)
     });
-    one(ask_reply(act, l, remote, r))
+    one(ask_reply(act, n, l, remote, r))
 }
 
 #[derive(Deserialize, Default)]
@@ -2021,6 +2545,8 @@ pub struct SetQuery {
     a: String,
     #[serde(default)]
     word: Option<String>,
+    #[serde(default)]
+    s: u8,
 }
 
 fn act_of_area(a: &str) -> Act {
@@ -2052,6 +2578,7 @@ pub async fn set(
             let _ = tx
                 .send(patch(&area(
                     act_of_area(&q.a),
+                    q.s.min(2),
                     l,
                     Via::Local,
                     &write::Phase::Done(o),
@@ -2067,7 +2594,7 @@ pub async fn set(
                     .into(),
             );
             let _ = tx
-                .send(patch(&area(act, l, Via::Local, &write::Phase::Done(o))))
+                .send(patch(&area(act, r.aim.n, l, Via::Local, &write::Phase::Done(o))))
                 .await;
             return;
         }
@@ -2084,6 +2611,8 @@ pub struct CancelQuery {
     /// A switch's profile: a lost reply then reads the card after the device is back.
     #[serde(default)]
     k: String,
+    #[serde(default)]
+    s: u8,
 }
 
 pub async fn cancel(
@@ -2093,9 +2622,10 @@ pub async fn cancel(
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let act = act_of_area(&q.a);
     let phase = write::cancel_phase(&write::CancelQuery { lost: q.lost });
-    let mut html = area(act, ctx.lang, ctx.remote, &phase);
+    let n = q.s.min(2);
+    let mut html = area(act, n, ctx.lang, ctx.remote, &phase);
     if q.lost && act == Act::Switch && valid_key(&q.k) {
-        html = format!("{html}\n{}", after_html(&q.k));
+        html = format!("{html}\n{}", after_in(&q.k, n));
     }
     one(html)
 }
@@ -2151,9 +2681,11 @@ pub async fn after(
     let l = ctx.lang;
     let who = Caller::of(&app, &req);
     let key = q.k;
+    let n = q.s.min(2);
+    let empty = reid(AFTER_EMPTY, "es-after", n);
     Sse::new(async_stream(move |tx| async move {
         if !valid_key(&key) {
-            let _ = tx.send(patch(AFTER_EMPTY)).await;
+            let _ = tx.send(patch(&empty)).await;
             return;
         }
         let deadline = Instant::now() + REBOOT_WAIT;
@@ -2169,7 +2701,10 @@ pub async fn after(
                 tokio::time::sleep(NO_REBOOT_AFTER - t.elapsed()).await;
                 continue;
             }
-            if let Ok(Listed::List(ps)) = read_list(&app, &who).await {
+            // the card is looked up again after the restart (the card table may lag behind)
+            if let Ok(aim) = resolve(&app, n)
+                && let Ok(Listed::List(ps)) = read_list(&app, &who, &aim).await
+            {
                 let target = ps.iter().find(|p| p.key == key);
                 let in_use = ps.iter().find(|p| p.enabled);
                 break after_outcome(target, in_use, mark.is_some(), l);
@@ -2189,8 +2724,8 @@ pub async fn after(
         *reboot_mark().lock().unwrap() = None;
         bump(&app);
         let html = format!(
-            "{}\n{AFTER_EMPTY}",
-            area(Act::Switch, l, Via::Local, &write::Phase::Done(o))
+            "{}\n{empty}",
+            area(Act::Switch, n, l, Via::Local, &write::Phase::Done(o))
         );
         let _ = tx.send(patch(&html)).await;
     }))

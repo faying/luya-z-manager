@@ -270,7 +270,15 @@ pub fn view(st: &St, l: Lang) -> View {
                 "ok",
                 l.pick("DHCP on", "DHCP 已开启").to_string(),
                 Some(match range {
-                    Some((s, e)) => format!("{}{s} – {e}", l.pick("Hands out ", "分配 ")),
+                    // the range and the U60's own address are the rows below; the block says
+                    // what they add up to (11-15: it used to repeat them)
+                    Some((s, e)) => {
+                        let n = u32::from(e) - u32::from(s) + 1;
+                        match l {
+                            Lang::En => format!("Up to {n} devices get an address automatically"),
+                            Lang::Zh => format!("最多给 {n} 台设备自动分配地址"),
+                        }
+                    }
                     None => l
                         .pick("The range it hands out is unknown.", "分配的地址范围不明。")
                         .into(),
@@ -304,14 +312,7 @@ pub fn view(st: &St, l: Lang) -> View {
         },
     };
     let stale = c.as_ref().is_some_and(|c| c.stale);
-    let mut meta = c.as_ref().filter(|c| c.ip.is_some()).map(|c| {
-        format!(
-            "{}{} / {}",
-            l.pick("U60 at ", "U60 在 "),
-            c.ip_raw,
-            dash(&c.mask_raw)
-        )
-    });
+    let mut meta = None;
     if stale {
         tone = "stale";
         meta = Some(

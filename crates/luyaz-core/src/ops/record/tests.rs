@@ -167,7 +167,8 @@ fn redaction_rules() {
             "vendor.call",
             &json!({"object":"zwrt_wms","method":"zte_libwms_send_sms","args":{"number":"+8613800000000","message_body":"x"}})
         ),
-        Value::Null
+        json!({"object":"zwrt_wms","method":"zte_libwms_send_sms"}),
+        "which call, never its number or text"
     );
     // 空值不写成「已改」
     assert_eq!(

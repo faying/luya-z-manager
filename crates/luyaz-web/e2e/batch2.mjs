@@ -139,7 +139,7 @@ const PAGES = {
     path: "/tools/cpu",
     ready: (p) => p.waitForFunction(() => /CPU \d+\.\d%/.test(document.querySelector("#cpu-status")?.textContent ?? ""), null, { timeout: 15000 }),
     async own(p) {
-      ok(/内存已用 \d+ MiB \/ \d+ MiB（\d+%）/.test(await txt(p, "#cpu-status")), `status: ${await txt(p, "#cpu-status")}`);
+      ok(/内存已用 \d+ MB \/ \d+ MB（\d+%）/.test(await txt(p, "#cpu-status")), `status: ${await txt(p, "#cpu-status")}`);
       const cores = await p.locator("#cpu-cores .nd-row").count();
       ok(cores >= 1, `core rows: ${cores}`);
       ok(/CPU 0 ?[\d.]+% · \d+ \/ \d+ MHz/.test(await txt(p, "#cpu-cores")), `core line: ${await txt(p, "#cpu-cores .nd-row >> nth=0")}`);
@@ -164,9 +164,9 @@ const PAGES = {
       const usbOps = async () => (await stats()).usb_ops ?? [];
       // what the B31 recording says: mode "user", nothing plugged in, fast charging off
       ok(/没插 USB 线$/.test(await txt(p, "#usb-status .nd-status__state")), `status: ${await txt(p, "#usb-status .nd-status__state")}`);
-      ok(/当前模式：user/.test(await txt(p, "#usb-modes")) && await p.locator("#usb-modes [aria-checked=true]").count() === 0, "mode from u60d qos: user, no radio selected");
+      ok(/当前模式：普通（不是上面几种）/.test(await txt(p, "#usb-modes")) && await p.locator("#usb-modes [aria-checked=true]").count() === 0, "mode from u60d qos: user, no radio selected");
       ok(await radios.count() === 3 && await radios.nth(0).isEnabled() && !/这版固件/.test(await txt(p, "#usb-modes")), "mode_settable absent: like the old page");
-      ok(await txt(p, "#usb-cable .nd-row__value") === "已断开" && await txt(p, "#usb-cc .nd-row__value") === "cc1" && await txt(p, "#usb-rj45 .nd-row__value") === "没有", "port rows (agent)");
+      ok(await txt(p, "#usb-cable .nd-row__value") === "已断开" && await txt(p, "#usb-cc .nd-row__value") === "已连接（CC1）" && await txt(p, "#usb-rj45 .nd-row__value") === "没有", "port rows (agent)");
       ok(/^(是|否)$/.test(await txt(p, "#usb-chgconn .nd-row__value")), "charger rows (battery block)");
       ok(await txt(p, "#usb-direct .nd-row__value") === "关，允许充电", `direct power in words (charger block): ${await txt(p, "#usb-direct .nd-row__value")}`);
       const sw = p.locator("#usb-pbrow [role=switch]");
@@ -285,7 +285,7 @@ const PAGES = {
       const rows = () => p.locator("#sms-list .sm-row:visible").count();
       ok(await rows() === 6, `six rows (${await rows()})`);
       ok(/2 条未读$/.test(await txt(p, "#sms-status .nd-status__state")), `status: ${await txt(p, "#sms-status .nd-status__state")}`);
-      ok(/SIM 已用 \d+ \/ \d+ · 设备已用 \d+ \/ \d+ · 总已用 \d+ \/ \d+ · 未读 2/.test(await txt(p, "#sms-status .nd-status__reason")), "capacity line (agent) + unread");
+      ok(/SIM 已用 \d+ \/ \d+ · 设备已用 \d+ \/ \d+ · 总已用 \d+ \/ \d+$/.test(await txt(p, "#sms-status .nd-status__reason")), "capacity line (agent); unread is the title (11-14)");
       for (const w of ["未读", "已发送", "发送失败"]) ok(await p.locator(`#sms-list .sm-word:has-text("${w}")`).count() > 0, `word ${w}`);
       ok(await txt(p, "#sms-r27 .sm-from") === "CMHK", "a sender in UCS-2 hex is decoded");
       ok((await txt(p, "#sms-r27 .sm-meta")).endsWith("SIM") && (await txt(p, "#sms-r29 .sm-meta")).endsWith("设备"), "rows say their store");
@@ -480,7 +480,7 @@ const PAGES = {
       ok(await txt(p, "#ch-main a.nd-row >> nth=0 >> .nd-row__sub") === "10-03 14:32 · 网页 · 已切到只用 4G", "line 2: time · source · result");
       ok(await txt(p, "#ch-main a.nd-row >> nth=1 >> .nd-mark__sym") === "■" && await txt(p, "#ch-main a.nd-row >> nth=2 >> .nd-mark__sym") === "▲", "marks ■ / ▲");
       ok(await txt(p, "#ch-main a.nd-row >> nth=2 >> .nd-row__sub") === "10-02 22:10 · 情景跳过 ×5（你手动改过）", "the source is not said twice");
-      ok(/只显示最近 50 条/.test(await txt(p, "#ch-main")), "footer: latest 50 only");
+      ok(!/只显示最近 50 条/.test(await txt(p, "#ch-main")), "no 「latest 50」 footer under five rows (11-14)");
       // a row without an op_id opens too
       await rows.nth(1).click();
       await p.waitForSelector("#ch-main .nd-status", { timeout: 8000 }).catch(() => {});

@@ -2,7 +2,10 @@
 //!
 //! The stock battery driver already cuts the charge current at 45 °C and stops charging at 55 °C;
 //! this adds the load side (CHILL to eco, then direct) and a pause that a manual resume can beat.
-//! Thresholds sit close to the stock bands (owner 10-29: the loose set).
+//! Thresholds sit close to the stock bands (owner 10-29: the loose set). Warm moved from 44/40 to
+//! 47/43 on 11-24 (owner): on PD fast charge with the hotspot on, the battery reached 44 °C within
+//! the hour and charging stopped and started over and over; the stock driver already cuts the
+//! current at 45 °C.
 //!
 //! [`Tracker::step`] takes one reading (about every 30 s): a level is entered after
 //! [`Limits::enter_reads`] readings in a row at it or above, and left only after every reading for
@@ -56,8 +59,8 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Limits {
-            warm_batt: 44,
-            warm_batt_exit: 40,
+            warm_batt: 47,
+            warm_batt_exit: 43,
             hot_batt: 50,
             hot_chip: 80,
             hot_batt_exit: 46,

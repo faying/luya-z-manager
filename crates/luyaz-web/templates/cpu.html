@@ -6,7 +6,7 @@
 <div class="pg-col">
 {{ self.leaf("cpu-status")|safe }}
 <section aria-labelledby="cpu-trend-t"><h2 id="cpu-trend-t" class="nd-group-title">{{ l.pick("Last 5 minutes", "最近 5 分钟") }}</h2>
-<div class="nd-group p-3"><div class="cpu-box" role="img" aria-label="{{ l.pick("CPU use, last 5 minutes", "近 5 分钟 CPU 占用") }}"><svg viewBox="0 0 320 64" class="cpu-svg" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="32" x2="320" y2="32" class="tr-grid"/></svg>{{ self.leaf("cpu-line")|safe }}</div></div>
+<div class="nd-group p-3"><div class="cpu-box" role="img" aria-label="{{ l.pick("CPU use, last 5 minutes", "近 5 分钟 CPU 占用") }}"><span class="tr-tick" style="top:calc(3% - 5px)" aria-hidden="true">100%</span><span class="tr-tick" style="top:calc(50% - 5px)" aria-hidden="true">50%</span><span class="tr-tick" style="top:calc(97% - 5px)" aria-hidden="true">0%</span><svg viewBox="0 0 320 64" class="cpu-svg" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="2" x2="320" y2="2" class="tr-grid"/><line x1="0" y1="32" x2="320" y2="32" class="tr-grid"/><line x1="0" y1="62" x2="320" y2="62" class="tr-grid"/></svg>{{ self.leaf("cpu-line")|safe }}</div><div class="t-axis cpu-axis"><span>{{ l.pick("5 min ago", "5 分钟前") }}</span><span>{{ l.pick("now", "现在") }}</span></div></div>
 </section>
 <section aria-labelledby="cpu-cores-t"><h2 id="cpu-cores-t" class="nd-group-title">{{ l.pick("Cores", "各核") }}</h2>
 {{ self.leaf("cpu-cores")|safe }}

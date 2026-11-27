@@ -248,7 +248,7 @@ impl Ui {
         if m.st_running != 0 || m.chill_delay_pending != 0 {
             return true;
         }
-        m.esim_profiles.iter().any(|p| p.going != 0)
+        m.esim_profiles.iter().any(|p| p.going != 0) || m.esim_cards.iter().any(|c| c.profiles.iter().any(|p| p.going != 0))
     }
 
     /// Exec a fresh copy of this program on this tab and scroll position, which

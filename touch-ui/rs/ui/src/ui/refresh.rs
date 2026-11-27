@@ -14,7 +14,7 @@ use crate::theme::{t, uf};
 use crate::trc;
 
 /// The card in the modem, as the 「SIM 与 eSIM」 row says it.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Sim {
     pub kind: SimKind,
     pub oper: String,
@@ -395,7 +395,16 @@ impl Ui {
             .map(|n| n.home.name.clone())
             .unwrap_or_default();
         let enabled = m.esim_enabled_iccid.as_deref().unwrap_or("");
-        let k = logic::sim_kind(&d.sim_state, &d.sim_iccid, enabled);
+        // a dual-slot unit: the data slot's card says what it is (the eSIM list read may be the
+        // other slot's eUICC, dual-slot §6)
+        let data_row = d.cards.as_ref().filter(|c| c.slots.len() >= 2).and_then(|c| c.slots.iter().find(|r| r.role == "data"));
+        let k = match data_row {
+            Some(r) if r.present != 0 && r.id == "eid" => logic::SimKind::Esim,
+            Some(r) if r.present != 0 && r.id == "plain" => logic::SimKind::Plain,
+            // not identified yet: the other slot's eUICC says nothing about this card
+            Some(_) => logic::sim_kind(&d.sim_state, &d.sim_iccid, ""),
+            _ => logic::sim_kind(&d.sim_state, &d.sim_iccid, enabled),
+        };
         // then the card's own name (SPN), and the network's name last (roaming: not the card's)
         let op = [n_home, d.sim_spn.clone(), d.carrier.clone()].into_iter().find(|s| !s.is_empty()).unwrap_or_default();
         // no ICCID from the modem: an eSIM's is the enabled profile's

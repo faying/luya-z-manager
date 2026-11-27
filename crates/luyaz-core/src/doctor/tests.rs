@@ -743,7 +743,7 @@ fn clock_row_requires_fresh_boot_bound_evidence_and_does_not_claim_sync_for_an_e
     std::fs::write(&c.clock_ok, e.encode()).unwrap();
     let r = clock(&c);
     assert_eq!(r.level, "ok");
-    assert!(r.detail.contains("估算") && r.detail.contains("尚未验证同步"));
+    assert!(r.detail.contains("续算") && r.detail.contains("还没和网络时间核对"));
     assert!(r.detail_en.contains("sync unverified"));
     for (up, boot_id, raw_wall, reason) in [
         (1181, "a", wall + 181, "过期"),
@@ -792,7 +792,7 @@ fn lanid_row_from_the_clients_block() {
     let r = run(on).unwrap();
     assert_eq!(r.level, "ok");
     assert!(
-        r.detail.contains("DHCP/mDNS/SSDP/NetBIOS") && r.detail.contains("trap 1"),
+        r.detail.contains("DHCP/mDNS/SSDP/NetBIOS") && r.detail.contains("组件出错 1"),
         "{}",
         r.detail
     );
@@ -816,7 +816,7 @@ fn heat_row_reads_the_block() {
     );
     let (lv, zh, _) = heat_text(&serde_json::json!({"level":"normal","battery_c":31,"chip_c":44,"charge_paused":false,"chill":"","stock_protect":0,"acting":true})).unwrap();
     assert_eq!(lv, "ok");
-    assert_eq!(zh, "正常：电池 31 °C、芯片 44 °C");
+    assert_eq!(zh, "电池 31 °C、芯片 44 °C", "the level column says 正常");
     let (lv, zh, en) = heat_text(&serde_json::json!({"level":"hot","battery_c":51,"chip_c":70,"charge_paused":true,"chill":"hot","chill_now":"hot","stock_protect":1,"acting":true})).unwrap();
     assert_eq!(lv, "warn");
     assert!(
@@ -836,6 +836,31 @@ fn heat_row_reads_the_block() {
     assert_eq!(zh, "热：电池 51 °C、芯片 60 °C");
 }
 
+/// The SMS journal's incidents: only the last 7 days count, none → no row.
+#[test]
+fn sms_journal_row_counts_the_last_week() {
+    let now = 1_800_000_000;
+    let inc = serde_json::json!([
+        {"at": now - 8 * 86_400, "what": "old"},
+        {"at": now - 3600, "what": "sms-journal.json damaged: read .prev"},
+        {"at": now - 60, "what": "rebuilt"},
+    ]);
+    let (zh, en) = sms_journal_text(&inc, now).unwrap();
+    assert_eq!(en, "2 problem(s) in 7 days, last: rebuilt");
+    assert!(zh.contains("2 次"));
+    assert_eq!(sms_journal_text(&serde_json::json!([{"at": now - 8 * 86_400, "what": "old"}]), now), None);
+    assert_eq!(sms_journal_text(&serde_json::json!([]), now), None);
+    assert_eq!(sms_journal_text(&serde_json::Value::Null, now), None);
+}
+
+
+/// Ages in the unit a person would say (not 「2758 分钟前」).
+#[test]
+fn ages_read_in_seconds_minutes_hours_and_days() {
+    let z: Vec<String> = [0, 59, 60, 5_399, 5_400, 172_799, 172_800].map(ago_zh).into();
+    assert_eq!(z, ["0 秒前", "59 秒前", "1 分钟前", "89 分钟前", "1 小时前", "47 小时前", "2 天前"]);
+    assert_eq!(ago_en(165_480), "45 h ago");
+}
 
 #[test]
 fn fota_off_reports_what_gets_around_the_switches() {
@@ -851,4 +876,26 @@ fn fota_off_reports_what_gets_around_the_switches() {
     assert_eq!(fota_off_text(false, &[], true, "#0.0.0.0 dmcn.ztems.com\n1.2.3.4 dl14.ztems.com\n").0, "warn");
     assert_eq!(fota_off_text(false, &pkg, false, "").0, "bad");
     assert_eq!(fota_off_text(true, &[], false, "").0, "bad");
+}
+
+/// P-10: the /tmp row shows only when it runs low.
+#[test]
+fn the_tmp_row_shows_only_when_low() {
+    assert!(tmp_row(200 * 1024).is_none());
+    let w = tmp_row(40 * 1024).unwrap();
+    assert_eq!(w.level, "warn");
+    let b = tmp_row(8 * 1024).unwrap();
+    assert_eq!(b.level, "bad");
+}
+
+#[test]
+fn a_card_not_recognised_gets_a_row_otherwise_none() {
+    use serde_json::json;
+    assert!(cards_text(&serde_json::Value::Null).is_none());
+    let ok = json!({"source": "uim", "slots": [{"slot": 1, "id": "plain"}, {"slot": 2, "id": "pending"}]});
+    assert!(cards_text(&ok).is_none());
+    let bad = json!({"source": "uim", "slots": [{"slot": 1, "id": "plain"}, {"slot": 2, "id": "unknown"}]});
+    let (lv, zh, en) = cards_text(&bad).unwrap();
+    assert_eq!(lv, "warn");
+    assert!(zh.contains("卡槽 2") && en.contains("slot 2"), "{zh} / {en}");
 }

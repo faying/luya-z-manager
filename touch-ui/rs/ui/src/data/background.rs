@@ -71,6 +71,20 @@ impl<T: Send + 'static> Task<T> {
         })).ok()?;
         Some(Self(rx))
     }
+    /// A write that may take seconds (a card power-cycle): its own thread, never one of the
+    /// readers; the UI wakes when it answers.
+    pub fn start_own(f: impl FnOnce() -> T + Send + 'static) -> Option<Self> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                if tx.send(f()).is_ok() {
+                    wake();
+                }
+            })
+            .ok()?;
+        Some(Self(rx))
+    }
     pub fn take(&self) -> Result<T, mpsc::TryRecvError> {
         self.0.try_recv()
     }

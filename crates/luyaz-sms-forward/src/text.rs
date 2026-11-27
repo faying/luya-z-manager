@@ -12,6 +12,19 @@ pub(crate) fn is_ucs2_hex(s: &str) -> bool {
     !t.is_empty() && t.len().is_multiple_of(4) && t.iter().all(u8::is_ascii_hexdigit)
 }
 
+/// What the firmware stores in place of an MMS: it cannot fetch MMS, so on a WAP Push MMS
+/// notification it keeps only this body (the sender shows as the push's `99`), and the download
+/// address, the real sender and the size are gone (`docs/research/mms_feasibility_2026-11-05.md`).
+pub const MMS_PLACEHOLDER: &str = "multimedia_information";
+/// Shown instead of the placeholder wherever a received SMS is shown or forwarded.
+pub const MMS_NOTICE: &str =
+    "[彩信 MMS] 收到一条彩信。U60 收不了彩信，内容和真正的发件人都没有留下；请对方改发短信或用其他方式发。";
+
+/// A received body as people should read it: the MMS placeholder becomes [`MMS_NOTICE`].
+pub fn readable(text: String) -> String {
+    if text.trim() == MMS_PLACEHOLDER { MMS_NOTICE.to_owned() } else { text }
+}
+
 /// UCS-2 hex back to text. Each four-digit group is one UTF-16 unit; groups that are not hex
 /// or not a character on their own (lone surrogates) are dropped, a short tail is ignored.
 pub(crate) fn decode_ucs2_hex(hex: &str) -> String {

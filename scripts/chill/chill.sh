@@ -42,6 +42,9 @@ LEGACY_PAUSE="$CHILL_DIR/pause_until"
 PAUSE_UNTIL="$CHILL_DIR/pause.v2"
 PROFILE_FILE="$CHILL_DIR/profile"     # 档位：eco / standard / perf，没有 = standard
 MODE_FILE="$CHILL_DIR/mode"           # 最近一次的出口模式（rule/global/direct），重启核心后恢复
+DIRECT_TOLD="$CHILL_DIR/mode.direct-told"   # 这段「全部直连」已在收件箱提醒过
+ALERT_LIB="${ALERT_LIB:-/data/luyaz/scripts/alert-lib.sh}"
+CHILL_WHO_LOG="${CHILL_WHO_LOG:-/data/luyaz/core/chill-writes.log}"   # 核心记的 CHILL 写入调用方
 HOME_IP_LIST="$CHILL_DIR/home_ip.list"  # 家里出口：要家里 IP 的网站（用户手写）
 HOME_PROBE_DEFAULT="http://connect.rom.miui.com/generate_204"
 
@@ -630,7 +633,15 @@ api_mode() {
 save_mode() {
   _m=$(api_mode)
   case "$_m" in
-    rule|global|direct) [ "$(cat "$MODE_FILE" 2>/dev/null)" = "$_m" ] || echo "$_m" > "$MODE_FILE" ;;
+    rule|global|direct)
+      if [ "$(cat "$MODE_FILE" 2>/dev/null)" != "$_m" ]; then
+        echo "$_m" > "$MODE_FILE"
+        # 11-11：有次被切成全部直连、查不到是谁。核心记下经它切的调用方（同一个时间线），
+        # 这里记 mihomo 上看到的变化，经面板（zashboard）或直接打控制口的改动也留痕。
+        event "mode_seen -> $_m"
+      fi
+      [ "$_m" = direct ] || rm -f "$DIRECT_TOLD" 2>/dev/null
+      ;;
   esac
 }
 restore_mode() {
@@ -640,6 +651,21 @@ restore_mode() {
   curl -s -m 3 -o /dev/null -X PATCH -H "Authorization: Bearer ${CHILL_SECRET:-}" \
     --data "{\"mode\":\"$_m\"}" http://127.0.0.1:9999/configs 2>/dev/null
   log "出口模式恢复为 $_m"
+  [ "$_m" = direct ] && direct_tell
+  return 0
+}
+
+# CHILL 起来时还原成「全部直连」：收件箱提醒一次（每段直连期一次；切回规则/全局时 save_mode 清掉记号）。
+# 11-10 被切成直连后，每次息屏暂停再起来都默默直连了一天，没人知道。
+direct_tell() {
+  [ -f "$DIRECT_TOLD" ] && return 0
+  [ -f "$ALERT_LIB" ] || return 0
+  _since=$(date -r "$MODE_FILE" '+%m-%d %H:%M' 2>/dev/null)
+  _by=$(grep -F 'exit -> direct_all (ok)' "$CHILL_WHO_LOG" 2>/dev/null | tail -n 1 | sed 's/.* by //')
+  ( . "$ALERT_LIB" && alert_add chill-direct-kept \
+      "CHILL is back on but still All direct (since ${_since:-?}${_by:+, by $_by}); switch to Proxy on the CHILL page if not meant" ) \
+    >/dev/null 2>&1 && { : > "$DIRECT_TOLD"; } 2>/dev/null
+  return 0
 }
 
 # 热重载：渲染 → PUT /configs。渲染不过就保留旧配置。模式先记后恢复。

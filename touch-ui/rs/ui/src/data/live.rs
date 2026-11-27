@@ -55,6 +55,8 @@ pub struct Live {
     usage: Cached<Usage>,
     chill: Cached<Chill>,
     aux: Option<Task<(i32, i32, i32)>>,
+    /// 重新读取卡槽: the one request out
+    reread: Option<Task<(i32, String)>>,
     pub bl: Backlight,
     pub key: Key,
 }
@@ -82,6 +84,7 @@ impl Live {
             usage: Cached::new(Usage::default()),
             chill: Cached::new(Chill::default()),
             aux: None,
+            reread: None,
             bl: Backlight::init(),
             key,
         }
@@ -154,6 +157,7 @@ impl Live {
             esim_switching: self.esim.switching() as i32,
             esim_loaded: self.esim.loaded() as i32,
             esim_enabled_iccid: Some(self.esim.enabled_iccid().into()),
+            esim_cards: self.esim.cards(),
 
             st_phase: st.phase(),
             st_phase_label: Some(st.phase_label().into()),
@@ -280,7 +284,9 @@ impl Source for Live {
         let mut ag = self.agent.clone();
         let (active, prefetch) = (a.esim, a.esim_prefetch);
         let key = self.core.sim_key();
+        let cards = self.core.cards();
         p.esim = self.esim.poll(move |s| {
+            s.set_cards(cards.as_ref());
             let changed = s.poll(&mut ag, active);
             (changed | (prefetch && s.prefetch(&mut ag, &key))) as u32
         }) != 0;
@@ -428,8 +434,31 @@ impl Source for Live {
     fn versions_check(&mut self) {
         self.vers.check(&mut self.agent);
     }
-    fn esim_select(&mut self, i: usize) -> i32 {
-        self.esim.select(&mut self.agent, i)
+    fn esim_select(&mut self, card: usize, i: usize) -> i32 {
+        self.esim.select(&mut self.agent, card, i)
+    }
+    fn sim_reread(&mut self, slot: i32) -> bool {
+        if self.reread.is_some() {
+            return true;
+        }
+        let mut api = self.agent.clone();
+        let body = format!("{{\"slot\":{slot}}}");
+        // the core power-cycles the slot and waits for the card (up to 15 s)
+        self.reread = Task::start_own(move || {
+            let (st, b) = api.api_ms("POST", "/api/esim/reread", Some(&body), 1024, 20_000);
+            let err = b.and_then(|b| crate::json::get_str(&b, "error", 32)).unwrap_or_default();
+            (st, err)
+        });
+        self.reread.is_some()
+    }
+    fn sim_reread_take(&mut self) -> Option<(i32, String)> {
+        let r = match self.reread.as_ref()?.take() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => (0, String::new()),
+        };
+        self.reread = None;
+        Some(r)
     }
     fn speedtest_start(&mut self, chill: bool, roaming_ok: bool) -> bool {
         self.speed.start(&mut self.agent, chill, roaming_ok)

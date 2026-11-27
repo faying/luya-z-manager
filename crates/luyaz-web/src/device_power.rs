@@ -176,8 +176,6 @@ pub struct View {
     pub reason: Option<String>,
     pub meta: Option<String>,
     pub retry: bool,
-    // current capacity
-    pub cap: Option<Row>,
     // battery details: None = nothing yet; Some(Err(text, retry)) = said; Some(Ok(rows))
     pub bat: Option<Result<Vec<Row>, (String, bool)>>,
     pub bat_stale: bool,
@@ -594,23 +592,6 @@ fn plugged(app: &Shared) -> Option<bool> {
 
 pub fn view(app: &Shared, g: &Got, form: &str, l: Lang) -> View {
     let (tone, state, reason, meta, retry) = status(g, l);
-    let cap = g.charge.v.as_ref().map(|c| {
-        let known = cap_known(c);
-        let t = if known {
-            format!("{}%", int(&c["capacity"]).unwrap_or(0))
-        } else {
-            "—".into()
-        };
-        Row {
-            label: l.pick("Current capacity", "当前电量").into(),
-            sub: None,
-            value: match c["battery_status"].as_str().filter(|s| !s.is_empty()) {
-                Some(s) => format!("{t} · {}", status_word(s, l)),
-                None => t,
-            },
-            mono: false,
-        }
-    });
     let bat = match (&g.bat.v, &g.bat.err) {
         (Some(b), _) => {
             let mut rows = battery_rows(b, plugged(app), l);
@@ -647,7 +628,6 @@ pub fn view(app: &Shared, g: &Got, form: &str, l: Lang) -> View {
         reason,
         meta,
         retry,
-        cap,
         bat,
         bat_stale: g.bat.stale(),
         history: crate::battery_history::view(g.hist.v.as_ref(), g.hist.err.is_some(), l),

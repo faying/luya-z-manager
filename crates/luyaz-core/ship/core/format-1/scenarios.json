@@ -1,0 +1,103 @@
+{
+  "home_mcc": "460",
+  "params": {
+    "blip_hold_secs": 120,
+    "blip_strong_dbm": -60.0,
+    "enter_hits": 2,
+    "exit_misses": 2,
+    "leave_rssi_dbm": -72.0,
+    "min_rssi_dbm": -70.0,
+    "scan_interval_away_battery_secs": 300,
+    "scan_interval_away_charging_secs": 60,
+    "scan_interval_home_secs": 60
+  },
+  "scenarios": [
+    {
+      "actions": [
+        {
+          "body": {
+            "ap_2g": false,
+            "ap_5g": false
+          },
+          "method": "PUT",
+          "path": "/api/wifi/radio",
+          "snapshot": [
+            "wireless.main_2g.disabled",
+            "wireless.main_5g.disabled"
+          ]
+        }
+      ],
+      "detect": {
+        "entries": [],
+        "type": "ssid"
+      },
+      "id": "home",
+      "inhibit_sleep": true,
+      "name": "在家"
+    },
+    {
+      "actions": [
+        {
+          "body": {
+            "ap_2g": true,
+            "ap_5g": true
+          },
+          "method": "PUT",
+          "path": "/api/wifi/radio",
+          "snapshot": [
+            "wireless.main_2g.disabled",
+            "wireless.main_5g.disabled"
+          ]
+        }
+      ],
+      "detect": {
+        "type": "fallback"
+      },
+      "id": "away",
+      "inhibit_sleep": false,
+      "name": "外出"
+    },
+    {
+      "actions": [
+        {
+          "body": {
+            "ap_2g": true,
+            "ap_5g": true
+          },
+          "method": "PUT",
+          "path": "/api/wifi/radio",
+          "snapshot": [
+            "wireless.main_2g.disabled",
+            "wireless.main_5g.disabled"
+          ]
+        },
+        {
+          "best_effort": true,
+          "body": {
+            "group": "🚀 节点选择",
+            "member": "DIRECT"
+          },
+          "method": "PUT",
+          "path": "/api/services/chill/regions",
+          "restore_on_exit": {
+            "field": "member",
+            "read_path": "/api/services/chill",
+            "read_pointer": "/data/region/active"
+          },
+          "verify_field": {
+            "equals": "DIRECT",
+            "path": "/api/services/chill",
+            "pointer": "/data/region/active"
+          }
+        }
+      ],
+      "detect": {
+        "type": "abroad"
+      },
+      "id": "abroad",
+      "inhibit_sleep": false,
+      "name": "国外"
+    }
+  ],
+  "version": 1
+}

@@ -32,6 +32,16 @@ const fn one(id: &'static str, zh: &'static str, en: &'static str) -> Say {
 pub const SWITCHING: Say = one("switching", "正在切换", "Switching");
 pub const RETRYING: Say = one("retrying", "安全重试中", "Retrying safely");
 pub const RECOVERED: Say = one("recovered", "已恢复", "Back online");
+/// A switch on a card that does not carry data (a standby or off slot): the card took the
+/// profile, the modem reads it only after a restart (T9 O-4: in dual mode the standby eUICC
+/// even drops out until then; slot 2 never sees the card come back by itself).
+pub const AFTER_RESTART: Say = Say {
+    id: "after_restart",
+    zh: "这张卡重启设备后生效",
+    en: "This card takes effect after a restart",
+    short: "重启后生效",
+    short_en: "After a restart",
+};
 pub const CHECK_APN: Say = one("check_apn", "可能要查 APN", "May need an APN check");
 pub const GAVE_UP: Say = Say {
     id: "gave_up",
@@ -69,6 +79,7 @@ pub fn for_job(j: &Value) -> Option<Say> {
         "done" => match reason {
             "no_data" => Some(CHECK_APN),
             "identity_stuck" => Some(GAVE_UP),
+            "inactive_slot" => Some(AFTER_RESTART),
             _ => Some(RECOVERED),
         },
         "error" if reason == "cancelled" => None,
@@ -128,6 +139,7 @@ mod tests {
             Some("安全重试中")
         );
         assert_eq!(job("done", "", ""), Some("已恢复"));
+        assert_eq!(job("done", "inactive_slot", ""), Some("这张卡重启设备后生效"));
         assert_eq!(job("done", "no_data", ""), Some("可能要查 APN"));
         assert_eq!(job("done", "identity_stuck", ""), Some(GAVE_UP.zh));
         assert_eq!(job("error", "card_busy", "x"), Some(GAVE_UP.zh));

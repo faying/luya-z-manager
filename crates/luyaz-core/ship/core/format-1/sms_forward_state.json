@@ -1,0 +1,11 @@
+{
+  "last_forwarded_id": 9,
+  "last_forwarded_time": 1794470520,
+  "log": [
+    {"timestamp": 1794499100, "sms_id": 8, "sender": "+15550101", "content_preview": "example", "rule_name": "sender",
+     "destination_type": "webhook", "success": true, "rule_id": 2, "content": "example", "date": "26,11,13,08,01,00,+32"},
+    {"timestamp": 1794499200, "sms_id": 9, "sender": "+15550102", "content_preview": "example", "rule_name": "sender",
+     "destination_type": "webhook", "success": false, "error": "http 404", "rule_id": 2, "content": "example", "date": "26,11,13,08,02,00,+32"}
+  ],
+  "held": {"sms_id": 10, "first_deferred_at": 1794499300, "online_secs": 30, "delivered_rules": [1]}
+}

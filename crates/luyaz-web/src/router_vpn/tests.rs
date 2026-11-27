@@ -42,7 +42,8 @@ fn b31_reports_only_sip() {
     assert_eq!(v.sip, Some(true));
     let rows = v.rows.as_ref().unwrap();
     assert_eq!(rows.len(), 3);
-    assert!(rows.iter().all(|r| r.on.is_none() && r.sub.contains("读不回来")));
+    // why it is unknown is said once, not in every row (11-14)
+    assert!(rows.iter().all(|r| r.on.is_none() && !r.sub.contains("读不回来")));
     assert!(!v.dis);
     let h = html(&v);
     assert!(h.contains(r#"id="vpn-l2tp""#) && h.contains("状态不明") && h.contains("SIP ALG"));

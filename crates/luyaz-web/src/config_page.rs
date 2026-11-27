@@ -231,8 +231,8 @@ fn problem(l: Lang, r: &Read) -> String {
     match r {
         Read::Nothing => l.pick("Choose a config file first.", "请先选一个配置文件。"),
         Read::TooBig => l.pick(
-            "That file is larger than 4 MiB, which is more than a router config ever is. Nothing was read.",
-            "文件超过 4 MiB，路由器的配置不会这么大。没有读取。",
+            "That file is larger than 4 MB, which is more than a router config ever is. Nothing was read.",
+            "文件超过 4 MB，路由器的配置不会这么大。没有读取。",
         ),
         _ => l.pick(
             "The file could not be received. Pick it again.",

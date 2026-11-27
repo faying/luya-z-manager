@@ -105,12 +105,13 @@ fn f0(x: f64) -> String {
 
 /// `standby_check [en]`: (level, detail)
 pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
-    let ok = |s: &str| ("ok", s.to_owned());
+    // not judged: neither fine nor wrong (the level column says 未判断)
+    let skip = |s: &str| ("skip", s.to_owned());
     let Some(base) = std::fs::read(&c.standby_base)
         .ok()
         .map(|b| String::from_utf8_lossy(&b).into_owned())
     else {
-        return ok(if en {
+        return skip(if en {
             "Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)"
         } else {
             "未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）"
@@ -123,10 +124,10 @@ pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
         .trim_matches([' ', '\t'])
         != "v2"
     {
-        return ok(if en {
-            "Old baseline format, not judged; recalibrate at home while idle (doctor.sh --calibrate-standby)"
+        return skip(if en {
+            "Old baseline format; recalibrate at home while idle (doctor.sh --calibrate-standby)"
         } else {
-            "基线格式旧，不判；请在家自然空闲时重新校准（doctor.sh --calibrate-standby）"
+            "基线格式旧，请在家自然空闲时重新校准（doctor.sh --calibrate-standby）"
         });
     }
     let since = cat(&c.fp_changed).and_then(|s| digits(&s)).unwrap_or(0) as f64;
@@ -159,7 +160,7 @@ pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
         }
     };
     let Ok(stat) = std::fs::read(&c.standby_stat) else {
-        return ok(if en {
+        return skip(if en {
             "No screen-off records"
         } else {
             "没有息屏记录"
@@ -193,17 +194,17 @@ pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
     }
     if idle < 8 {
         let busy_most = rows >= 8 && busy * 2 > rows;
-        return ok(&match (en, busy_most) {
-            (true, true) => format!(
-                "Network in use, standby not judged ({busy} of {rows} rows in the last 15 min had traffic)"
-            ),
+        return skip(&match (en, busy_most) {
+            (true, true) => {
+                format!("Network in use ({busy} of {rows} rows in the last 15 min had traffic)")
+            }
             (true, false) => {
-                format!("Too few idle screen-off rows in the last 15 min ({idle}), not judged")
+                format!("Too few idle screen-off rows in the last 15 min ({idle})")
             }
             (false, true) => {
-                format!("有流量在用，不判待机（最近 15 分钟 {rows} 行里 {busy} 行有流量）")
+                format!("有流量在用（最近 15 分钟 {rows} 行里 {busy} 行有流量）")
             }
-            (false, false) => format!("最近 15 分钟空闲的息屏记录只有 {idle} 行，不判定"),
+            (false, false) => format!("最近 15 分钟空闲的息屏记录只有 {idle} 行，太少"),
         });
     }
     let (mut out, mut stale) = (String::new(), String::new());
@@ -248,9 +249,15 @@ pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
     if !out.is_empty() {
         ("warn", format!("{out}{tail}"))
     } else if en {
-        ("ok", format!("Normal (cell {} pkts/min){tail}", f0(cell)))
+        (
+            "ok",
+            format!("Nothing unusual (cell {} pkts/min){tail}", f0(cell)),
+        )
     } else {
-        ("ok", format!("正常（蜂窝每分钟 {} 个包）{tail}", f0(cell)))
+        (
+            "ok",
+            format!("没有异常（蜂窝每分钟 {} 个包）{tail}", f0(cell)),
+        )
     }
 }
 

@@ -2,6 +2,7 @@
 {% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+{{ self.leaf("cl-status")|safe }}
 {{ self.leaf("cl-cur")|safe }}
 <div class="grid gap-6 pg-cols" data-signals="{_npci: '', _narfcn: '', _nband: '{{ band0 }}', _lpci: '', _learfcn: ''}">
 <div class="grid content-start gap-6">

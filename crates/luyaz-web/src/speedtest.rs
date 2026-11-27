@@ -303,6 +303,11 @@ impl LayerRow {
 }
 
 impl View {
+    /// Not running and nothing measured yet: the four readouts would all be 「—」 (11-14), so the
+    /// status block's 「还没有结果」 stands alone.
+    pub fn no_result(&self) -> bool {
+        !self.running && self.dl.empty && self.ul.empty && self.ping.empty
+    }
     /// The data-cost sentence of 「开始」 (DR6, DR13): "old" (an old core's 60 s / 512 MB),
     /// "roaming" (the core will run coarse) or "full" (30 s / 750 MB, 40 s / 1.15 GB via CHILL).
     pub fn cost(&self) -> &'static str {
@@ -1388,6 +1393,12 @@ mod tests {
         assert!(html.contains("这次用了约 152 MB"), "{html}");
         // a lost probe stays on the chart, at the top
         assert!(html.contains("600.0,0.0"), "{html}");
+        assert!(!html.contains("ld-printonly"), "on the speed test page the verdict is the row's");
+        // the ladder page: the status block says it on screen, the row only on paper (11-15)
+        let mut v = v;
+        v.here = true;
+        let html = LadderFrag { v: &v }.render().unwrap();
+        assert!(html.contains("nd-row__label ld-printonly\">此刻上传跑到 11 Mbps"), "{html}");
     }
     #[test]
     fn a_ladder_chart_has_its_steps_lost_probes_and_rates() {

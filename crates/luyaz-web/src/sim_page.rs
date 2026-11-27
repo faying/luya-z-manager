@@ -87,6 +87,7 @@ pub fn routes() -> Router<Shared> {
         .route("/router/sim/ask", post(ask))
         .route("/router/sim/set", post(set))
         .route("/router/sim/cancel", post(cancel))
+        .route("/router/sim/reread", post(reread))
 }
 
 // ---- what the agent says ----
@@ -571,6 +572,8 @@ struct Poll {
     nck_raw: String,
     nck_fail: Option<Fail>,
     at: Option<SystemTime>,
+    /// The `cards` block (dual-slot units: one row per slot).
+    cards: Option<Value>,
 }
 
 fn mark(tone: &str, text: &str) -> String {
@@ -604,6 +607,7 @@ impl Poll {
             nck_raw: String::new(),
             nck_fail: None,
             at: None,
+            cards: None,
         }
     }
 
@@ -738,13 +742,14 @@ impl Poll {
                 }
             }
             Some(i) => {
-                out.push_str(&row(l.pick("Status", "状态"), &val(&i.states), true));
-                out.push_str(&row(l.pick("Modem", "基带状态"), &val(&i.modem), true));
+                out.push_str(&row(l.pick("Status", "状态"), &val(&sim_word(l, &i.states)), true));
+                out.push_str(&row(l.pick("Modem", "基带状态"), &val(&modem_word(l, &i.modem)), true));
                 out.push_str(&row(
                     l.pick("PIN Lock", "PIN 锁"),
                     &match i.pin_status.as_str() {
-                        "1" => l.pick("Enabled", "已启用").to_owned(),
-                        "0" => l.pick("Disabled", "已禁用").to_owned(),
+                        // the same words as the status block above (PIN 锁已关闭)
+                        "1" => l.pick("On", "已开启").to_owned(),
+                        "0" => l.pick("Off", "已关闭").to_owned(),
                         s => val(s),
                     },
                     false,
@@ -780,6 +785,10 @@ impl Poll {
             )),
             _ => out.push_str("<p id=\"sim-trialserr\" hidden></p>\n<!--leaf-->\n"),
         }
+
+        // each slot (dual-slot units)
+        out.push_str(&slots_html(self.cards.as_ref(), l));
+        out.push_str("\n<!--leaf-->\n");
 
         // the buttons
         let locked = i.is_none() || stale;
@@ -847,9 +856,96 @@ impl Poll {
 impl Polled for Poll {
     async fn step(&mut self, app: &Shared) -> (Vec<(String, String)>, Duration) {
         self.fetch(app).await;
+        self.cards = app.hub.read(crate::esim::seats::mark);
         let next = if self.info.is_none() { RETRY } else { IDLE };
         (self.leaves(), next)
     }
+
+    fn watches(&self, block: &str) -> bool {
+        block == "cards"
+    }
+
+    /// The slots' rows follow the core's card table between the card reads.
+    fn render(&mut self, app: &Shared) -> Option<Vec<(String, String)>> {
+        let c = app.hub.read(crate::esim::seats::mark);
+        if c == self.cards {
+            return None;
+        }
+        self.cards = c;
+        Some(self.leaves())
+    }
+}
+
+/// Each slot of a dual-slot unit (`cards` block, `source: "uim"`): whether a card is in it, what
+/// it does, what kind of card, the identifiers' tails. Status only: the firmware has no per-slot
+/// PIN interface (dual-slot design O-5), so PIN/PUK stay the card the actions above act on.
+/// Hidden on the single-slot unit.
+pub fn slots_html(cards: Option<&Value>, l: Lang) -> String {
+    let Some(c) = cards.filter(|c| c["source"] == "uim") else {
+        return "<div id=\"sim-slots\" hidden></div>".into();
+    };
+    let mut rows = String::new();
+    let mut acts = String::new();
+    for s in c["slots"].as_array().into_iter().flatten() {
+        let n = s["slot"].as_u64().unwrap_or(0);
+        // an off slot can be read again (a card put in is not seen by itself, T9); the core
+        // refuses the data slot and a standby slot (O-3) on its own too
+        if s["role"] == "off" && matches!(n, 1 | 2) {
+            acts.push_str(&format!(
+                "<div class=\"sim-acts\"><button type=\"button\" class=\"nd-btn nd-btn--secondary\" data-on:click=\"@post('{PATH}/reread?s={n}')\">{}</button></div><p id=\"sim-reread{n}\" class=\"nd-aux sim-note\" role=\"status\"></p>",
+                esc(&match l {
+                    Lang::En => format!("Read slot {n} again"),
+                    Lang::Zh => format!("重新读取卡槽 {n}"),
+                }),
+            ));
+        }
+        let present = s["present"] == true;
+        let tail = |k: &str| s[k].as_str().filter(|t| !t.is_empty()).map(|t| format!("…{}", esc(t)));
+        let kind = match s["id"].as_str().unwrap_or("") {
+            "eid" => l.pick("eSIM card", "eSIM 卡"),
+            "plain" => l.pick("SIM card", "普通 SIM 卡"),
+            "pending" => l.pick("Identifying…", "识别中…"),
+            "unknown" => l.pick("Not recognised", "认不出"),
+            _ => "",
+        };
+        let mut sub = vec![crate::esim::seats::role_word(s["role"].as_str().unwrap_or(""), l).to_owned()];
+        if present && !kind.is_empty() {
+            sub.push(kind.to_owned());
+        }
+        if let Some(e) = tail("eid_tail") {
+            sub.push(format!("EID <span class=\"nd-mono\" data-data>{e}</span>"));
+        }
+        let value = match (present, tail("iccid_tail")) {
+            (false, _) => esc(l.pick("No card", "没有卡")),
+            (true, Some(t)) => format!("<span class=\"nd-mono\" data-data>ICCID {t}</span>"),
+            (true, None) => "—".into(),
+        };
+        rows.push_str(&format!(
+            "<div class=\"nd-row nd-row--two\" id=\"sim-slot{n}\"><span class=\"nd-row__text\"><span class=\"nd-row__label\">{}</span><span class=\"nd-row__sub block\">{}</span></span><span class=\"nd-row__value\">{value}</span></div>",
+            esc(&match l {
+                Lang::En => format!("Slot {n}"),
+                Lang::Zh => format!("卡槽 {n}"),
+            }),
+            sub.iter().map(|x| if x.contains('<') { x.clone() } else { esc(x) }).collect::<Vec<_>>().join(" · "),
+        ));
+    }
+    if !acts.is_empty() {
+        acts.push_str(&format!(
+            "<p class=\"nd-aux sim-note\">{}</p>",
+            esc(l.pick(
+                "Put a card into a slot that is off, or changed its profile? Read the slot again: no restart needed, and data on the other slot carries on. A slot in use needs a restart after a card change.",
+                "往没开启的卡槽插了卡、或换了它的配置：点「重新读取」就好，不用重启，另一个卡槽照常上网。正在用的卡槽换卡后要重启设备。",
+            )),
+        ));
+    }
+    format!(
+        "<section id=\"sim-slots\" aria-labelledby=\"sim-slots-t\"><h2 id=\"sim-slots-t\" class=\"nd-group-title\">{}</h2><div class=\"nd-group\">{rows}</div>{acts}<p class=\"nd-aux sim-note\">{}</p></section>",
+        esc(l.pick("Slots", "卡槽")),
+        esc(l.pick(
+            "Status only for slot 2's card: the firmware has no PIN interface per slot, so PIN and PUK below act on the card above.",
+            "卡槽 2 的卡在这里只显示状态：固件没有按卡槽的 PIN 接口，下面的 PIN、PUK 只对上面那张卡操作。",
+        )),
+    )
 }
 
 // ---- the page ----
@@ -982,6 +1078,7 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let mut p = Poll::new(Caller::of(&app, &req), ctx.lang);
     p.fetch(&app).await;
+    p.cards = app.hub.read(crate::esim::seats::mark);
     let leaves = p.leaves();
     let (shell, dual) = app.hub.read(|st| {
         (
@@ -1011,6 +1108,77 @@ async fn events(State(app): State<Shared>, Query(q): Query<StreamQuery>, req: Re
 async fn refresh(State(app): State<Shared>) -> axum::http::StatusCode {
     let _ = app.kick.send(PATH);
     axum::http::StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize, Default)]
+struct SlotQ {
+    #[serde(default)]
+    s: u8,
+}
+
+/// What the core's `POST /api/esim/reread` came back with, in the owner's words.
+pub fn reread_words(n: u8, r: Result<(u16, &Value), &Fail>, l: Lang) -> String {
+    let (en, zh): (String, String) = match r {
+        Ok((200, v)) if v["ok"] != false => (
+            format!("Slot {n} was read again; its card shows above in a few seconds."),
+            format!("已重新读取卡槽 {n}，几秒后上面会显示读到的卡。"),
+        ),
+        Ok((_, v)) => match v["error"].as_str().unwrap_or("") {
+            "data_slot" => (
+                format!("Slot {n} carries data now, so it was not touched: restart the device to read a new card there."),
+                format!("卡槽 {n} 正在上网，没有动它：在这里换卡要重启设备。"),
+            ),
+            "standby_slot" => (
+                format!("Slot {n} is on standby, so it was not touched: in dual SIM mode a new card there needs a restart."),
+                format!("卡槽 {n} 在待机，没有动它：双卡模式下这里换卡要重启设备。"),
+            ),
+            "too_soon" => (
+                "Read just now; try again in a few seconds.".into(),
+                "刚读过，过几秒再试。".into(),
+            ),
+            "operation in progress" => (
+                "An eSIM change is running; try again when it ends.".into(),
+                "eSIM 正在操作，等它结束再试。".into(),
+            ),
+            "reset_failed" => (
+                format!("Slot {n} did not answer; nothing else changed."),
+                format!("卡槽 {n} 没有回应，其他都没变。"),
+            ),
+            _ => (
+                format!("Slot {n} can't be read again on this device."),
+                format!("这台设备上不能重新读取卡槽 {n}。"),
+            ),
+        },
+        Err(f) => (
+            format!("Not sent: {}", f.text(l)),
+            format!("没有发送：{}", f.text(l)),
+        ),
+    };
+    match l {
+        Lang::En => en,
+        Lang::Zh => zh,
+    }
+}
+
+/// POST /router/sim/reread?s=N: read an off slot's card again (no restart; see the core's
+/// `luyaz_esim::Esim::reread`). Says "reading" at once, then the outcome.
+async fn reread(State(app): State<Shared>, Query(q): Query<SlotQ>, req: Request) -> impl IntoResponse {
+    let who = Caller::of(&app, &req);
+    let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
+    let n = q.s;
+    let note = move |t: &str| format!("<p id=\"sim-reread{n}\" class=\"nd-aux sim-note\" role=\"status\">{}</p>", esc(t));
+    let pending = note(&match l {
+        Lang::En => format!("Reading slot {n} again…"),
+        Lang::Zh => format!("正在重新读取卡槽 {n}…"),
+    });
+    write::respond(pending, async move {
+        if !matches!(n, 1 | 2) {
+            return note(&reread_words(n, Ok((400, &json!({"error": "slot"}))), l));
+        }
+        let r = crate::agent::post_raw(&app, &who, "/api/esim/reread", &json!({"slot": n})).await;
+        let _ = app.kick.send(PATH);
+        note(&reread_words(n, r.as_ref().map(|(c, v)| (*c, v)), l))
+    })
 }
 
 // ---- the writes ----
@@ -1214,6 +1382,26 @@ async fn run(app: &Shared, who: &Caller, l: Lang, act: Act) -> (Outcome, bool) {
         how.not_read()
     };
     (o, true)
+}
+
+/// The SIM state as people read it (11-14 the page showed 「sim ready」); unknown ones as given.
+fn sim_word(l: Lang, s: &str) -> String {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "sim ready" | "ready" => l.pick("ready", "已就绪").to_owned(),
+        "sim absent" | "absent" | "no sim" => l.pick("no SIM", "没插卡").to_owned(),
+        "sim pin" | "pin" => l.pick("waiting for the PIN", "等待输入 PIN").to_owned(),
+        "sim puk" | "puk" => l.pick("PUK needed", "需要 PUK").to_owned(),
+        _ => s.to_owned(),
+    }
+}
+
+/// The modem's state as people read it (11-14 「modem_init_complete」); unknown ones as given.
+fn modem_word(l: Lang, s: &str) -> String {
+    match s.trim() {
+        "modem_init_complete" => l.pick("started", "已启动").to_owned(),
+        "modem_init" | "modem_initing" => l.pick("starting", "正在启动").to_owned(),
+        _ => s.to_owned(),
+    }
 }
 
 #[cfg(test)]

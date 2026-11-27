@@ -75,6 +75,10 @@ pub struct Model {
     pub esim_switching: i32,
     pub esim_loaded: i32,
     pub esim_enabled_iccid: Option<String>,
+    /// a dual-slot unit (`cards` with two rows): one block per eUICC, in slot order; empty on
+    /// the single-slot unit, whose list is the esim_* fields above
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub esim_cards: Vec<esim_card_t>,
 
     pub st_phase: i32,
     pub st_phase_label: Option<String>,

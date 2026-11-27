@@ -39,7 +39,13 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
     .await;
     let reply = got.ok().and_then(Result::ok);
     let shell = app.hub.read(|st| crate::shell::Shell::new(&headers, PATH).live(st, &ctx, None));
-    let html = Page { shell, l: ctx.lang, main: main(reply.as_ref(), ctx.lang) }.render().unwrap();
+    // the device clock is local time labelled UTC and this runs on the device: its UTC date is
+    // the device's day, the one the log is split by
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let today = crate::chill_page::data::date(now);
+    let html = Page { shell, l: ctx.lang, main: main(reply.as_ref(), ctx.lang, &today) }.render().unwrap();
     crate::assets::maybe_gzip(&headers, "text/html; charset=utf-8", html.into_bytes(), "no-store")
 }
 
@@ -95,30 +101,46 @@ fn colour(i: usize) -> &'static str {
     COLOURS[i.min(COLOURS.len() - 1)]
 }
 
-fn row(label: &str, value: &str) -> String {
-    format!(
-        "<div class=\"nd-row\"><span class=\"nd-row__text\"><span class=\"nd-row__label\" data-data>{}</span></span><span class=\"nd-row__value\" data-data>{}</span></div>",
-        esc(label),
-        esc(value)
-    )
-}
-
 fn swatch(i: usize) -> String {
     format!("<i class=\"us-sw\" style=\"background:var({})\" aria-hidden=\"true\"></i>", colour(i))
 }
 
 /// The page body for the core's `data` (`None`: could not read it).
-pub fn main(reply: Option<&Value>, l: Lang) -> String {
+/// The status block (11-14 ③): today and this month on the device's calendar (`today` is
+/// "YYYY-MM-DD").
+fn status(days: &[Value], l: Lang, today: &str) -> String {
+    let day_sum = |d: &Value| d["cards"].as_array().map_or(0.0, |a| a.iter().map(total).sum::<f64>());
+    let today_sum = days.iter().find(|d| d["day"].as_str() == Some(today)).map(day_sum);
+    let month = today.get(..8).unwrap_or(today);
+    let month_sum: f64 = days
+        .iter()
+        .filter(|d| d["day"].as_str().is_some_and(|x| x.starts_with(month)))
+        .map(day_sum)
+        .sum();
+    let state = match (l, today_sum) {
+        (Lang::En, Some(t)) => format!("Today {}, this month {}", size(t), size(month_sum)),
+        (Lang::En, None) => format!("Nothing yet today, this month {}", size(month_sum)),
+        (_, Some(t)) => format!("今天 {}，这个月 {}", size(t), size(month_sum)),
+        (_, None) => format!("今天还没用，这个月 {}", size(month_sum)),
+    };
+    crate::status_block::html("us-status", "neutral", &state, None, None)
+}
+
+pub fn main(reply: Option<&Value>, l: Lang, today: &str) -> String {
     let Some(r) = reply else {
-        return format!("<div class=\"nd-group\">{}</div>", row(l.pick("Could not read the usage log", "读不到流量记录"), ""));
+        return crate::status_block::html("us-status", "bad", l.pick("Could not read the usage log", "读不到流量记录"), None, None);
     };
     let days: &[Value] = r["days"].as_array().map_or(&[], Vec::as_slice);
     if days.is_empty() {
-        return format!(
-            "<div class=\"nd-group\">{}</div>",
-            row(l.pick("Nothing recorded yet — the count starts once the device clock is trusted", "还没有记录：设备时间可信后开始记"), "")
+        return crate::status_block::html(
+            "us-status",
+            "neutral",
+            l.pick("Nothing recorded yet", "还没有记录"),
+            Some(esc(l.pick("The count starts once the device clock is trusted", "设备时间可信后开始记")).as_str()),
+            None,
         );
     }
+    let head = status(days, l, today);
     let cards = cards(days, l);
     let idx = |id: &str| cards.iter().position(|c| c.id == id).unwrap_or(0);
     // ---- the chart: oldest on the left ----
@@ -214,7 +236,7 @@ pub fn main(reply: Option<&Value>, l: Lang) -> String {
         })
         .collect();
     format!(
-        "{chart}<section aria-labelledby=\"us-sum-t\"><h2 id=\"us-sum-t\" class=\"nd-group-title\">{}</h2><div class=\"nd-group us-list\">{sums}</div></section>\
+        "{head}{chart}<section aria-labelledby=\"us-sum-t\"><h2 id=\"us-sum-t\" class=\"nd-group-title\">{}</h2><div class=\"nd-group us-list\">{sums}</div></section>\
 <section aria-labelledby=\"us-days-t\"><h2 id=\"us-days-t\" class=\"nd-group-title\">{}</h2><div class=\"nd-group us-list\">{day_rows}</div></section>",
         esc(&sums_t),
         l.pick("Days", "逐日"),
@@ -248,7 +270,13 @@ mod tests {
 
     #[test]
     fn page_body() {
-        let h = main(Some(&reply()), Lang::Zh);
+        let h = main(Some(&reply()), Lang::Zh, "2026-10-21");
+        // 11-14 ③: today and this month first, in the shared status block
+        assert!(h.starts_with("<div id=\"us-status\"") && h.contains("nd-status--neutral"), "{h}");
+        assert!(h.contains("今天 3.50 MB，这个月 8.50 MB"), "{h}");
+        assert!(main(Some(&reply()), Lang::Zh, "2026-10-22").contains("今天还没用，这个月 8.50 MB"));
+        let nov = main(Some(&reply()), Lang::Zh, "2026-11-01");
+        assert!(nov.contains("今天还没用，这个月 ") && !nov.contains("这个月 8.50 MB"), "October is not this month");
         // the 10-20 bar is the tallest (5 MB) = 100 %
         assert!(h.contains("height:100.0%;background:var(--nd-accMark)"), "{h}");
         assert!(h.contains("10-20</span><span>10-21"));
@@ -257,7 +285,7 @@ mod tests {
         assert!(h.contains("6.00 MB"));
         // the two-card day lists both
         assert!(h.contains("中国联通 · 3668 2.50 MB · 中国电信 · 9403 1.00 MB"), "{h}");
-        assert!(main(None, Lang::En).contains("Could not read the usage log"));
-        assert!(main(Some(&json!({"days": []})), Lang::Zh).contains("还没有记录"));
+        assert!(main(None, Lang::En, "2026-10-21").contains("Could not read the usage log"));
+        assert!(main(Some(&json!({"days": []})), Lang::Zh, "2026-10-21").contains("还没有记录"));
     }
 }

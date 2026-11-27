@@ -14,6 +14,27 @@
 //! Ledger mode: one `sleep_until` in the whole process; the HTTP listener only wakes us when
 //! someone connects. Reads only; the one thing it writes is its own directory.
 
+/// P-7: a log line that cannot be written is dropped, never a reason to stop. std's `eprintln!`
+/// panics when the write fails, and the device build aborts on any panic: on 10-26 a full /tmp
+/// (where `/tmp/luyaz-core.log` lives) crash-looped the core until procd gave up, down 50 min.
+/// Defined before every `mod`, so it stands in for std's in the whole crate; std's panic
+/// message (the crash evidence) still goes out as before.
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 mod crashwatch;
 mod diag;
 mod doctor;
@@ -52,6 +73,7 @@ mod sim_identity;
 mod sim_say;
 // 短信持久日志（luyaz-phone 设计 O-2）
 mod sms_journal;
+mod state_format;
 mod stock_anomaly;
 
 // Phase 3: HTTP and the write path moved from data-service (serve.rs)
@@ -81,6 +103,8 @@ mod plugin;
 mod api;
 #[allow(dead_code)]
 mod block;
+mod card_watch;
+mod cards;
 #[allow(dead_code)]
 mod cell_window;
 #[allow(dead_code)]

@@ -306,6 +306,19 @@ fn write_chill(c: Chill) -> bool {
     ok
 }
 
+/// The heat-protect detail. ASCII only: the queue drops anything else (luyaz-alerts
+/// `detail_zh` words it in Chinese).
+pub(crate) fn notice_text(r: &Reading, plan: (bool, bool)) -> String {
+    let deg = |v: Option<i32>| v.map_or("?".to_string(), |v| v.to_string());
+    let head = format!("battery {} C, chip {} C", deg(r.batt), deg(r.chip));
+    match plan {
+        (true, true) => format!("{head}; charging paused, CHILL to eco"),
+        (true, false) => format!("{head}; charging paused"),
+        (false, true) => format!("{head}; CHILL to eco"),
+        (false, false) => format!("{head}; move it somewhere airy"),
+    }
+}
+
 /// `plan`: (charging will pause, CHILL will go to eco). Says only what is going to happen.
 fn notice(r: &Reading, plan: (bool, bool), wall: i64) {
     let boot = crate::longterm::boot::proc_boot_id();
@@ -318,18 +331,7 @@ fn notice(r: &Reading, plan: (bool, bool), wall: i64) {
         .unwrap_or(0);
     // `<boot>-<n>` as the queue wants it; ×100 + 71 keeps clear of sim_alerts' `epoch×10 + kind`
     let id = format!("{}-{}", b.to_ascii_lowercase(), up * 100 + 71);
-    let deg = |v: Option<i32>| v.map_or("?".to_string(), |v| v.to_string());
-    let head = format!(
-        "温度偏高（电池 {} °C、芯片 {} °C）",
-        deg(r.batt),
-        deg(r.chip)
-    );
-    let text = match plan {
-        (true, true) => format!("{head}：暂停充电、CHILL 降到省电档，凉下来自动恢复"),
-        (true, false) => format!("{head}：暂停充电，凉下来自动恢复"),
-        (false, true) => format!("{head}：CHILL 降到省电档，凉下来自动恢复"),
-        (false, false) => format!("{head}，放到通风的地方"),
-    };
+    let text = notice_text(r, plan);
     let dir = crate::state::host_path(luyaz_api::alerts::DIR);
     let a = luyaz_api::alerts::Alerts::at(std::path::Path::new(&dir));
     if let Err(e) = a.add_once(&id, NOTICE_KIND, &text, wall, up) {

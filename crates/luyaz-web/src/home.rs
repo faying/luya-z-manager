@@ -522,6 +522,27 @@ impl Poll {
             bat_word,
         );
 
+        // The big text is the worst thing now (owner 11-14: 「信号良好」 stood over a red
+        // 「经 CHILL 访问外网失败」): the core's network finding, then too hot, then a low battery
+        // off the charger; the signal's own verdict moves to the line under it.
+        let worst: Option<(&'static str, String)> = finding
+            .as_ref()
+            .filter(|f| f.mark == "bad")
+            .map(|f| ("bad", f.head.clone()))
+            .or_else(|| {
+                temp_c
+                    .filter(|t| *t >= HOT_C)
+                    .map(|_| ("warn", l.pick("Too hot", "过热").to_owned()))
+            })
+            .or_else(|| {
+                num(&b["percent"])
+                    .filter(|p| (0.0..=LOW_BATTERY_PCT).contains(p) && plugged == Some(false))
+                    .map(|p| match l {
+                        Lang::En => ("warn", format!("Battery low ({}%)", p.round())),
+                        Lang::Zh => ("warn", format!("电量低（{}%）", p.round())),
+                    })
+            });
+
         // ---- network identity (netinfo) ----
         let ni = self.ni.val.as_ref();
         let exit = |k: &str| ni.map(|n| &n[k]).filter(|x| x.is_object());
@@ -796,7 +817,10 @@ impl Poll {
             sub_loading,
             alerts_n,
             alerts_label: counted(alerts_n, "new alerts", "条新告警", "Alerts", "告警"),
-            status: crate::pages::status_frag(&sv),
+            status: match &worst {
+                Some((tone, head)) => worst_frag(&sv, tone, head),
+                None => crate::pages::status_frag(&sv),
+            },
             why,
             finding,
             ro_stale: sig_stale || (seen && !block_ok("live")),
@@ -918,8 +942,29 @@ fn carrier_summary(l: Lang, nr: usize, lte: usize) -> String {
     }
 }
 
+/// CPU temperature home calls 「过热」 (and puts first).
+const HOT_C: f64 = 80.0;
+/// On battery at or under this, home's big text says so.
+const LOW_BATTERY_PCT: f64 = 10.0;
+
+/// Home's status block when something is worse than the signal: same block, the worst thing as
+/// the state, the signal's verdict and meta under it. Same id, so live patches keep working.
+fn worst_frag(sv: &crate::view::SignalView, tone: &str, head: &str) -> String {
+    let sym = if tone == "bad" { "■" } else { "▲" };
+    let meta = sv
+        .meta
+        .as_deref()
+        .map(|m| format!("<div class=\"nd-status__meta\">{}</div>", agent::esc(m)))
+        .unwrap_or_default();
+    format!(
+        "<div id=\"sig-status\">\n<section class=\"nd-status nd-status--{tone}\">\n<div class=\"nd-status__main\">\n<div class=\"nd-status__state\" role=\"status\" aria-live=\"polite\"><span class=\"nd-mark nd-mark--{tone}\"><span class=\"nd-mark__sym\" aria-hidden=\"true\">{sym}</span><span>{}</span></span></div>\n<div class=\"nd-status__reason\">{}</div>\n{meta}</div>\n</section>\n</div>",
+        agent::esc(head),
+        agent::esc(sv.word),
+    )
+}
+
 fn temp_word(l: Lang, c: f64) -> &'static str {
-    if c >= 80.0 {
+    if c >= HOT_C {
         l.pick("Hot", "过热")
     } else if c >= 65.0 {
         l.pick("Warm", "偏热")
@@ -1047,6 +1092,8 @@ fn _unused(_: SystemTime) {}
 /// The home page's one network notice (`network.health.say`).
 #[derive(Debug, PartialEq)]
 pub struct Notice {
+    /// The core's short headline (`say.label`: 「代理转发不通」, 「外网不通」); home's big text when bad.
+    pub head: String,
     pub text: String,
     /// "bad" or "ok" (`nd-mark--…`)
     pub mark: &'static str,
@@ -1065,14 +1112,18 @@ fn notice(net: &Value, l: Lang) -> Option<Notice> {
     };
     let h = &net["health"];
     let say = &h["say"];
-    let (text, id) = if say.is_object() {
-        (pick(say, "detail"), say["id"].as_str().unwrap_or(""))
+    let (head, text, id) = if say.is_object() {
+        (pick(say, "label"), pick(say, "detail"), say["id"].as_str().unwrap_or(""))
     } else if h.is_object() {
         // a core with network.health that says nothing: healthy, no notice
         return None;
     } else {
         // older core: the finding's symptom
-        (pick(&net["finding"], "symptom"), "network.finding")
+        (
+            l.pick("Network problem", "网络有问题").to_owned(),
+            pick(&net["finding"], "symptom"),
+            "network.finding",
+        )
     };
     if text.is_empty() {
         return None;
@@ -1085,7 +1136,8 @@ fn notice(net: &Value, l: Lang) -> Option<Notice> {
         _ => Some(evidence),
     };
     let mark = if id == "network.recovered" { "ok" } else { "bad" };
-    Some(Notice { text, mark, link: link.map(|(t, u)| (u, t)) })
+    let head = if head.is_empty() { l.pick("Network problem", "网络有问题").to_owned() } else { head };
+    Some(Notice { head, text, mark, link: link.map(|(t, u)| (u, t)) })
 }
 
 #[cfg(test)]
@@ -1317,6 +1369,40 @@ mod tests {
     fn carriers_summary_words() {
         assert_eq!(carrier_summary(Lang::Zh, 1, 2), "2 个 LTE + 1 个 NR 载波");
         assert_eq!(carrier_summary(Lang::En, 0, 0), "No active carriers");
+    }
+
+    /// Owner 11-14: the big text is the worst thing now, the signal's verdict under it; with
+    /// nothing worse the signal's own block as before.
+    #[test]
+    fn the_big_text_is_the_worst_thing_now() {
+        let hub = app_hub();
+        hub.set_link_for_test(Link::Live);
+        let mut p = poll();
+        hub.set_side(|s| s.public = Some(json!({"network":{"verdict":"ok","health":{"say":null,"next":null}}})));
+        let v = hub.read(|st| p.view(st, Instant::now()));
+        assert!(v.status.contains("id=\"sig-status\"") && !v.status.contains("Proxy not getting through"));
+        hub.set_side(|s| {
+            s.public = Some(json!({"network":{"verdict":"ok","health":{"next":null,"say":{
+                "id":"network.proxy","label":"代理转发不通","label_en":"Proxy not getting through",
+                "detail":"移动网络正常，但经 CHILL 访问外网失败；可以换节点或重启 CHILL。"}}}}))
+        });
+        let v = hub.read(|st| p.view(st, Instant::now()));
+        assert!(v.status.contains("nd-status--bad") && v.status.contains("<span>Proxy not getting through</span>"), "{}", v.status);
+        assert!(v.status.contains("id=\"sig-status\"") && v.status.contains("nd-status__reason"));
+        assert!(v.finding.unwrap().text.contains("经 CHILL"), "the sentence stays under it");
+        // a recovery is good news: the signal's block, not a headline
+        hub.set_side(|s| {
+            s.public = Some(json!({"network":{"verdict":"ok","health":{"next":null,"say":{
+                "id":"network.recovered","label":"移动网络已恢复","detail":"移动网络已恢复，正在检查代理。"}}}}))
+        });
+        assert!(!hub.read(|st| p.view(st, Instant::now())).status.contains("nd-status--bad"));
+        // too hot and a low battery off the charger, in that order, when the network is fine
+        hub.set_side(|s| s.public = Some(json!({"network":{"verdict":"ok","health":{"say":null,"next":null}}})));
+        feed(&hub, "block", block("battery", 3, json!({"percent":8,"online":1,"charger_connect":0})));
+        let v = hub.read(|st| p.view(st, Instant::now()));
+        assert!(v.status.contains("nd-status--warn") && v.status.contains("Battery low (8%)"), "{}", v.status);
+        feed(&hub, "block", block("battery", 4, json!({"percent":8,"online":1,"charger_connect":1,"time_to_full":90})));
+        assert!(!hub.read(|st| p.view(st, Instant::now())).status.contains("Battery low"), "charging: not shouted");
     }
 
     #[test]

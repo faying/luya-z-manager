@@ -24,6 +24,26 @@
 //! The decision logic is [`Machine`] and [`run_job`], with all I/O behind
 //! [`Io`] and time passed in, so the flows are unit-tested without a device.
 
+/// A log line that cannot be written is dropped instead of panicking (std's `eprintln!` panics,
+/// and the core's device build aborts on any panic: a full /tmp stopped it on 10-26). Same as
+/// luyaz-core's `main.rs` (P-7); defined before every `mod`, so the whole crate uses it.
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 // (de)serialised state and records
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -477,7 +497,7 @@ impl Machine {
                         "家里 15 分钟没回应，已关".into(),
                         "Home silent 15 min; turned off".into(),
                     );
-                    io.alert("home-exit-down", "家里出口 15 分钟没回应，「其余都走家里」已关");
+                    io.alert("home-exit-down", "home exit silent 15 min; Rest via home turned off");
                 }
             }
             None => {}
@@ -666,7 +686,10 @@ pub fn run_job(m: &Mutex<Machine>, io: &mut dyn Io, clock: &dyn Clock, item: Ite
         if let Err(e) = io.apply(old) {
             eprintln!("[home_exit] could not undo after a failed check: {e}");
         }
-        io.alert("home-exit-check-failed", &format!("家里出口自检没过（{}），已关回去", last.zh()));
+        io.alert(
+            "home-exit-check-failed",
+            &format!("check failed ({}); turned back off", last.code()),
+        );
         fail(io, last, "");
         return;
     }

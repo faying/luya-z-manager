@@ -58,7 +58,7 @@ async function own(p) {
   const dialog = () => p.locator("dialog#lan-ap-confirm[open]");
   const apply = () => p.click("#lan-form button:has-text('应用')");
 
-  ok(/DHCP 已开启/.test(await txt(p, "#lan-status")) && /分配 192\.168\.0\.100 – 192\.168\.0\.149/.test(await txt(p, "#lan-status")), `status: ${await txt(p, "#lan-status")}`);
+  ok(/DHCP 已开启/.test(await txt(p, "#lan-status")) && /最多给 50 台设备自动分配地址/.test(await txt(p, "#lan-status")), `status: ${await txt(p, "#lan-status")}`);
   ok(/12 小时/.test(await txt(p, "#lan-rows")) && /255\.255\.255\.0/.test(await txt(p, "#lan-rows")), "rows: mask, lease");
   ok(await p.locator("input[data-bind=_nip]").count() === 0, "form closed at first");
 

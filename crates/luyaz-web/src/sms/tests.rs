@@ -52,6 +52,8 @@ fn rows_decode_like_the_old_page() {
     assert_eq!(decode_text("6D4B8BD50041"), "测试A");
     assert_eq!(decode_text("not hex"), "not hex");
     assert_eq!(decode_text("00410000"), "A", "trailing NULs go");
+    let mms: String = "multimedia_information".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    assert!(decode_text(&mms).starts_with("[彩信 MMS]"), "the firmware's MMS placeholder reads as a notice");
     // numbers: plain stays plain, even when it looks like hex
     assert_eq!(decode_number("10086"), "10086");
     assert_eq!(decode_number("861380000000"), "861380000000");
@@ -117,8 +119,7 @@ fn capacity_reads_the_per_box_totals() {
         [
             "SIM 已用 4 / 50",
             "设备已用 92 / 100",
-            "总已用 96 / 150",
-            "未读 2"
+            "总已用 96 / 150"
         ]
     );
 }
@@ -129,7 +130,10 @@ fn the_status_reads_loading_failed_unread_and_stopped() {
     let v = hub.read(|st| view(st, &Got::default(), None, Lang::Zh, true));
     assert_eq!((v.tone, v.state.as_str()), ("neutral", "正在读取短信…"));
     assert!(matches!(v.list, List::Loading));
-    assert_eq!(v.capacity[3].1, "—", "unread only once there is a list");
+    assert!(
+        v.capacity.iter().all(|(k, _)| *k != "未读"),
+        "unread is the status title, not again in the meta (11-14)"
+    );
     let failed = Got {
         err: Some((ReadErr::Unreachable, Instant::now())),
         ..Got::default()

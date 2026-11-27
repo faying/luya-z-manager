@@ -161,6 +161,17 @@ fn word(label: &Option<String>, en: &Option<String>, kind: &str, l: Lang, events
         .unwrap_or_else(|| kind.to_owned())
 }
 
+/// An alert's detail line in the page's language: the queue keeps it in English (ASCII only);
+/// luyaz-alerts words the known shapes in Chinese, the rest (names, MACs, paths) shows as stored.
+/// Empty: nothing to add to the label.
+pub fn detail(kind: &str, text: &str, l: Lang) -> String {
+    match l {
+        Lang::Zh => luyaz_api::alerts::detail_zh(kind, text),
+        Lang::En => None,
+    }
+    .unwrap_or_else(|| crate::topbar::without_event_id(text).to_owned())
+}
+
 /// "MM-DD HH:mm" of a device-clock epoch (local wall time labelled UTC: the UTC digits are the
 /// local ones).
 pub fn mdhm(secs: i64) -> String {
@@ -441,7 +452,7 @@ impl Poll {
                         let label = esc(&word(&e.label, &e.label_en, &e.kind, l, &d.events));
                         let head = if e.unread {
                             format!(
-                                "<span class=\"nd-row__label\"><span class=\"al-unread\"><span aria-hidden=\"true\">▲ </span><span class=\"sr-only\">{}: </span></span>{label}</span>",
+                                "<span class=\"nd-row__label\"><span class=\"al-unread\" aria-hidden=\"true\"></span><span class=\"sr-only\">{}: </span>{label}</span>",
                                 l.pick("unread", "未读")
                             )
                         } else {
@@ -449,10 +460,9 @@ impl Poll {
                         };
                         out.push_str(&format!(
                             "<li class=\"nd-row nd-row--two al-item\"><span class=\"nd-row__text\">{head}{}</span><span class=\"al-time{}\">{}</span></li>",
-                            if e.text.is_empty() {
-                                String::new()
-                            } else {
-                                format!("<span class=\"nd-row__sub al-wrap\">{}</span>", esc(&e.text))
+                            match detail(&e.kind, &e.text, l).as_str() {
+                                "" => String::new(),
+                                t => format!("<span class=\"nd-row__sub al-wrap\">{}</span>", esc(t)),
                             },
                             if e.time.is_some() { " nd-mono" } else { "" },
                             esc(&when(e, l))
@@ -591,6 +601,14 @@ impl Poll {
                     "suppressed-abroad" => (
                         "neutral",
                         l.pick("Not sent — abroad", "在国外，未发").to_owned(),
+                    ),
+                    "stale-held" => (
+                        "neutral",
+                        l.pick(
+                            "Not sent — held for the clock, out of date",
+                            "时间不可信时暂缓，已过时未补发",
+                        )
+                        .to_owned(),
                     ),
                     "no-number" => (
                         "neutral",

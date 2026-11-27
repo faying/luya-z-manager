@@ -490,14 +490,19 @@ do_ui() {
 # ── eSIM：lpac（走 qmi_qrtr）放 /data/esim；后台和触屏读写 eUICC 卡都用它 ─────
 do_esim() {   # lpac 组件 + 读一次卡
     put_tree "$P/esim.tgz" /data/esim   # 整个目录换新
-    # 装完顺手读一次卡：插的是普通 SIM 时读不到，不算失败
-    # 和核心共用一把卡锁（luyaz-esim CARD_FLOCK），免得两边同时动卡；没有 flock 就直接读
-    _flock=; command -v flock >/dev/null 2>&1 && _flock="flock -w 60 /var/run/luyaz-esim.lock"
-    _eid=$($_flock /data/esim/lpac.sh chip info 2>&1 | sed -n 's/.*"eidValue":"\([0-9A-Fa-f]*\)".*/\1/p')
-    if [ -z "$_eid" ]; then
+    # 装完顺手读一次卡：两个卡槽都试（双卡槽设计 §2）；插的是普通 SIM 时读不到，不算失败
+    # 和核心共用一把卡锁（luyaz-esim CARD_FLOCK），免得两边同时动卡；没有 flock 就直接读。
+    # 设备的 busybox flock 没有 -w（11-16 实测：带 -w 只打印用法、什么都不读）
+    _flock=; command -v flock >/dev/null 2>&1 && _flock="flock /var/run/luyaz-esim.lock"
+    _found=
+    for _slot in 1 2; do
+        _eid=$($_flock /data/esim/qmi_uim_probe eid $_slot 2>/dev/null | sed -n 's/^EID=\([0-9A-Fa-f]*\)$/\1/p')
+        [ -n "$_eid" ] || continue
+        _found=1
+        log "$(tx "eSIM: 卡槽 $_slot 读到 eUICC 卡，EID $_eid" "eSIM: eUICC card in slot $_slot, EID $_eid")"
+    done
+    if [ -z "$_found" ]; then
         log "$(tx 'eSIM: 组件已装，但没读到 eUICC 卡（现在插的是普通 SIM 的话这是正常的）' 'eSIM: installed, but no eUICC card was read (normal if a plain SIM is in)')"   # 不算失败
-    else
-        log "$(tx "eSIM: 读到 eUICC 卡，EID $_eid" "eSIM: eUICC card found, EID $_eid")"
     fi  # do_esim
 }  # do_esim
 

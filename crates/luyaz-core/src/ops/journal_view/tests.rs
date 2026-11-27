@@ -187,3 +187,38 @@ fn chill_and_blank_old_entries() {
     assert_eq!(e[1]["undo_view"]["ok"], false);
     assert_eq!(get(&e[1]["undo_view"], "why_zh"), "没有旧值可退回");
 }
+
+/// A stock call says which one it was (11-14: fifty rows said only 原厂设置); SMS ones keep only
+/// the method, and a row from before that kept nothing still reads.
+#[test]
+fn stock_calls_and_sms_rows_say_what_they_did() {
+    let mut e = vec![
+        json!({"action": "vendor.call", "item": null, "source": "scenario", "result": "ok",
+               "params": {"args": {"switch": true}, "method": "enableAutoSleep", "object": "zwrt_zte_sleep_faw.wakelock"}}),
+        json!({"action": "vendor.call", "item": null, "source": "guard", "result": "ok",
+               "params": crate::ops::record::redact("vendor.call",
+                   &json!({"object": "zwrt_wms", "method": "zte_libwms_send_sms", "args": {"number": "+8613800000000"}}))}),
+        json!({"action": "vendor.call", "item": null, "source": "web", "result": "ok",
+               "params": {"method": "router_get_x", "object": "o"}}),
+        json!({"action": "sms.delete", "item": null, "source": "guard", "result": "ok", "params": null}),
+        json!({"action": "vendor.call", "item": null, "source": "guard", "result": "ok", "params": null}),
+    ];
+    decorate(&mut e);
+    let got: Vec<(&str, &str)> = e
+        .iter()
+        .map(|r| (get(r, "what_zh"), get(r, "change_zh")))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("原厂设置", "打开自动休眠"),
+            ("原厂设置", "发短信"),
+            ("原厂设置", "router_get_x"),
+            ("短信", "删除"),
+            ("原厂设置", ""),
+        ]
+    );
+    for r in &e {
+        en_ok(get(r, "change_en"));
+    }
+}

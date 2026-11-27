@@ -1,14 +1,20 @@
 //! The eSIM page. luyaz-core does the work (/api/esim/*: it switches profiles and gets the
 //! modem to read the new card); the screen only lists the profiles, shows the core's job and
 //! asks for a switch, which takes two taps on the same row.
+//!
+//! A dual-slot unit (the `cards` block has two rows, manager docs/designs/dual-slot-removable.md
+//! §2, §6) has one list per eUICC: each read and switch names its card by its slot (`slot`;
+//! the card table gives only an EID's tail). The core's job slot is one for both cards. The
+//! single-slot unit asks as it always did (no `slot`, no `eid`).
 
 use super::core_api::CoreApi;
 use super::util::{bytes_cap, find, find_byte, jstr, jtrue, mono_ms, objects, text, trunc};
 use crate::cf;
 use crate::json;
 use crate::lang::tr;
+use crate::logic::iccid_same;
 use crate::source::{ESIM_SEL_ARMED, ESIM_SEL_BUSY, ESIM_SEL_COOLDOWN, ESIM_SEL_CURRENT, ESIM_SEL_FAIL, ESIM_SEL_STARTED};
-use ui_model::esim_profile_t;
+use ui_model::{cards_t, esim_card_t, esim_profile_t};
 
 /// how often the job is read while the page is open
 const ES_IDLE_MS: i64 = 2000;
@@ -35,18 +41,38 @@ struct Prof {
     enabled: bool,
 }
 
-#[derive(Clone)]
-pub struct Esim {
+/// One eUICC and its list. The single-slot unit has one with `slot` 0: it is asked without a
+/// `slot`, as before the card table.
+#[derive(Clone, Default)]
+struct Card {
+    /// 1 or 2 on a dual-slot unit (the requests name the card with it); 0 = the single-slot
+    /// unit's card
+    slot: i32,
+    /// the card table's EID tail ("" unknown)
+    eid_tail: String,
+    /// the slot's role (data | voice | standby | off)
+    role: String,
     prof: Vec<Prof>,
     loaded: bool,
     err: String,
+    /// the core is showing its last list while the card settles (`stale`): listed, not switchable
+    settling: bool,
+    /// the core is still identifying the cards (503): read again next round
+    again: bool,
+}
+
+#[derive(Clone)]
+pub struct Esim {
+    /// a dual-slot unit: one entry per eUICC, in slot order (may be none); else the one card
+    cards: Vec<Card>,
+    dual: bool,
+    /// the table's eUICC slots and tails as last seen (a change reads the lists again)
+    cards_key: String,
     offline: bool,
     seen_id: i64,
     seen_status: String,
     busy: bool,
     busy_kind: String,
-    /// the core is showing its last list while the card settles (`stale`): listed, not switchable
-    settling: bool,
     /// the job of a switch asked for here that has not finished; 0 = none
     my_job: i64,
     /// how long to wait for `my_job` (`ES_GIVEUP_MS`, or the job's `deadline_s`)
@@ -55,13 +81,18 @@ pub struct Esim {
     retrying: bool,
     /// the core's word for our running switch (`Job::say`)
     live_say: String,
+    target_slot: i32,
     target_iccid: String,
     target_name: String,
     t0: i64,
+    /// the last switch's outcome, said on the block of the card in `msg_slot`
     msg: String,
+    msg_slot: i32,
     /// the last switch to this card ended in catBusy: only a restart or reseating the card helps
+    busy_slot: i32,
     busy_iccid: String,
     msg_ms: i64,
+    arm_slot: i32,
     arm_iccid: String,
     arm_ms: i64,
     was_active: bool,
@@ -74,25 +105,28 @@ pub struct Esim {
 impl Default for Esim {
     fn default() -> Self {
         Esim {
-            prof: Vec::new(),
-            loaded: false,
-            err: String::new(),
+            cards: vec![Card::default()],
+            dual: false,
+            cards_key: String::new(),
             offline: false,
             seen_id: -1,
             seen_status: String::new(),
             busy: false,
             busy_kind: String::new(),
-            settling: false,
             my_job: 0,
             giveup_ms: ES_GIVEUP_MS,
             retrying: false,
             live_say: String::new(),
+            target_slot: 0,
             target_iccid: String::new(),
             target_name: String::new(),
             t0: 0,
             msg: String::new(),
+            msg_slot: 0,
+            busy_slot: 0,
             busy_iccid: String::new(),
             msg_ms: 0,
+            arm_slot: 0,
             arm_iccid: String::new(),
             arm_ms: 0,
             was_active: false,
@@ -150,13 +184,19 @@ enum Listing {
     NotInstalled,
     /// the core is busy with the card and did not read it
     Busy,
-    Got(Vec<Prof>, bool),
+    /// a dual-slot unit still identifying its cards (503): ask again shortly
+    Identifying,
+    /// the list, the core's `stale`, and on a dual-slot unit the slot it is about
+    Got(Vec<Prof>, bool, i32),
 }
 
 fn listing(code: i32, body: Option<&[u8]>) -> Listing {
     let Some(body) = body.filter(|_| code != 0) else { return Listing::Unreachable };
     if code == 401 {
         return Listing::BadLogin;
+    }
+    if code == 503 {
+        return Listing::Identifying;
     }
     // a 502 is lpac failing to read a card, which mostly means an ordinary SIM
     let Some(data) = json::get(body, "data", ES_RESP_MAX).filter(|_| code == 200) else { return Listing::NoCard };
@@ -167,7 +207,11 @@ fn listing(code: i32, body: Option<&[u8]>) -> Listing {
         return Listing::Busy;
     }
     match json::get(&data, "profiles", ES_RESP_MAX) {
-        Some(list) => Listing::Got(parse_profiles(&list), jtrue(&data, "stale")),
+        Some(list) => Listing::Got(
+            parse_profiles(&list),
+            jtrue(&data, "stale"),
+            json::get_int(&data, "slot", 0) as i32,
+        ),
         None => Listing::NoCard,
     }
 }
@@ -204,33 +248,110 @@ impl Job {
 }
 
 impl Esim {
-    /// Read the profile list. false when the core did not answer.
-    fn load_list(&mut self, agent: &mut CoreApi) -> bool {
-        let (code, body) = agent.api("GET", "/api/esim/profiles", None, ES_RESP_MAX);
+    /// The card table from the core's snapshot. Two rows: one list per eUICC (`id` "eid"; a
+    /// plain card, an empty slot or one still being identified has none). Otherwise the one card
+    /// as before. A change in the set reads the lists again.
+    pub fn set_cards(&mut self, cards: Option<&cards_t>) {
+        let rows = cards.map_or(&[][..], |c| c.slots.as_slice());
+        let dual = rows.len() >= 2;
+        let euicc: Vec<_> = rows.iter().filter(|r| dual && r.present != 0 && r.id == "eid").collect();
+        let key = format!(
+            "{dual}|{}",
+            euicc.iter().map(|r| format!("{}:{}", r.slot, r.eid_tail)).collect::<Vec<_>>().join(",")
+        );
+        // the roles move without the set changing (a 双卡 switch): no new reads for that
+        for c in &mut self.cards {
+            if let Some(r) = rows.iter().find(|r| r.slot == c.slot) {
+                c.role = r.role.clone();
+            }
+        }
+        if key == self.cards_key {
+            return;
+        }
+        self.cards_key = key;
+        self.dual = dual;
+        if !dual {
+            if self.cards.len() != 1 || self.cards[0].slot != 0 {
+                self.cards = vec![Card::default()];
+            }
+            return;
+        }
+        let old = std::mem::take(&mut self.cards);
+        self.cards = euicc
+            .iter()
+            .map(|r| match old.iter().find(|c| c.slot == r.slot && c.eid_tail == r.eid_tail) {
+                // the same card: keep its list
+                Some(c) => Card { role: r.role.clone(), ..c.clone() },
+                None => Card { slot: r.slot, eid_tail: r.eid_tail.clone(), role: r.role.clone(), ..Default::default() },
+            })
+            .collect();
+        // a card that came or went: read again (and once more for the prefetch)
+        for c in &mut self.cards {
+            c.again = true;
+        }
+        self.prefetched.clear();
+    }
+
+    /// The slot a request names card `i` by: None on the single-slot unit (asked as before).
+    fn card_slot(&self, i: usize) -> Option<i32> {
+        self.dual.then_some(self.cards[i].slot)
+    }
+
+    /// Read card i's profile list. false when the core did not answer.
+    fn load_list(&mut self, agent: &mut CoreApi, i: usize) -> bool {
+        let path = match self.card_slot(i) {
+            Some(slot) => format!("/api/esim/profiles?slot={slot}"),
+            None => "/api/esim/profiles".to_string(),
+        };
+        let (code, body) = agent.api("GET", &path, None, ES_RESP_MAX);
+        let dual = self.dual;
+        let c = &mut self.cards[i];
+        c.again = false;
         let problem = match listing(code, body.as_deref()) {
             Listing::Unreachable => {
-                self.err = trunc(tr("连不上管理后台"), 96);
+                c.err = trunc(tr("连不上管理后台"), 96);
                 return false;
             }
             Listing::BadLogin => {
-                self.err = trunc(tr("登录管理后台失败（密码不对？）"), 96);
+                c.err = trunc(tr("登录管理后台失败（密码不对？）"), 96);
                 return true;
             }
             // the core will not touch the card now; the old list stands
             Listing::Busy => return true,
-            Listing::Got(prof, settling) => {
-                self.prof = prof;
-                self.settling = settling;
-                self.err.clear();
-                self.loaded = true;
+            Listing::Identifying => {
+                c.again = true;
+                c.err = trunc(tr("正在识别卡…"), 96);
+                return true;
+            }
+            // a dual-slot answer about another slot: the cards moved; the table will say so
+            Listing::Got(_, _, slot) if dual && slot != c.slot => {
+                c.again = true;
+                tr("卡刚换过，稍后再读")
+            }
+            Listing::Got(prof, settling, _) => {
+                c.prof = prof;
+                c.settling = settling;
+                c.err.clear();
+                c.loaded = true;
                 return true;
             }
             Listing::NoCard => tr("未读到 eSIM 卡"),
             Listing::NotInstalled => tr("未安装 eSIM 组件"),
         };
-        self.err = trunc(problem, 96);
-        self.prof.clear();
+        c.err = trunc(problem, 96);
+        c.prof.clear();
         true
+    }
+
+    /// Every card's list; false when the core did not answer.
+    fn load_lists(&mut self, agent: &mut CoreApi, only_again: bool) -> bool {
+        let mut ok = true;
+        for i in 0..self.cards.len() {
+            if ok && (!only_again || self.cards[i].again) {
+                ok = self.load_list(agent, i);
+            }
+        }
+        ok
     }
 
     /// How a switch asked for here ended, from the job slot; None while it still runs.
@@ -266,10 +387,13 @@ impl Esim {
             "done" if job.reason == "no_data" => Some(trunc(tr("已切换，数据还没恢复"), 160)),
             // the card moved, the modem did not, and today's automatic reboot is used up
             "done" if job.reason == "identity_stuck" => Some(trunc(tr("卡已换，重启设备完成切换"), 160)),
+            // a card not carrying data: switched on the card, the modem reads it later
+            "done" if job.reason == "inactive_slot" => Some(trunc(tr("卡上已切换，重启设备后生效"), 160)),
             "done" => Some(switched()),
             "error" if job.reason == "cancelled" => Some(trunc(tr("已停止重试"), 160)),
             "error" if job.reason == "card_busy" || job.message.contains("card is busy") => {
                 // catBusy: waiting is no use, the card needs power cycling (its row says so)
+                self.busy_slot = self.target_slot;
                 self.busy_iccid = self.target_iccid.clone();
                 Some(trunc(tr("卡忙没切成"), 160))
             }
@@ -312,6 +436,7 @@ impl Esim {
         let secs = (mono_ms() - self.t0) / 1000;
         eprintln!("esim: job {} {} after {secs} s: {}", self.my_job, job.status, job.message);
         self.msg = msg;
+        self.msg_slot = self.target_slot;
         self.msg_ms = mono_ms();
         self.my_job = 0;
         self.live_say.clear();
@@ -323,14 +448,17 @@ impl Esim {
     fn display_sig(&self, now: i64) -> String {
         let running_s = if self.my_job != 0 { (now - self.t0) / 1000 } else { 0 };
         let armed = !self.arm_iccid.is_empty() && now - self.arm_ms <= ES_ARM_MS;
-        let flags = [self.busy, self.settling, self.offline].map(|f| (f as i32).to_string()).join("/");
-        let mut s = format!("{}/{flags}/{}/{running_s}/{}", self.prof.len(), self.my_job, armed as i32);
-        for line in [&self.err, &self.msg, &self.busy_kind, &self.arm_iccid] {
+        let flags = [self.busy, self.offline].map(|f| (f as i32).to_string()).join("/");
+        let mut s = format!("{}/{flags}/{}/{running_s}/{}/{}", self.cards.len(), self.my_job, armed as i32, self.msg_slot);
+        for line in [&self.msg, &self.busy_kind, &self.arm_iccid] {
             s += "\u{1}";
             s += line;
         }
-        for p in &self.prof {
-            s += &format!("\u{2}{}\u{1}{}\u{1}{}\u{1}{}", p.iccid, p.name, p.sub, p.enabled as i32);
+        for c in &self.cards {
+            s += &format!("\u{3}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}", c.slot, c.role, c.err, c.settling as i32, c.loaded as i32);
+            for p in &c.prof {
+                s += &format!("\u{2}{}\u{1}{}\u{1}{}\u{1}{}", p.iccid, p.name, p.sub, p.enabled as i32);
+            }
         }
         s
     }
@@ -370,16 +498,20 @@ impl Esim {
             if self.my_job != 0 && now - self.t0 > self.giveup_ms {
                 self.my_job = 0;
                 self.msg = trunc(tr("切换超时，请看当前配置"), 160);
+                self.msg_slot = self.target_slot;
                 self.msg_ms = now;
                 reload = true;
             }
             // the list costs an lpac run: read it on opening, after a job, or once the core is
-            // back, never every round (a plain SIM would be asked every 2 s for nothing)
-            if ok && active && (opening || reload || self.offline) {
-                ok = self.load_list(agent);
+            // back, never every round (a plain SIM would be asked every 2 s for nothing); a card
+            // the core was still identifying, or one that just came, is read on its own
+            if ok && active {
+                ok = self.load_lists(agent, !(opening || reload || self.offline));
             }
             if !ok {
-                self.err = trunc(tr("连不上管理后台"), 96);
+                for c in &mut self.cards {
+                    c.err = trunc(tr("连不上管理后台"), 96);
+                }
                 self.busy = false;
             }
             self.offline = !ok;
@@ -393,19 +525,28 @@ impl Esim {
         true
     }
 
+    /// The card the flat fields (`esim_*`) describe: the one, or on a dual-slot unit the eUICC
+    /// in the data slot, else the first eUICC. None: a dual-slot unit without one.
+    fn main_card(&self) -> Option<usize> {
+        if self.cards.is_empty() {
+            return None;
+        }
+        Some(self.cards.iter().position(|c| c.role == "data").unwrap_or(0))
+    }
+
     pub fn loaded(&self) -> bool {
-        self.loaded
+        self.main_card().is_some_and(|i| self.cards[i].loaded)
     }
 
     fn enabled(&self) -> Option<&Prof> {
-        self.prof.iter().find(|p| p.enabled)
+        self.main_card().and_then(|i| self.cards[i].prof.iter().find(|p| p.enabled))
     }
 
     pub fn enabled_iccid(&self) -> &str {
         self.enabled().map_or("", |p| &p.iccid)
     }
 
-    /// Read the list once per card with the page closed (key: the modem's ICCID, or its IMSI),
+    /// Read the lists once per card with the page closed (key: the modem's ICCID, or its IMSI),
     /// so 蜂窝 can tell a plain SIM from an eSIM. Once only, whatever comes back: lpac holds the
     /// screen up and pokes the card.
     pub fn prefetch(&mut self, agent: &mut CoreApi, key: &str) -> bool {
@@ -414,15 +555,19 @@ impl Esim {
             return false;
         }
         self.prefetched = key;
-        self.load_list(agent)
+        self.load_lists(agent, false)
     }
 
     pub fn current(&self) -> &str {
         self.enabled().map_or("-", |p| &p.name)
     }
 
-    /// The status line in the screen's language; for showing only.
-    pub fn state(&self) -> String {
+    /// The status line of card i in the screen's language; for showing only.
+    fn card_state(&self, i: usize) -> String {
+        let c = &self.cards[i];
+        if self.my_job != 0 && self.target_slot != c.slot {
+            return tr("另一张卡正在切换").to_string();
+        }
         if self.my_job != 0 && !self.live_say.is_empty() {
             return bytes_cap(&cf!(tr("%s · 已 %ld 秒"), &self.live_say, (mono_ms() - self.t0) / 1000), 192);
         }
@@ -430,6 +575,7 @@ impl Esim {
             let line = if self.retrying { tr("卡忙，自动重试中 · 已 %ld 秒") } else { tr("切换中 · 已 %ld 秒") };
             return bytes_cap(&cf!(line, (mono_ms() - self.t0) / 1000), 192);
         }
+        let mine = !self.msg.is_empty() && self.msg_slot == c.slot;
         let line = if self.busy {
             // one sentence per kind, so each language can order it its own way
             match self.busy_kind.as_str() {
@@ -439,11 +585,11 @@ impl Esim {
                 "notifications" => tr("正在发送 eSIM 通知"),
                 _ => tr("网页端正在操作"),
             }
-        } else if !self.err.is_empty() {
-            self.err.as_str()
-        } else if !self.msg.is_empty() {
+        } else if !c.err.is_empty() {
+            c.err.as_str()
+        } else if mine {
             self.msg.as_str()
-        } else if self.settling {
+        } else if c.settling {
             tr("卡片还在稳定，列表稍后更新")
         } else {
             tr("就绪")
@@ -451,26 +597,70 @@ impl Esim {
         line.to_string()
     }
 
-    pub fn ready(&self) -> bool {
-        self.my_job == 0 && !self.busy && !self.settling && self.err.is_empty() && self.msg.is_empty()
+    fn card_ready(&self, i: usize) -> bool {
+        let c = &self.cards[i];
+        let mine = !self.msg.is_empty() && self.msg_slot == c.slot;
+        self.my_job == 0 && !self.busy && !c.settling && c.err.is_empty() && !mine
     }
 
-    pub fn profiles(&self) -> Vec<esim_profile_t> {
+    /// The main card's status line (the single-slot page's).
+    pub fn state(&self) -> String {
+        match self.main_card() {
+            Some(i) => self.card_state(i),
+            None => tr("就绪").to_string(),
+        }
+    }
+
+    pub fn ready(&self) -> bool {
+        self.main_card().is_some_and(|i| self.card_ready(i))
+    }
+
+    fn card_profiles(&self, i: usize) -> Vec<esim_profile_t> {
+        let c = &self.cards[i];
         let now = mono_ms();
-        let armed = (now - self.arm_ms <= ES_ARM_MS).then_some(self.arm_iccid.as_str()).filter(|a| !a.is_empty());
-        let going = (self.my_job != 0).then_some(self.target_iccid.as_str());
-        let busy_card = Some(self.busy_iccid.as_str()).filter(|b| !b.is_empty());
-        self.prof
+        let armed = now - self.arm_ms <= ES_ARM_MS && self.arm_slot == c.slot;
+        let going = self.my_job != 0 && self.target_slot == c.slot;
+        let busy_card = self.busy_slot == c.slot;
+        c.prof
             .iter()
             .map(|p| {
-                let here = Some(p.iccid.as_str());
+                let here = |x: &str| iccid_same(x, &p.iccid);
+                let is_going = going && here(&self.target_iccid);
                 esim_profile_t {
                     name: p.name.clone(),
                     sub: p.sub.clone(),
                     enabled: p.enabled as i32,
-                    armed: (armed == here) as i32,
-                    going: (going == here) as i32,
-                    card_busy: (going != here && busy_card == here) as i32,
+                    armed: (armed && here(&self.arm_iccid)) as i32,
+                    going: is_going as i32,
+                    card_busy: (!is_going && busy_card && here(&self.busy_iccid)) as i32,
+                }
+            })
+            .collect()
+    }
+
+    /// The main card's rows (the single-slot page's list).
+    pub fn profiles(&self) -> Vec<esim_profile_t> {
+        self.main_card().map(|i| self.card_profiles(i)).unwrap_or_default()
+    }
+
+    /// A dual-slot unit's blocks, one per eUICC in slot order; empty on the single-slot unit.
+    pub fn cards(&self) -> Vec<esim_card_t> {
+        if !self.dual {
+            return Vec::new();
+        }
+        (0..self.cards.len())
+            .map(|i| {
+                let c = &self.cards[i];
+                let en = c.prof.iter().find(|p| p.enabled);
+                esim_card_t {
+                    slot: c.slot,
+                    eid_tail: c.eid_tail.clone(),
+                    current: en.map_or("-", |p| &p.name).to_string(),
+                    state: self.card_state(i),
+                    ready: self.card_ready(i) as i32,
+                    loaded: c.loaded as i32,
+                    enabled_iccid: en.map_or("", |p| &p.iccid).to_string(),
+                    profiles: self.card_profiles(i),
                 }
             })
             .collect()
@@ -486,27 +676,34 @@ impl Esim {
         find(err.as_bytes(), b"wait ", 0).map_or(0, |at| json::atol(&err.as_bytes()[at + 5..]))
     }
 
-    /// A tap on row i. The first tap arms the row, a second one on it within 4 s asks for the
-    /// switch: a switch drops the data and may end in a reboot. Returns an ESIM_SEL_* code.
-    pub fn select(&mut self, agent: &mut CoreApi, i: usize) -> i32 {
+    /// A tap on row i of card `card` (the single-slot unit: card 0). The first tap arms the row,
+    /// a second one on it within 4 s asks for the switch: a switch drops the data and may end in
+    /// a reboot. Returns an ESIM_SEL_* code.
+    pub fn select(&mut self, agent: &mut CoreApi, card: usize, i: usize) -> i32 {
         let now = mono_ms();
-        let Some(p) = self.prof.get(i).cloned() else { return ESIM_SEL_FAIL };
-        if self.busy || self.settling || self.my_job != 0 {
+        let Some(c) = self.cards.get(card) else { return ESIM_SEL_FAIL };
+        let Some(p) = c.prof.get(i).cloned() else { return ESIM_SEL_FAIL };
+        let (slot, settling) = (c.slot, c.settling);
+        if self.busy || settling || self.my_job != 0 {
             return ESIM_SEL_BUSY;
         }
         if p.enabled {
             self.arm_iccid.clear();
             return ESIM_SEL_CURRENT;
         }
-        // armed by ICCID, so a list read between the taps does not move it to another row
-        let second_tap = self.arm_iccid == p.iccid && now - self.arm_ms <= ES_ARM_MS;
+        // armed by card and ICCID, so a list read between the taps does not move it to another row
+        let second_tap = self.arm_slot == slot && iccid_same(&self.arm_iccid, &p.iccid) && now - self.arm_ms <= ES_ARM_MS;
         if !second_tap {
+            self.arm_slot = slot;
             self.arm_iccid = p.iccid.clone();
             self.arm_ms = now;
             return ESIM_SEL_ARMED;
         }
         self.arm_iccid.clear();
-        let ask = trunc(&format!(r#"{{"iccid":"{}"}}"#, p.iccid), 64);
+        let ask = match self.card_slot(card) {
+            Some(slot) => trunc(&format!(r#"{{"iccid":"{}","slot":{slot}}}"#, p.iccid), 80),
+            None => trunc(&format!(r#"{{"iccid":"{}"}}"#, p.iccid), 64),
+        };
         let (code, body) = agent.api("POST", "/api/esim/switch", Some(&ask), ES_RESP_MAX);
         match code {
             409 => {
@@ -521,6 +718,7 @@ impl Esim {
                 } else {
                     trunc(tr("卡刚报过忙，稍后再试"), 160)
                 };
+                self.msg_slot = slot;
                 self.msg_ms = mono_ms();
                 return ESIM_SEL_COOLDOWN;
             }
@@ -536,6 +734,7 @@ impl Esim {
         self.my_job = job;
         self.giveup_ms = ES_GIVEUP_MS;
         self.retrying = false;
+        self.target_slot = slot;
         self.target_iccid = p.iccid;
         self.target_name = p.name;
         self.t0 = now;
@@ -573,16 +772,16 @@ mod tests {
         );
         let mut a = CoreApi::default();
         a.config(port);
-        let mut e = Esim { prof: p, ..Default::default() };
-        assert_eq!(e.select(&mut a, 0), ESIM_SEL_CURRENT);
-        assert_eq!(e.select(&mut a, 1), ESIM_SEL_ARMED);
+        let mut e = Esim { cards: vec![Card { prof: p, ..Default::default() }], ..Default::default() };
+        assert_eq!(e.select(&mut a, 0, 0), ESIM_SEL_CURRENT);
+        assert_eq!(e.select(&mut a, 0, 1), ESIM_SEL_ARMED);
         assert_eq!(e.profiles()[1].armed, 1);
-        assert_eq!(e.select(&mut a, 1), ESIM_SEL_COOLDOWN);
+        assert_eq!(e.select(&mut a, 0, 1), ESIM_SEL_COOLDOWN);
         assert_eq!(e.state(), "卡刚报过忙，还要等 480 秒再试");
-        assert_eq!(e.select(&mut a, 1), ESIM_SEL_ARMED);
-        assert_eq!(e.select(&mut a, 1), ESIM_SEL_STARTED);
+        assert_eq!(e.select(&mut a, 0, 1), ESIM_SEL_ARMED);
+        assert_eq!(e.select(&mut a, 0, 1), ESIM_SEL_STARTED);
         assert!(e.switching() && e.profiles()[1].going == 1 && e.state().starts_with("切换中"));
-        assert_eq!(e.select(&mut a, 0), ESIM_SEL_BUSY);
+        assert_eq!(e.select(&mut a, 0, 0), ESIM_SEL_BUSY);
         h.join().unwrap();
         assert!(seen.lock().unwrap()[1].ends_with(r#"{"iccid":"89852000000000004567"}"#));
     }
@@ -601,12 +800,12 @@ mod tests {
         let mut a = CoreApi::default();
         a.config(port);
         let mut e = Esim::default();
-        assert!(e.load_list(&mut a));
+        assert!(e.load_list(&mut a, 0));
         assert_eq!(e.profiles().len(), 2, "the list still shows");
         assert_eq!(e.state(), "卡片还在稳定，列表稍后更新");
         assert!(!e.ready());
-        assert_eq!(e.select(&mut a, 1), ESIM_SEL_BUSY, "no switch on a settling list");
-        assert!(e.load_list(&mut a));
+        assert_eq!(e.select(&mut a, 0, 1), ESIM_SEL_BUSY, "no switch on a settling list");
+        assert!(e.load_list(&mut a, 0));
         assert!(e.ready() && e.state() == "就绪", "a fresh list clears it");
         h.join().unwrap();
     }
@@ -624,5 +823,117 @@ mod tests {
         assert_eq!(e.busy_iccid, e.target_iccid, "card busy still marks the row");
         assert_eq!(e.switch_outcome(&j("error", "", "")).unwrap(), "切换失败：lpac: x", "older core: our words");
         assert_eq!(e.switch_outcome(&j("running", "", "安全重试中")), None);
+    }
+
+    fn table(rows: &str) -> cards_t {
+        let snap = format!(r#"{{"cards":{{"source":"uim","slots":[{rows}]}}}}"#);
+        crate::data::core_link::decode_snapshot(snap.as_bytes()).unwrap().cards.unwrap()
+    }
+
+    const LIST: &str = r#"[{"iccid":"89852000000000000011","profileName":"A","profileState":"enabled"},{"iccid":"89852000000000000022","profileName":"B","profileState":"disabled"}]"#;
+
+    /// The single-slot unit (one row, or no table): asked as before, no `slot` or `eid` anywhere.
+    #[test]
+    fn single_slot_sends_no_eid() {
+        crate::lang::set_en(false);
+        let (port, seen, h) = canned(
+            vec![
+                format!("HTTP/1.0 200 OK\r\n\r\n{{\"ok\":true,\"data\":{{\"installed\":true,\"profiles\":{LIST}}}}}"),
+                "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true,\"data\":{\"job_id\":3}}".into(),
+            ],
+            2,
+        );
+        let mut a = CoreApi::default();
+        a.config(port);
+        let mut e = Esim::default();
+        e.set_cards(Some(&table(r#"{"slot":1,"present":true,"role":"data","id":"eid","eid_tail":"1111"}"#)));
+        assert!(e.cards().is_empty(), "one row: no per-card blocks");
+        assert!(e.load_lists(&mut a, false));
+        assert_eq!((e.select(&mut a, 0, 1), e.select(&mut a, 0, 1)), (ESIM_SEL_ARMED, ESIM_SEL_STARTED));
+        h.join().unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].starts_with("GET /api/esim/profiles HTTP") || seen[0].contains("/api/esim/profiles HTTP"), "{}", seen[0]);
+        assert!(seen[1].ends_with(r#"{"iccid":"89852000000000000022"}"#), "{}", seen[1]);
+    }
+
+    /// Two eUICCs: each list and switch names its card by slot; the one in use is told by its
+    /// slot's role, the other card's switch is said on its own block only.
+    #[test]
+    fn two_euiccs_each_named_by_slot() {
+        crate::lang::set_en(false);
+        let ans = |slot: i32| format!("HTTP/1.0 200 OK\r\n\r\n{{\"ok\":true,\"data\":{{\"installed\":true,\"slot\":{slot},\"profiles\":{LIST}}}}}");
+        let (port, seen, h) = canned(vec![ans(1), ans(2), "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true,\"data\":{\"job_id\":9}}".into()], 3);
+        let mut a = CoreApi::default();
+        a.config(port);
+        let mut e = Esim::default();
+        e.set_cards(Some(&table(
+            r#"{"slot":1,"present":true,"role":"data","id":"eid","eid_tail":"1111"},{"slot":2,"present":true,"role":"standby","id":"eid","eid_tail":"2222"}"#,
+        )));
+        assert!(e.load_lists(&mut a, false));
+        let cards = e.cards();
+        assert_eq!(cards.iter().map(|c| c.slot).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(cards.iter().all(|c| c.loaded == 1 && c.profiles.len() == 2 && c.state == "就绪"));
+        assert_eq!(e.enabled_iccid(), "89852000000000000011", "the flat fields: the data slot's card");
+        assert_eq!((e.select(&mut a, 1, 1), e.select(&mut a, 1, 1)), (ESIM_SEL_ARMED, ESIM_SEL_STARTED));
+        let cards = e.cards();
+        assert!(cards[1].profiles[1].going == 1 && cards[0].profiles.iter().all(|p| p.going == 0));
+        assert_eq!(cards[0].state, "另一张卡正在切换");
+        h.join().unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].contains("/api/esim/profiles?slot=1 "), "{}", seen[0]);
+        assert!(seen[1].contains("/api/esim/profiles?slot=2 "), "{}", seen[1]);
+        assert!(seen[2].ends_with(r#"{"iccid":"89852000000000000022","slot":2}"#), "{}", seen[2]);
+    }
+
+    /// A plain card and one eUICC: the eUICC is named by its slot too; 503 = still identifying,
+    /// read again.
+    #[test]
+    fn plain_and_euicc_named_by_slot() {
+        crate::lang::set_en(false);
+        let got = format!("HTTP/1.0 200 OK\r\n\r\n{{\"ok\":true,\"data\":{{\"installed\":true,\"slot\":2,\"profiles\":{LIST}}}}}");
+        let (port, seen, h) = canned(
+            vec![
+                "HTTP/1.0 503 X\r\n\r\n{\"ok\":false,\"error\":\"the card is still being identified\"}".into(),
+                got,
+                "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true,\"data\":{\"job_id\":4}}".into(),
+            ],
+            3,
+        );
+        let mut a = CoreApi::default();
+        a.config(port);
+        let mut e = Esim::default();
+        e.set_cards(Some(&table(
+            r#"{"slot":1,"present":true,"role":"data","id":"plain","iccid_tail":"1234"},{"slot":2,"present":true,"role":"off","id":"eid","eid_tail":"2222"}"#,
+        )));
+        assert_eq!(e.cards().len(), 1, "the plain card has no eSIM block");
+        assert!(e.load_lists(&mut a, true), "a new card is read");
+        assert_eq!(e.cards()[0].state, "正在识别卡…");
+        assert!(e.load_lists(&mut a, true), "identifying: read again");
+        assert_eq!(e.enabled_iccid(), "89852000000000000011", "no eUICC in the data slot: the first");
+        assert_eq!((e.select(&mut a, 0, 1), e.select(&mut a, 0, 1)), (ESIM_SEL_ARMED, ESIM_SEL_STARTED));
+        h.join().unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].contains("/api/esim/profiles?slot=2 ") && seen[1].contains("/api/esim/profiles?slot=2 "), "{}", seen[1]);
+        assert!(seen[2].ends_with(r#"{"iccid":"89852000000000000022","slot":2}"#), "{}", seen[2]);
+    }
+
+    /// A slot whose card the core says is no eSIM card (404) gets the plain wording; a standby
+    /// switch's outcome says it takes effect later.
+    #[test]
+    fn not_an_esim_card_and_a_standby_switch() {
+        crate::lang::set_en(false);
+        let (port, _seen, h) = canned(vec!["HTTP/1.0 404 X\r\n\r\n{\"ok\":false,\"error\":\"the card in that slot is not an eSIM card\"}".into()], 1);
+        let mut a = CoreApi::default();
+        a.config(port);
+        let mut e = Esim::default();
+        e.set_cards(Some(&table(
+            r#"{"slot":1,"present":true,"role":"data","id":"plain","iccid_tail":"1234"},{"slot":2,"present":true,"role":"off","id":"eid","eid_tail":"2222"}"#,
+        )));
+        assert!(e.load_lists(&mut a, true));
+        assert!(e.cards()[0].state == "未读到 eSIM 卡" && e.cards()[0].profiles.is_empty());
+        h.join().unwrap();
+        let j = Job::read(br#"{"id":5,"kind":"switch","status":"done","reason":"inactive_slot"}"#);
+        let mut e = Esim { my_job: 5, ..Default::default() };
+        assert_eq!(e.own_outcome(&j).unwrap(), "卡上已切换，重启设备后生效");
     }
 }

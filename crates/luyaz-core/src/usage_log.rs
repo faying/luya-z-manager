@@ -314,16 +314,39 @@ fn save(dir: &Path, today: &Today) -> std::io::Result<()> {
     std::fs::rename(tmp, dir.join("today.json"))
 }
 
+/// Append a closed day to `days.jsonl` (kept 400 days). The file is the only copy of that
+/// history, so a read that fails is never taken for "empty": missing → start it; bytes that are
+/// not UTF-8 → moved aside to `days.jsonl.corrupt-<t>` and started again (said in the log); any
+/// other error → nothing written, the caller keeps the day and tries again (11-12: before, one
+/// failed read rewrote the file with today's lines only).
 fn close(dir: &Path, d: &Today, t: i64) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
+    use luyaz_persist::{Load, Parsed};
     let p = dir.join("days.jsonl");
-    let mut text = pruned(&std::fs::read_to_string(&p).unwrap_or_default(), t);
+    let old = match luyaz_persist::load_at(
+        &p,
+        |b| match std::str::from_utf8(b) {
+            Ok(text) => Parsed::Ok(text.to_owned()),
+            Err(e) => Parsed::Corrupt(format!("not text ({e})")),
+        },
+        t.max(0) as u64,
+    ) {
+        Load::Ok(text) => text,
+        Load::Missing => String::new(),
+        Load::Corrupt { why, moved_to } => {
+            eprintln!("[usage] days.jsonl is {why}: moved to {}", moved_to.display());
+            String::new()
+        }
+        // a later format is not one of ours yet; nothing to do but leave it
+        Load::Newer(why) => return Err(std::io::Error::other(why)),
+        Load::Io(e) => return Err(e),
+    };
+    let mut text = pruned(&old, t);
     for l in lines(d) {
         text.push_str(&format!("{l}\n"));
     }
-    let tmp = dir.join("days.jsonl.tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(tmp, p)
+    // 400 days of history, written once a day: worth the fsync (P-6)
+    std::fs::create_dir_all(dir)?;
+    luyaz_persist::write(&p, text.as_bytes(), luyaz_persist::Tier::Durable)
 }
 
 fn run(dir: &Path) {
@@ -331,6 +354,8 @@ fn run(dir: &Path) {
     let mut saved = 0i64;
     let mut landing = load_landing(dir);
     let mut landing_saved = 0i64;
+    // closed days not in days.jsonl yet (a write that failed); a few at most, kept in memory
+    let mut unclosed: Vec<Today> = Vec::new();
     loop {
         std::thread::sleep(EVERY);
         let fields = LATEST.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -357,8 +382,19 @@ fn run(dir: &Path) {
         }
         *LANDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(landing.clone());
         let closed = step(&mut today, &r, &day);
-        if let Some(d) = &closed {
-            let _ = close(dir, d, t);
+        if let Some(d) = closed.clone() {
+            unclosed.push(d);
+        }
+        while let Some(d) = unclosed.first() {
+            match close(dir, d, t) {
+                Ok(()) => {
+                    unclosed.remove(0);
+                }
+                Err(e) => {
+                    eprintln!("[usage] closing {}: {e}; tried again next round", d.day);
+                    break;
+                }
+            }
         }
         if (closed.is_some() || t - saved >= SAVE_EVERY || saved == 0) && save(dir, &today).is_ok()
         {
@@ -628,6 +664,19 @@ mod tests {
             },
         );
         close(&dir, &d, t).unwrap();
+        // a file that is not text is moved aside, not read as empty and overwritten
+        let raw = std::fs::read(dir.join("days.jsonl")).unwrap();
+        let mut broken = raw.clone();
+        broken.push(0xff);
+        std::fs::write(dir.join("days.jsonl"), &broken).unwrap();
+        close(&dir, &d, t).unwrap();
+        assert_eq!(std::fs::read(dir.join(format!("days.jsonl.corrupt-{t}"))).unwrap(), broken);
+        std::fs::write(dir.join("days.jsonl"), &raw).unwrap();
+        // any other read error writes nothing (a directory where the file should be)
+        let odd = dir.join("odd");
+        std::fs::create_dir_all(odd.join("days.jsonl")).unwrap();
+        assert!(close(&odd, &d, t).is_err());
+        assert!(odd.join("days.jsonl").is_dir());
         let mut open = Today {
             day: "2026-10-21".into(),
             ..Default::default()

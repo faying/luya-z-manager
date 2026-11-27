@@ -152,6 +152,9 @@ pub struct Chart {
     pub key: &'static str,
     pub title: &'static str,
     pub now: String,
+    /// Two-line charts: the readout split per line, each with its line's mark (the legend):
+    /// (`solid` | `dash` | `sig`, text). Empty: `now` as it is.
+    pub keys: Vec<(&'static str, String)>,
     pub aria: &'static str,
     pub plot: Option<Plot>,
 }
@@ -205,29 +208,60 @@ fn plot(
     let win = WINDOW.as_secs_f64();
     let x = |t: Instant| (1.0 - end.saturating_duration_since(t).as_secs_f64() / win) * (W - PAD_R);
     let y = |v: f64| PAD_Y + (top - v.clamp(0.0, top)) / top * (H - PAD_Y * 2.0);
+    // the 0–100 charts are percentages: say so on the scale
+    let pct = if max == Some(100.0) { "%" } else { "" };
     let ticks = [0.0, top / 2.0, top]
         .iter()
         .map(|&v| {
             (
                 format!("{:.1}", y(v)),
-                tick_label(v),
+                format!("{}{pct}", tick_label(v)),
                 format!("{:.2}", y(v) / H * 100.0),
             )
         })
         .collect();
     let lines = series
         .iter()
-        .map(|(f, dashed)| Line {
-            points: samples
-                .iter()
-                .filter_map(|s| f(s).map(|v| format!("{:.0},{:.0}", x(s.at), y(v))))
-                .collect::<Vec<_>>()
-                .join(" "),
-            dashed: *dashed,
-            sig: false,
+        .flat_map(|(f, dashed)| {
+            segments(samples, *f, &x, &y)
+                .into_iter()
+                .map(|points| Line {
+                    points,
+                    dashed: *dashed,
+                    sig: false,
+                })
         })
         .collect();
     Some(Plot { ticks, lines, rticks: Vec::new() })
+}
+
+/// Samples further apart than this are a gap (the page was closed, the data service was
+/// away): the line breaks there instead of drawing a straight run across it.
+pub const GAP: Duration = Duration::from_secs(20);
+
+/// One series as polylines, broken at gaps and at missing values.
+fn segments(
+    samples: &[Sample],
+    f: fn(&Sample) -> Option<f64>,
+    x: &dyn Fn(Instant) -> f64,
+    y: &dyn Fn(f64) -> f64,
+) -> Vec<String> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    let mut prev: Option<Instant> = None;
+    for s in samples {
+        let Some(v) = f(s) else {
+            prev = None;
+            continue;
+        };
+        if prev.is_none_or(|p| s.at.saturating_duration_since(p) > GAP) {
+            out.push(Vec::new());
+        }
+        if let Some(seg) = out.last_mut() {
+            seg.push(format!("{:.0},{:.0}", x(s.at), y(v)));
+        }
+        prev = Some(s.at);
+    }
+    out.into_iter().map(|p| p.join(" ")).collect()
 }
 
 /// SINR scale on the signal-and-speed chart: −10 dB at the bottom, 30 dB at the top.
@@ -246,18 +280,16 @@ fn plot_sig(samples: &[Sample]) -> Option<Plot> {
         let y = |v: f64| {
             PAD_Y + (SINR_HI - v.clamp(SINR_LO, SINR_HI)) / (SINR_HI - SINR_LO) * (H - PAD_Y * 2.0)
         };
-        p.lines.push(Line {
-            points: samples
-                .iter()
-                .filter_map(|s| s.sinr.map(|v| format!("{:.0},{:.0}", x(s.at), y(v))))
-                .collect::<Vec<_>>()
-                .join(" "),
-            dashed: false,
-            sig: true,
-        });
+        for points in segments(samples, |s| s.sinr, &x, &y) {
+            p.lines.push(Line {
+                points,
+                dashed: false,
+                sig: true,
+            });
+        }
         p.rticks = [SINR_LO, 10.0, SINR_HI]
             .iter()
-            .map(|&v| (format!("{:.2}", y(v) / H * 100.0), format!("{v:.0}")))
+            .map(|&v| (format!("{:.2}", y(v) / H * 100.0), format!("{v:.0} dB")))
             .collect();
     }
     Some(p)
@@ -300,6 +332,10 @@ pub fn view(st: &St, now: Instant, l: Lang) -> View {
                     fmt(last.and_then(|x| x.down), 1),
                     fmt(last.and_then(|x| x.up), 1)
                 ),
+                keys: vec![
+                    ("solid", format!("↓ {}", fmt(last.and_then(|x| x.down), 1))),
+                    ("dash", format!("↑ {} Mbps", fmt(last.and_then(|x| x.up), 1))),
+                ],
                 aria: l.pick(
                     "Mobile download (solid) and upload (dashed), last 5 minutes",
                     "近 5 分钟蜂窝下行（实线）和上行（虚线）",
@@ -310,6 +346,7 @@ pub fn view(st: &St, now: Instant, l: Lang) -> View {
                 key: "cpu",
                 title: "CPU",
                 now: format!("{}%", fmt(last.and_then(|x| x.cpu), 0)),
+                keys: Vec::new(),
                 aria: l.pick("CPU use, last 5 minutes", "近 5 分钟 CPU 占用"),
                 plot: plot(&s, &[(|x| x.cpu, false)], Some(100.0)),
             },
@@ -317,6 +354,7 @@ pub fn view(st: &St, now: Instant, l: Lang) -> View {
                 key: "mem",
                 title: l.pick("Memory", "内存"),
                 now: format!("{}%", fmt(last.and_then(|x| x.mem), 0)),
+                keys: Vec::new(),
                 aria: l.pick("Memory in use, last 5 minutes", "近 5 分钟内存占用"),
                 plot: plot(&s, &[(|x| x.mem, false)], Some(100.0)),
             },
@@ -324,6 +362,7 @@ pub fn view(st: &St, now: Instant, l: Lang) -> View {
                 key: "bat",
                 title: l.pick("Battery", "电池"),
                 now: bat_now,
+                keys: Vec::new(),
                 aria: l.pick("Battery level, last 5 minutes", "近 5 分钟电量"),
                 plot: plot(&s, &[(|x| x.bat, false)], Some(100.0)),
             },
@@ -337,6 +376,18 @@ pub fn view(st: &St, now: Instant, l: Lang) -> View {
                         .map(crate::view::js_num)
                         .unwrap_or_else(|| "—".into())
                 ),
+                keys: vec![
+                    ("solid", format!("↓ {} Mbps", fmt(last.and_then(|x| x.down), 1))),
+                    (
+                        "sig",
+                        format!(
+                            "SINR {} dB",
+                            last.and_then(|x| x.sinr)
+                                .map(crate::view::js_num)
+                                .unwrap_or_else(|| "—".into())
+                        ),
+                    ),
+                ],
                 aria: l.pick(
                     "Mobile download (left scale, Mbit/s) and serving-cell SINR (right scale, dB), last 5 minutes. Speed falling while SINR holds points at a busy cell; both falling, at the signal.",
                     "近 5 分钟蜂窝下行（左刻度，Mbps）和主载波 SINR（右刻度，dB）。SINR 稳而网速掉，多半是基站忙；两条一起掉，是信号差。",
@@ -510,6 +561,38 @@ mod tests {
             feed(&hub, "block", live(i + 1, 1_250_000, 100 + i));
         }
         hub
+    }
+
+    /// 11-14 ④: a gap breaks the line (it drew a straight run across), the 0–100 scales say %,
+    /// SINR's scale says dB, and a two-line chart's readout carries each line's mark.
+    #[test]
+    fn gaps_break_the_line_and_the_scales_and_readout_say_what_they_are() {
+        let t0 = Instant::now();
+        let at = |s: u64| Sample {
+            at: t0 + Duration::from_secs(s),
+            down: Some(1.0),
+            up: Some(0.1),
+            cpu: Some(10.0),
+            mem: None,
+            bat: None,
+            watt: None,
+            sinr: Some(5.0),
+        };
+        let s = [at(0), at(5), at(10), at(100), at(105)];
+        let p = plot(&s, &[(|x| x.cpu, false)], Some(100.0)).unwrap();
+        let pieces: Vec<usize> = p.lines.iter().map(|l| l.points.split(' ').count()).collect();
+        assert_eq!(pieces, [3, 2], "broken at the 90 s gap");
+        assert_eq!(p.ticks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["0%", "50%", "100%"]);
+        let q = plot_sig(&s).unwrap();
+        assert_eq!(q.lines.iter().filter(|l| l.sig).count(), 2, "SINR breaks too");
+        assert!(q.rticks.iter().all(|t| t.1.ends_with(" dB")), "{:?}", q.rticks);
+        assert!(q.ticks.iter().all(|t| !t.1.ends_with('%')), "speed is not a percentage");
+        let hub = hub_with_samples(3);
+        let v = hub.read(|st| view(st, Instant::now(), Lang::Zh));
+        let k: Vec<&str> = v.charts[0].keys.iter().map(|k| k.0).collect();
+        assert_eq!(k, ["solid", "dash"]);
+        assert_eq!(v.charts[4].keys[1].0, "sig");
+        assert!(v.charts[1].keys.is_empty());
     }
 
     #[test]

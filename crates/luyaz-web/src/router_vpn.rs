@@ -163,12 +163,8 @@ pub fn view(st: &St, busy: Option<(&str, bool)>, l: Lang) -> View {
                         Lang::En => format!("{name} Passthrough"),
                         Lang::Zh => format!("{name} 穿透"),
                     },
-                    sub: if on.is_none() {
-                        match l {
-                            Lang::En => format!("{d}: state unknown, the device doesn't report it, a change can't be confirmed"),
-                            Lang::Zh => format!("{d}：设备没有报告，改了也读不回来确认"),
-                        }
-                    } else {
+                    // unknown: the value says 「状态不明」 and the status block why, once (11-14)
+                    sub: {
                         d.into()
                     },
                     on,

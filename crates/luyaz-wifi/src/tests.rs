@@ -216,3 +216,29 @@ fn a_reload_is_verified_only_when_hostapd_serves_the_new_name() {
         "whole name, not a prefix"
     );
 }
+
+#[test]
+fn power_on_failed_only_counts_a_fresh_failed_status() {
+    use std::time::{Duration, SystemTime};
+    let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
+    let t1 = t0 + Duration::from_secs(5);
+    // Written after we started and says failed: abort.
+    assert!(load_failed_since(Some(t0), Some((t1, "power_on failed\n"))));
+    // Same file as before the write (stale failure from an earlier attempt): ignore.
+    assert!(!load_failed_since(Some(t0), Some((t0, "power_on failed"))));
+    // Fresh but successful, missing, or unreadable: never abort.
+    assert!(!load_failed_since(Some(t0), Some((t1, "power_on success"))));
+    assert!(!load_failed_since(Some(t0), None));
+    // No file before, one appeared saying failed: abort.
+    assert!(load_failed_since(None, Some((t1, "power_on failed"))));
+}
+
+#[test]
+fn poll_until_abort_stops_at_once_and_reports_why() {
+    let d = Duration::from_secs(30);
+    let started = Instant::now();
+    assert_eq!(poll_until_abort(d, || false, || true), (false, true));
+    assert_eq!(poll_until_abort(d, || true, || true), (true, false));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(poll_until_abort(Duration::ZERO, || false, || false), (false, false));
+}

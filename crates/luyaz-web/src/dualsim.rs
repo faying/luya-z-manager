@@ -145,8 +145,8 @@ impl Dual {
 
 pub fn slot_name(n: u8, l: Lang) -> &'static str {
     match n {
-        1 => l.pick("Slot 1 (SIM card)", "卡槽 1（插拔卡）"),
-        2 => l.pick("Slot 2 (built-in)", "卡槽 2（内置卡）"),
+        1 => l.pick("Slot 1", "卡槽 1"),
+        2 => l.pick("Slot 2", "卡槽 2"),
         _ => "—",
     }
 }

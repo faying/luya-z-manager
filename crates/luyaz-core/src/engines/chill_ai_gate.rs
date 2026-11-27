@@ -391,6 +391,16 @@ impl Gate {
             // save_mode would, so chill.sh's minute tick and this loop read the same mode
             if let Some(m) = mode_to_save(&file_mode, api.as_deref()) {
                 eprintln!("[ai-gate] mihomo's mode is {m} (mode file said {file_mode:?})");
+                // not through the core's exit route (that writes the file first): the dashboard
+                // (zashboard behind luyaz-web) or something on the controller itself
+                crate::api::chill_who::record(
+                    &crate::state::host_path(""),
+                    luyaz_api::alerts::now(),
+                    "mode",
+                    m,
+                    "seen on mihomo",
+                    "not through the core (dashboard or controller)",
+                );
                 let _ = crate::api::ops::atomic_write(
                     &host(ch::CHILL_MODE_FILE),
                     format!("{m}\n").as_bytes(),

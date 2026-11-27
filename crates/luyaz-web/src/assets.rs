@@ -23,6 +23,8 @@ const CSS_PARTS: [&str; 5] = [
 ];
 /// The step 5 pages' own bits (not on the signal page's first load).
 const PAGES_CSS: &str = include_str!("../static/pages.css");
+/// /tools/speedtest/ladder only (with pages.css).
+const LADDER_CSS: &str = include_str!("../static/ladder.css");
 /// /sms and /sms/compose only (not on every other page's first load).
 const SMS_CSS: &str = include_str!("../static/sms.css");
 const HOME_CSS: &str = include_str!("../static/home/home.css");
@@ -126,6 +128,12 @@ fn assets() -> &'static [Asset] {
                 "pages.css",
                 "text/css; charset=utf-8",
                 minify_css(PAGES_CSS).into_bytes(),
+                true,
+            ),
+            mk(
+                "ladder.css",
+                "text/css; charset=utf-8",
+                minify_css(LADDER_CSS).into_bytes(),
                 true,
             ),
             mk(

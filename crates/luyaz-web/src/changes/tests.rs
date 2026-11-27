@@ -91,7 +91,8 @@ fn list_detail_and_states() {
     );
     let h = html(&v);
     assert_eq!(h.matches("class=\"nd-row nd-row--two\" href=").count(), 4);
-    assert!(h.contains("只显示最近 50 条") && !h.contains("撤销"), "{h}");
+    // fewer than the core keeps: no 「只显示最近 50 条」 (11-14: it sat under twenty rows)
+    assert!(!h.contains("只显示最近 50 条") && !h.contains("撤销"), "{h}");
 
     // ?op= opens the detail: result, what · change, time · source, the undo button
     let v = view(&got(entries()), &op("web-20"), &mut snap, false, Lang::Zh);
@@ -151,7 +152,7 @@ fn list_detail_and_states() {
     );
     // an op that was never in the list: the list (the old page did the same)
     let h = html(&view(&got(rest), &op("nope-1"), &mut None, false, Lang::Zh));
-    assert!(h.contains("只显示最近 50 条"));
+    assert!(h.contains("class=\"nd-row nd-row--two\" href=") && !h.contains("/changes/undo/ask"));
 
     // empty, loading, unreadable, unreadable with old data, old u60d
     let h = html(&view(

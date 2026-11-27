@@ -266,8 +266,8 @@ fn home_exit(c: &super::Cfg) -> Option<Row> {
     if let Some(a) = time(&h).and_then(|t| age(&t, now))
         && a >= 1800
     {
-        hxz = format!("，{} 分钟前", a / 60);
-        hxe = format!(", {} min ago", a / 60);
+        hxz = format!("，{}", super::ago_zh(a.unsigned_abs()));
+        hxe = format!(", {}", super::ago_en(a.unsigned_abs()));
     }
     match delay(&h) {
         None => r(

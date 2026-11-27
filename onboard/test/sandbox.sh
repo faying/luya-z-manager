@@ -105,7 +105,7 @@ rewrite_paths() {
     -e "s#uci -q set zwrt_zte_dm.dm_update.TURNOFFPOLLING=1 \&\& uci -q commit zwrt_zte_dm#true#"
     -e "s#127.0.0.1:9090#127.0.0.1:19090#g"
     -e "s#put_tree \"\$P/esim.tgz\" /data/esim#put_tree \"\$P/esim.tgz\" $SB/esim; sed -i \"s,/data/esim,$SB/esim,g\" $SB/esim/lpac.sh#"
-    -e "s#/data/esim/lpac.sh chip info#$SB/esim/lpac.sh chip info#"
+    -e "s#/data/esim/qmi_uim_probe eid#$SB/esim/qmi_uim_probe eid#"
     -e 's#^do_ui() {#do_ui() { die "sandbox: ui disabled";#'
     -e 's#^do_recover() {#do_recover() { die "sandbox: recover disabled";#'
     -e 's#^do_chill() {#do_chill() { die "sandbox: chill disabled";#'

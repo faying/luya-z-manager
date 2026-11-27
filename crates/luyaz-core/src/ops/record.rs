@@ -480,14 +480,18 @@ pub(crate) fn civil(secs: u64) -> String {
 
 /// 密码类字段只写 `(changed)`，SIM 身份类字段只留后 4 位；短信动作不记参数（号码、内容）。
 pub fn redact(action: &str, params: &Value) -> Value {
-    if action.starts_with("sms.")
-        || (action == "vendor.call"
-            && params
-                .get("method")
-                .and_then(Value::as_str)
-                .is_some_and(|m| m.contains("sms")))
-    {
+    if action.starts_with("sms.") {
         return Value::Null;
+    }
+    if action == "vendor.call"
+        && let Some(m) = params
+            .get("method")
+            .and_then(Value::as_str)
+            .filter(|m| m.contains("sms"))
+    {
+        // which call it was, never what it carried (numbers, text)
+        let object = params.get("object").cloned().unwrap_or(Value::Null);
+        return json!({"object": object, "method": m});
     }
     redact_value(params)
 }

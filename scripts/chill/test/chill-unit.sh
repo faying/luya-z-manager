@@ -668,6 +668,25 @@ restore_mode; has "核心回到 rule 时恢复 direct" "$PATCHED" '{"mode":"dire
 PATCHED=""; echo rule > "$MODE_FILE"
 restore_mode; eq "记下的是 rule 时不用恢复" "$PATCHED" ""
 API_MODE_OUT=''; save_mode; eq "读不到模式时不覆盖记录" "$(cat "$MODE_FILE")" "rule"
+
+# 11-11：模式变了记进事件时间线；恢复成全部直连时收件箱提醒一次（每段直连期一次）
+DIRECT_TOLD="$CHILL_DIR/mode.direct-told"; ALERT_LIB="$CHILL_DIR/alert-lib.sh"; CHILL_WHO_LOG="$CHILL_DIR/chill-writes.log"; ALERTS_OUT="$CHILL_DIR/alerts.out"
+printf 'alert_add() { echo "$1|$2" >> "%s"; }\n' "$ALERTS_OUT" > "$ALERT_LIB"
+echo "2026-11-10T17:01:00Z exit -> direct_all (ok) by luyaz-ui[6669]" > "$CHILL_WHO_LOG"
+rm -f "$ALERTS_OUT" "$DIRECT_TOLD"; : > "$EVENTS"; last_event=""
+API_MODE_OUT='{"mode":"direct"}'; save_mode
+has "看到模式变成 direct：记进时间线" "$(cat "$EVENTS")" "mode_seen -> direct"
+save_mode; eq "模式没变：不重复记" "$(grep -c mode_seen "$EVENTS")" "1"
+API_MODE_OUT='{"mode":"rule"}'; restore_mode
+has "恢复成全部直连：收件箱提醒" "$(cat "$ALERTS_OUT" 2>/dev/null)" "chill-direct-kept|CHILL is back on but still All direct"
+has "提醒里带上是谁切的" "$(cat "$ALERTS_OUT" 2>/dev/null)" "by luyaz-ui[6669]"
+restore_mode; eq "同一段直连期只提醒一次" "$(wc -l < "$ALERTS_OUT" | tr -d ' ')" "1"
+API_MODE_OUT='{"mode":"rule"}'; save_mode
+[ -f "$DIRECT_TOLD" ] && ng "切回规则后提醒记号还在" || ok "切回规则：提醒记号清掉"
+has "切回规则也记进时间线" "$(cat "$EVENTS")" "mode_seen -> rule"
+echo direct > "$MODE_FILE"; restore_mode
+eq "又一段直连期：再提醒一次" "$(wc -l < "$ALERTS_OUT" | tr -d ' ')" "2"
+rm -f "$ALERT_LIB" "$DIRECT_TOLD"; echo rule > "$MODE_FILE"
 unset -f curl
 
 # ─────────────────────────────────────────────────────────────────────────────

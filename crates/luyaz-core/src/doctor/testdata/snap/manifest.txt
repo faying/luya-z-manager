@@ -1,13 +1,13 @@
 === scenario
 mship core "$T/core" "$DM"; mrec rc.local "$T/rc" "$RM"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -17,17 +17,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（2 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -37,17 +37,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（2 项）	Manifest	All match (2)
 --- text rc=0
   ● 清单：一致（2 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -57,7 +57,7 @@ ok	manifest	清单	一致（2 项）	Manifest	All match (2)
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	566c1edd8d0ebf4dd14155bcd9443204
@@ -78,13 +78,13 @@ state	ok	一致（2 项）
 === scenario
 mship core "$T/core" "$DM"; mrec rc.local "$T/rc" "$RM"; printf 'core build B\n' >"$T/core"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -94,17 +94,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -114,17 +114,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc）	Manifest	Mismatch: core (manifest 566c1edd, actual 4d91e5fc)
 --- text rc=0
   ▲ 清单：不一致的是 core（清单 566c1edd，实际 4d91e5fc）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -134,7 +134,7 @@ warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc）
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 differs	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	4d91e5fce5eef02dab838e96867058f6
@@ -155,13 +155,13 @@ state	warn	不一致的是 core（清单 566c1edd，实际 4d91e5fc）
 === scenario
 mship core "$T/core" "$DM"; mrec rc.local "$T/rc" "$RM"; printf 'core build B\n' >"$T/core"; echo "x edited" >>"$T/rc"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -171,17 +171,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc） 等 2 项
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -191,17 +191,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc） 等 2 项	Manifest	Mismatch: core (manifest 566c1edd, actual 4d91e5fc) and 1 more
 --- text rc=0
   ▲ 清单：不一致的是 core（清单 566c1edd，实际 4d91e5fc） 等 2 项
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -211,7 +211,7 @@ warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc）
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 differs	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	4d91e5fce5eef02dab838e96867058f6
@@ -232,13 +232,13 @@ state	warn	不一致的是 core（清单 566c1edd，实际 4d91e5fc） 等 2 项
 === scenario
 printf 'core build B\n' >"$T/core"; mship core "$T/core" "$DM"; mship core "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mrec tailscaled "$T/ts/tailscaled" -
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -248,17 +248,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（2 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -268,17 +268,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（2 项）	Manifest	All match (2)
 --- text rc=0
   ● 清单：一致（2 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -288,7 +288,7 @@ ok	manifest	清单	一致（2 项）	Manifest	All match (2)
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:core	$T/core	4d91e5fce5eef02dab838e96867058f6	4d91e5fce5eef02dab838e96867058f6
@@ -309,13 +309,13 @@ state	ok	一致（2 项）
 === scenario
 mship core "$T/core" "$DM"; mrec tailscaled "$T/ts/tailscaled" -; mkdir -p "$T/ts"; echo bin >"$T/ts/tailscaled"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -325,17 +325,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	不一致的是 tailscaled（清单 -，实际 e894f234）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -345,17 +345,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	不一致的是 tailscaled（清单 -，实际 e894f234）	Manifest	Mismatch: tailscaled (manifest -, actual e894f234)
 --- text rc=0
   ▲ 清单：不一致的是 tailscaled（清单 -，实际 e894f234）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -365,7 +365,7 @@ warn	manifest	清单	不一致的是 tailscaled（清单 -，实际 e894f234）	
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	566c1edd8d0ebf4dd14155bcd9443204
@@ -386,13 +386,13 @@ state	warn	不一致的是 tailscaled（清单 -，实际 e894f234）
 === scenario
 printf 'doctor v2\n' >"$T/core"; mship guard "$T/core" "$DM"; mship scripts "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -402,17 +402,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（1 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -422,17 +422,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（1 项）	Manifest	All match (1)
 --- text rc=0
   ● 清单：一致（1 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -442,7 +442,7 @@ ok	manifest	清单	一致（1 项）	Manifest	All match (1)
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:scripts	$T/core	077a6dfeb3b4ae4c2ba4214bd74555a4	077a6dfeb3b4ae4c2ba4214bd74555a4
@@ -463,13 +463,13 @@ state	ok	一致（1 项）
 === scenario
 printf 'doctor v2\n' >"$T/core"; mship guard "$T/core" "$DM"; mship scripts "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mship guard "$T/core" "$DM"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -479,17 +479,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 077a6dfe）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -499,17 +499,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 077a6dfe）	Manifest	Mismatch: core (manifest 566c1edd, actual 077a6dfe)
 --- text rc=0
   ▲ 清单：不一致的是 core（清单 566c1edd，实际 077a6dfe）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -519,7 +519,7 @@ warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 077a6dfe）
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 differs	comp:guard	$T/core	566c1edd8d0ebf4dd14155bcd9443204	077a6dfeb3b4ae4c2ba4214bd74555a4
@@ -540,13 +540,13 @@ state	warn	不一致的是 core（清单 566c1edd，实际 077a6dfe）
 === scenario
 mship core "$T/core" "$DM"; mship old "$T/rc" "$RM"; mrec tuning.env "$T/tuning.env" -; printf '{"v":1,"kind":"retire","comps":"old x","records":"tuning.env"}\n' >>"$T/m.jsonl"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -556,17 +556,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（1 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -576,17 +576,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（1 项）	Manifest	All match (1)
 --- text rc=0
   ● 清单：一致（1 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -596,7 +596,7 @@ ok	manifest	清单	一致（1 项）	Manifest	All match (1)
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	566c1edd8d0ebf4dd14155bcd9443204
@@ -617,13 +617,13 @@ state	ok	一致（1 项）
 === scenario
 echo 'garbage {' >"$T/m.jsonl"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -633,17 +633,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	清单读不懂（$T/m.jsonl）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -653,17 +653,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	清单读不懂（$T/m.jsonl）	Manifest	Manifest unreadable ($T/m.jsonl)
 --- text rc=0
   ▲ 清单：清单读不懂（$T/m.jsonl）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -673,7 +673,7 @@ warn	manifest	清单	清单读不懂（$T/m.jsonl）	Manifest	Manifest unreadabl
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
@@ -693,13 +693,13 @@ state	warn	清单读不懂（$T/m.jsonl）
 === scenario
 mship core "$T/core" "$DM"; txnf manifest_pending x
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -709,17 +709,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	清单待补：core 已转正并通过检查，清单还没写上（下次 ship 或 u60 status 补）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -729,17 +729,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	清单待补：core 已转正并通过检查，清单还没写上（下次 ship 或 u60 status 补）	Manifest	Manifest pending: core is live and checked, not yet in the manifest (next ship or u60 status adds it)
 --- text rc=0
   ▲ 清单：清单待补：core 已转正并通过检查，清单还没写上（下次 ship 或 u60 status 补）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -749,7 +749,7 @@ warn	manifest	清单	清单待补：core 已转正并通过检查，清单还没
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
@@ -769,13 +769,13 @@ state	warn	清单待补：core 已转正并通过检查，清单还没写上（�
 === scenario
 mship core "$T/core" "$DM"; txnf failed '退回不完整'
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -785,17 +785,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	上次上机停在半路，要人处理：core（退回不完整）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -805,17 +805,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	上次上机停在半路，要人处理：core（退回不完整）	Manifest	Last deploy stopped midway, needs attention: core
 --- text rc=0
   ▲ 清单：上次上机停在半路，要人处理：core（退回不完整）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -825,7 +825,7 @@ warn	manifest	清单	上次上机停在半路，要人处理：core（退回不�
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
@@ -845,13 +845,13 @@ state	warn	上次上机停在半路，要人处理：core（退回不完整）
 === scenario
 mship core "$T/core" "$DM"; txnf failed 'executor gone'
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -861,17 +861,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	上次上机停在半路，要人处理：core（executor gone）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -881,17 +881,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	上次上机停在半路，要人处理：core（executor gone）	Manifest	Last deploy stopped midway, needs attention: core (executor gone)
 --- text rc=0
   ▲ 清单：上次上机停在半路，要人处理：core（executor gone）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -901,7 +901,7 @@ warn	manifest	清单	上次上机停在半路，要人处理：core（executor g
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
@@ -921,13 +921,13 @@ state	warn	上次上机停在半路，要人处理：core（executor gone）
 === scenario
 mship core "$T/core" "$DM"; txnf check ''
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -937,17 +937,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	上次上机停在半路：core（检查中），guard 或 u60 status 会收尾
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -957,17 +957,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	上次上机停在半路：core（检查中），guard 或 u60 status 会收尾	Manifest	Last deploy stopped midway: core (checking); guard or u60 status will finish it
 --- text rc=0
   ▲ 清单：上次上机停在半路：core（检查中），guard 或 u60 status 会收尾
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -977,7 +977,7 @@ warn	manifest	清单	上次上机停在半路：core（检查中），guard 或 
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
@@ -997,13 +997,13 @@ state	warn	上次上机停在半路：core（检查中），guard 或 u60 status
 === scenario
 mship core "$T/core" "$DM"; txnf check ''; mkdir -p "$T/proc/700"; printf 'sh\000/data/luyaz/scripts/luyaz-ship.sh\000run\000' >"$T/proc/700/cmdline"; echo "995 700 20260930-120000-core check" >"$T/hb.ship"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1013,17 +1013,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	正在上机：core（检查中）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1033,17 +1033,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	正在上机：core（检查中）	Manifest	Deploying core (checking)
 --- text rc=0
   ● 清单：正在上机：core（检查中）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1053,7 +1053,7 @@ ok	manifest	清单	正在上机：core（检查中）	Manifest	Deploying core (c
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
@@ -1073,13 +1073,13 @@ state	ok	正在上机：core（检查中）
 === scenario
 mship core "$T/core" "$DM"; txnf trial ''; mkdir -p "$T/proc/700"; printf 'sh\000other\000' >"$T/proc/700/cmdline"; echo "995 700" >"$T/hb.ship"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1089,17 +1089,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	上次上机停在半路：core（试跑中），guard 或 u60 status 会收尾
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1109,17 +1109,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	上次上机停在半路：core（试跑中），guard 或 u60 status 会收尾	Manifest	Last deploy stopped midway: core (on trial); guard or u60 status will finish it
 --- text rc=0
   ▲ 清单：上次上机停在半路：core（试跑中），guard 或 u60 status 会收尾
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1129,7 +1129,7 @@ warn	manifest	清单	上次上机停在半路：core（试跑中），guard 或 
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
@@ -1149,13 +1149,13 @@ state	warn	上次上机停在半路：core（试跑中），guard 或 u60 status
 === scenario
 mship core "$T/core" "$DM"; txnf done '' bbbb-0000 900
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1165,17 +1165,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	观察中（还剩 9 分钟）：core 刚上机；一致（1 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1185,17 +1185,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	观察中（还剩 9 分钟）：core 刚上机；一致（1 项）	Manifest	Watching (9 min left): core just deployed; All match (1)
 --- text rc=0
   ● 清单：观察中（还剩 9 分钟）：core 刚上机；一致（1 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1205,7 +1205,7 @@ ok	manifest	清单	观察中（还剩 9 分钟）：core 刚上机；一致（1 
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	566c1edd8d0ebf4dd14155bcd9443204
@@ -1226,13 +1226,13 @@ state	ok	观察中（还剩 9 分钟）：core 刚上机；一致（1 项）
 === scenario
 mship core "$T/core" "$DM"; txnf done '' cccc-0000 900
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1242,17 +1242,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（1 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1262,17 +1262,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（1 项）	Manifest	All match (1)
 --- text rc=0
   ● 清单：一致（1 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1282,7 +1282,7 @@ ok	manifest	清单	一致（1 项）	Manifest	All match (1)
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	566c1edd8d0ebf4dd14155bcd9443204
@@ -1303,13 +1303,13 @@ state	ok	一致（1 项）
 === scenario
 mship core "$T/core" "$DM"; txnf rolledback '开机时已退回（断电时在 check）'
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1319,17 +1319,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（1 项）；上次上机已退回：core（开机时已退回（断电时在 check））
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1339,17 +1339,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（1 项）；上次上机已退回：core（开机时已退回（断电时在 check））	Manifest	All match (1); last deploy rolled back: core
 --- text rc=0
   ● 清单：一致（1 项）；上次上机已退回：core（开机时已退回（断电时在 check））
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1359,7 +1359,7 @@ ok	manifest	清单	一致（1 项）；上次上机已退回：core（开机时�
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	566c1edd8d0ebf4dd14155bcd9443204
@@ -1380,13 +1380,13 @@ state	ok	一致（1 项）；上次上机已退回：core（开机时已退回�
 === scenario
 mship core "$T/core" "$DM"; txnf aborted 'user said stop'; printf 'core build B\n' >"$T/core"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1396,17 +1396,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1416,17 +1416,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc）	Manifest	Mismatch: core (manifest 566c1edd, actual 4d91e5fc)
 --- text rc=0
   ▲ 清单：不一致的是 core（清单 566c1edd，实际 4d91e5fc）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1436,7 +1436,7 @@ warn	manifest	清单	不一致的是 core（清单 566c1edd，实际 4d91e5fc）
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 differs	comp:core	$T/core	566c1edd8d0ebf4dd14155bcd9443204	4d91e5fce5eef02dab838e96867058f6
@@ -1457,13 +1457,13 @@ state	warn	不一致的是 core（清单 566c1edd，实际 4d91e5fc）
 === scenario
 printf 'core build B\n' >"$T/core"; mship datad "$T/core" "$DM"; mship core "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mrec luyaz-recover.sh "$T/rc" "$RM"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1473,17 +1473,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（2 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1493,17 +1493,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（2 项）	Manifest	All match (2)
 --- text rc=0
   ● 清单：一致（2 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1513,7 +1513,7 @@ ok	manifest	清单	一致（2 项）	Manifest	All match (2)
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:core	$T/core	4d91e5fce5eef02dab838e96867058f6	4d91e5fce5eef02dab838e96867058f6
@@ -1534,13 +1534,13 @@ state	ok	一致（2 项）
 === scenario
 mship core "$T/core" "$DM"; mship datad "$T/core" "$DM"; txnf trial ''
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1550,17 +1550,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	上次上机停在半路：core（试跑中），guard 或 u60 status 会收尾
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1570,17 +1570,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	上次上机停在半路：core（试跑中），guard 或 u60 status 会收尾	Manifest	Last deploy stopped midway: core (on trial); guard or u60 status will finish it
 --- text rc=0
   ▲ 清单：上次上机停在半路：core（试跑中），guard 或 u60 status 会收尾
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1590,7 +1590,7 @@ warn	manifest	清单	上次上机停在半路：core（试跑中），guard 或 
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
@@ -1611,13 +1611,13 @@ state	warn	上次上机停在半路：core（试跑中），guard 或 u60 status
 printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
 printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1627,17 +1627,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（2 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1647,17 +1647,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（2 项）	Manifest	All match (2)
 --- text rc=0
   ● 清单：一致（2 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1667,7 +1667,7 @@ ok	manifest	清单	一致（2 项）	Manifest	All match (2)
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	1f9f9bbcc409a1475483692236ac71ba
@@ -1690,13 +1690,13 @@ printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"fil
 printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 ln -s index.html "$T/admin/link"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1706,17 +1706,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	不一致的是 admin（清单 1f9f9bbc，实际 unreadab）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1726,17 +1726,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	不一致的是 admin（清单 1f9f9bbc，实际 unreadab）	Manifest	Mismatch: admin (manifest 1f9f9bbc, actual unreadab)
 --- text rc=0
   ▲ 清单：不一致的是 admin（清单 1f9f9bbc，实际 unreadab）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1746,7 +1746,7 @@ warn	manifest	清单	不一致的是 admin（清单 1f9f9bbc，实际 unreadab�
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 differs	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	unreadable
@@ -1769,13 +1769,13 @@ printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"fil
 printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 rm -rf "$T/ui/fonts"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1785,17 +1785,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	不一致的是 fonts（清单 4db253b7，实际 -）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1805,17 +1805,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	不一致的是 fonts（清单 4db253b7，实际 -）	Manifest	Mismatch: fonts (manifest 4db253b7, actual -)
 --- text rc=0
   ▲ 清单：不一致的是 fonts（清单 4db253b7，实际 -）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1825,7 +1825,7 @@ warn	manifest	清单	不一致的是 fonts（清单 4db253b7，实际 -）	Manif
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	1f9f9bbcc409a1475483692236ac71ba
@@ -1848,13 +1848,13 @@ printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"fil
 printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 printf 'new js\n' >"$T/admin/_next/static/c.js"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1864,17 +1864,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 warn	manifest	清单	不一致的是 admin（清单 1f9f9bbc，实际 c39ad642）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1884,17 +1884,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 warn	manifest	清单	不一致的是 admin（清单 1f9f9bbc，实际 c39ad642）	Manifest	Mismatch: admin (manifest 1f9f9bbc, actual c39ad642)
 --- text rc=0
   ▲ 清单：不一致的是 admin（清单 1f9f9bbc，实际 c39ad642）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1904,7 +1904,7 @@ warn	manifest	清单	不一致的是 admin（清单 1f9f9bbc，实际 c39ad642�
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 differs	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	c39ad64271df21e0a36ba87cbd757291
@@ -1927,13 +1927,13 @@ printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"fil
 printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 export DOC_MD5SUM=md5sum; dd if=/dev/zero of="$T/big" bs=1024 count=300 2>/dev/null; mship lweb "$T/big" "$(md5sum $T/big | cut -d' ' -f1)"
 --- --tsv rc=0
-ok	boot-sync	开机同步	sync success
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
-ok	svc-luyaz-core	数据服务	procd 监督中
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）
 ok	web-http	管理网页 :9090	能访问
 ok	core-http	数据服务 :9460	能访问
 ok	heartbeat	后台心跳	5 秒前
@@ -1943,17 +1943,17 @@ ok	alerts	告警	没有未读
 ok	sms	短信告警	已配置
 ok	crashes	崩溃记录	最近 24 小时没有
 ok	disk	/data 空间	剩 1171 MB
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 ok	manifest	清单	一致（3 项）
 --- --tsv2 rc=0
 #tsv2
-ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	boot-sync	开机同步	原厂服务都已登记，开机已放行	Boot sync	All stock services registered (sync success)
 ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
 ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
-ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
-ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	svc-luyaz-core	数据服务进程	在运行，由 procd 监督（退出会自动拉起）	Data service process	Running, supervised by procd (restarted if it exits)
+ok	svc-luyaz-sentinel	哨兵进程（屏幕和看门狗）	在运行，由 procd 监督（退出会自动拉起）	Sentinel process (screen and watchdog)	Running, supervised by procd (restarted if it exits)
 ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
@@ -1963,17 +1963,17 @@ ok	alerts	告警	没有未读	Alerts	None unread
 ok	sms	短信告警	已配置	Alert SMS	Set up
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
 ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
-ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+skip	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
 ok	manifest	清单	一致（3 项）	Manifest	All match (3)
 --- text rc=0
   ● 清单：一致（3 项）
-  ● 开机同步：sync success
+  ● 开机同步：原厂服务都已登记，开机已放行
   ● ZTE 自动升级：已关闭
   ● 开机链接：开机同步名单里的服务没有被屏蔽
   ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
   ● 匿名权限：出厂/ADB 方法要登录才能调
-  ● 数据服务：procd 监督中
-  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 数据服务进程：在运行，由 procd 监督（退出会自动拉起）
+  ● 哨兵进程（屏幕和看门狗）：在运行，由 procd 监督（退出会自动拉起）
   ● 管理网页 :9090：能访问
   ● 数据服务 :9460：能访问
   ● 后台心跳：5 秒前
@@ -1983,7 +1983,7 @@ ok	manifest	清单	一致（3 项）	Manifest	All match (3)
   ● 短信告警：已配置
   ● 崩溃记录：最近 24 小时没有
   ● /data 空间：剩 1171 MB
-  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+  ○ 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
 
 --- --manifest
 same	comp:lweb	$T/big	90aeded9922cf8946ea7858635493724	90aeded9922cf8946ea7858635493724

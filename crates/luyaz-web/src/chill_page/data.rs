@@ -60,19 +60,13 @@ pub fn date(secs: i64) -> String {
 }
 
 /// "5h 12m" / "2d 3h" / "9m" since `iso`; None if unreadable or in the future.
-pub fn uptime(iso: &str, now: i64) -> Option<String> {
+pub fn uptime(iso: &str, now: i64, l: Lang) -> Option<String> {
     let s = now - epoch(iso)?;
     if s < 0 {
         return None;
     }
-    let (d, h, m) = (s / 86_400, s % 86_400 / 3600, s % 3600 / 60);
-    Some(if d > 0 {
-        format!("{d}d {h}h")
-    } else if h > 0 {
-        format!("{h}h {m}m")
-    } else {
-        format!("{m}m")
-    })
+    // the same words as the device's uptime (2 天 3 小时), not 2d 3h
+    crate::device_info::uptime(s.max(60), l)
 }
 
 /// "3 min ago" for a provider's `updated_at` (mihomo's own time).
@@ -444,10 +438,10 @@ mod tests {
         let t = epoch("2026-10-13T08:05:00Z").unwrap();
         assert_eq!(date(t), "2026-10-13");
         assert_eq!(epoch("2026-10-13T08:05:00.412773021Z"), Some(t));
-        assert_eq!(uptime("2026-10-13T08:05:00Z", t + 5 * 3600 + 12 * 60).as_deref(), Some("5h 12m"));
-        assert_eq!(uptime("2026-10-13T08:05:00Z", t + 2 * 86_400 + 3 * 3600).as_deref(), Some("2d 3h"));
-        assert_eq!(uptime("2026-10-13T08:05:00Z", t - 1), None);
-        assert_eq!(uptime("", t), None);
+        assert_eq!(uptime("2026-10-13T08:05:00Z", t + 5 * 3600 + 12 * 60, Lang::En).as_deref(), Some("5 h 12 min"));
+        assert_eq!(uptime("2026-10-13T08:05:00Z", t + 2 * 86_400 + 3 * 3600, Lang::Zh).as_deref(), Some("2 天 3 小时"));
+        assert_eq!(uptime("2026-10-13T08:05:00Z", t - 1, Lang::En), None);
+        assert_eq!(uptime("", t, Lang::En), None);
         assert_eq!(ago(Lang::En, "2026-10-13T08:05:00Z", t + 30), "just now");
         assert_eq!(ago(Lang::En, "2026-10-13T08:05:00Z", t + 600), "10 min ago");
         assert_eq!(ago(Lang::Zh, "2026-10-13T08:05:00Z", t + 7200), "2 小时前");

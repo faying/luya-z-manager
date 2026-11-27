@@ -458,6 +458,9 @@ pub enum Main {
         rows: Vec<Row>,
         /// The newest read failed: kept, greyed, 「数字停在 hh:mm」.
         stopped: Option<String>,
+        /// The core sent as many as it keeps ([`LIMIT`]): older ones exist (11-14 「只显示最近 50
+        /// 条」 sat under twenty folded rows).
+        capped: bool,
     },
     Detail(Detail),
 }
@@ -495,6 +498,7 @@ pub fn view(got: &Got, want: &Want, snap: &mut Option<Value>, stuck: bool, l: La
                 Main::Detail(detail(e, l, stuck, true))
             } else {
                 Main::List {
+                    capped: entries.len() as u64 >= LIMIT,
                     rows: fold(rows.iter().map(|e| row(e, l))),
                     stopped: got
                         .err

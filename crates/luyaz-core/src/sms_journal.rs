@@ -235,8 +235,9 @@ impl Journal {
         &self.data.generation
     }
 
-    /// 最近的事故（回复、重建、超限丢弃）；doctor 的「电话线路」一节读（E1）。
-    #[allow(dead_code)]
+    /// 最近的事故（回复、重建、超限丢弃）。doctor 的「短信记录」行直接读存档里的 `incidents`
+    /// （11-12，`doctor::sms_journal`），这里留给测试。
+    #[cfg(test)]
     pub fn incidents(&self) -> &[Incident] {
         &self.data.incidents
     }
@@ -292,7 +293,7 @@ impl Journal {
                 fw_id: item.get("id").and_then(Value::as_u64).unwrap_or(0),
                 sender,
                 date,
-                text: text_of(&content),
+                text: luyaz_sms_forward::readable_sms(text_of(&content)),
                 sim: match (attributed, source) {
                     (true, Source::Sim(k)) => Some(k.clone()),
                     _ => None,
@@ -442,22 +443,36 @@ pub fn control() -> Option<&'static crate::api::Compat> {
     CONTROL.get()
 }
 
+/// The salt for SIM keys. Made only when the file is missing or too short; any other read error
+/// leaves the file alone and uses a salt for this run only (11-12: a failed read used to
+/// overwrite it, which renames every SIM in the journal). Written whole: tmp, fsync, rename.
 fn load_salt(p: &Path) -> Vec<u8> {
-    use std::os::unix::fs::OpenOptionsExt;
-    if let Ok(b) = std::fs::read(p)
-        && b.len() >= 16
-    {
-        return b;
+    use luyaz_persist::{Load, Parsed};
+    let why = match luyaz_persist::load(p, |b| {
+        if b.len() >= 16 {
+            Parsed::Ok(b.to_vec())
+        } else {
+            Parsed::Corrupt(format!("{} bytes", b.len()))
+        }
+    }) {
+        Load::Ok(b) => return b,
+        Load::Missing => None,
+        Load::Corrupt { why, moved_to } => Some(format!("{why}, moved to {}", moved_to.display())),
+        // never written over: a new salt would rename every SIM in the journal
+        Load::Newer(e) => {
+            eprintln!("[sms-journal] {}: {e}: left as it is; SIM keys only stable for this run", p.display());
+            return rand::random::<[u8; 32]>().to_vec();
+        }
+        Load::Io(e) => {
+            eprintln!("[sms-journal] {}: {e}: left as it is; SIM keys only stable for this run", p.display());
+            return rand::random::<[u8; 32]>().to_vec();
+        }
+    };
+    if let Some(why) = why {
+        eprintln!("[sms-journal] {}: {why}: a new salt", p.display());
     }
     let salt: [u8; 32] = rand::random();
-    let wrote = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(p)
-        .and_then(|mut f| f.write_all(&salt).and_then(|_| f.sync_all()));
-    if let Err(e) = wrote {
+    if let Err(e) = luyaz_persist::write_private(p, &salt, luyaz_persist::Tier::Durable) {
         eprintln!(
             "[sms-journal] {}: {e}: SIM keys only stable for this run",
             p.display()
@@ -487,7 +502,13 @@ pub fn voice_slot() -> Option<u8> {
     Some(VOICE_SLOT.load(std::sync::atomic::Ordering::Relaxed)).filter(|s| matches!(s, 1 | 2))
 }
 
+
 /// 电话卡的号码（双卡、卡里存了才有）。
+/// A dual-slot unit's phone card is known this round (its number may still be blank).
+pub fn voice_card_known() -> bool {
+    VOICE.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+}
+
 pub fn voice_number() -> Option<String> {
     VOICE
         .lock()
@@ -607,6 +628,12 @@ pub async fn list_all(c: &crate::api::Compat) -> Result<Vec<Value>, String> {
 
 #[cfg(test)]
 mod tests {
+    /// P-8: the journal keeps its shape (crate::state_format).
+    #[test]
+    fn the_journal_keeps_its_format() {
+        crate::state_format::check("sms-journal.json", crate::state_format::serde::<Data>);
+    }
+
     use super::*;
 
     struct Dir(PathBuf);
@@ -871,6 +898,11 @@ mod tests {
         let salt = d.0.join("sim-salt");
         let a = load_salt(&salt);
         assert_eq!(load_salt(&salt), a, "the salt survives a restart");
+        // unreadable for another reason (here a directory): left alone, never overwritten
+        let odd = d.0.join("odd-salt");
+        std::fs::create_dir_all(odd.join("x")).unwrap();
+        assert_ne!(load_salt(&odd), load_salt(&odd), "this run only");
+        assert!(odd.join("x").is_dir());
     }
 
     #[test]

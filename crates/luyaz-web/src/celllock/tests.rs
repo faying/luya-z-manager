@@ -132,3 +132,17 @@ fn neighbours_in_the_cores_order_or_why_not() {
     assert_eq!(neighbours(&json!({"state": "unsupported", "error": "x"}), Lang::Zh).unwrap_err(), "x");
     assert_eq!(neighbours(&Value::Null, Lang::Zh).unwrap_err(), "基带现在没报邻区");
 }
+
+/// 11-14 ③: the page-top status block says locked or not and on which cell.
+#[test]
+fn the_status_block_says_locked_or_not_and_where() {
+    let s = |nr: &str| hub_with(sig(nr, ""), None).read(|st| view(st, Lang::Zh)).status;
+    let free = s("");
+    assert!(free.starts_with("<div id=\"cl-status\"") && free.contains("nd-status--ok") && free.contains("没锁小区：NR n78 · PCI 603"), "{free}");
+    let on = s("603,627264,78");
+    assert!(on.contains("nd-status--ok") && on.contains("锁在 NR PCI 603 · ARFCN 627264 · n78"), "{on}");
+    let off = s("604,627264,78");
+    assert!(off.contains("nd-status--warn") && off.contains("还在 PCI 603 上"), "{off}");
+    let none = Hub::new().read(|st| view(st, Lang::Zh)).status;
+    assert!(none.contains("nd-status--neutral"), "{none}");
+}

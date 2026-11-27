@@ -708,8 +708,9 @@ impl Page {
             .find(|(k, _)| k == id)
             .map_or("", |(_, h)| h.as_str())
     }
-    fn known(&self) -> String {
-        KNOWN.join(", ")
+    /// How many: the status block lists them already (11-14).
+    fn known_n(&self) -> usize {
+        KNOWN.len()
     }
 }
 

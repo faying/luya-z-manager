@@ -5,8 +5,10 @@
 //   open [slot]      opens one logical channel to the ISD-R and closes it
 //                    again. Prints "[open] channel=N" on success; a refusal
 //                    prints "qmi_error=N" (68 means every channel is taken).
-//   close <chan>     frees a channel that a killed lpac left behind; the
-//                    modem never reclaims one on its own.
+//   close <chan> [slot]  frees a channel that a killed lpac left behind on
+//                    that slot (default 1); the modem never reclaims one on
+//                    its own. The usage line names this form: luyaz-esim
+//                    checks for it before closing by slot.
 //   simreset [slot]  powers the card off and on, which makes the modem read
 //                    it again after a profile switch (the stock stack does
 //                    not react to the card's own REFRESH).
@@ -390,8 +392,8 @@ static int cmd_simreset(void)
 
 /*
  * Print every application in the card status (TLV 0x10). When `usim` is
- * given, the first USIM (type 2) AID of slot 1 is copied there and its
- * length stored in `*usim_len` (left at 0 if there is none).
+ * given, the first USIM (type 2) AID of the chosen slot (g.slot) is copied
+ * there and its length stored in `*usim_len` (left at 0 if there is none).
  *
  * TLV 0x10 layout:
  *   u16 x4 session indexes (the first is the GW primary: slot<<8 | app)
@@ -438,7 +440,7 @@ static int cmd_apps(uint8_t *usim, uint8_t *usim_len)
                 fprintf(stderr, "%02x", app[7 + k]);
             int is_gw = (gw_index >> 8) == sl && (gw_index & 0xff) == ap;
             fprintf(stderr, "%s\n", is_gw ? "  <- GW provisioning app" : "");
-            int take = usim != NULL && sl == 0 && app[0] == 2 && *usim_len == 0 && aid_len <= 32;
+            int take = usim != NULL && sl + 1 == g.slot && app[0] == 2 && *usim_len == 0 && aid_len <= 32;
             if (take) {
                 memcpy(usim, app + 7, aid_len);
                 *usim_len = aid_len;
@@ -450,7 +452,9 @@ static int cmd_apps(uint8_t *usim, uint8_t *usim_len)
 }
 
 /* Read EF_ICCID (path 3F00/2FE2) through session type `session`
- * (6 = slot-1 card session, 0 = primary GW provisioning session). */
+ * (6 = slot-1 card session, 7 = slot 2's, 0 = primary GW provisioning
+ * session). The card status (`status`, TLV 0x17) carries each slot's ICCID
+ * too; that is what luyaz-core reads. */
 static int print_iccid(uint8_t session)
 {
     static const uint8_t ef_path[5] = { 0xE2, 0x2F, 0x02, 0x00, 0x3F }; /* file id, path len, path */
@@ -487,8 +491,9 @@ static int print_iccid(uint8_t session)
 
 static int cmd_iccid(void)
 {
-    int bad_card = print_iccid(6);
-    int bad_prov = print_iccid(0);
+    int bad_card = print_iccid((uint8_t)(6 + g.slot - 1));
+    /* the primary provisioning session is whichever card data is on: slot 1 only */
+    int bad_prov = (g.slot == 1) ? print_iccid(0) : 0;
     return (bad_card || bad_prov) ? 1 : 0;
 }
 
@@ -557,7 +562,7 @@ static int cmd_provision(void)
     if (cmd_apps(usim, &usim_len) != 0)
         return EXIT_FAILURE;
     if (usim_len == 0) {
-        fprintf(stderr, "[!] no USIM app found on slot 1\n");
+        fprintf(stderr, "[!] no USIM app found on slot %u\n", g.slot);
         return EXIT_FAILURE;
     }
     static const char *const step_name[2] = { "deactivate", "activate" };
@@ -595,14 +600,15 @@ int main(int argc, char **argv)
     const char *verb = (argc >= 2) ? argv[1] : "";
     const char *extra = (argc >= 3) ? argv[2] : NULL;
     if (verb[0] == '\0') {
-        fprintf(stderr, "usage: %s lookup|status|apps|iccid|eid|open|close <chan>|simreset|provision [slot]\n",
+        fprintf(stderr, "usage: %s lookup|status|apps|iccid|eid|open|simreset|provision [slot] | close <chan> [slot]\n",
                 argv[0]);
         return 2; /* usage error */
     }
     /* Second argument: the slot (1-8, default 1), except for close where it
-     * is the channel. */
-    if (extra != NULL && !is(verb, "close")) {
-        int want = atoi(extra);
+     * is the channel and the slot comes third. */
+    const char *slot_arg = is(verb, "close") ? ((argc >= 4) ? argv[3] : NULL) : extra;
+    if (slot_arg != NULL) {
+        int want = atoi(slot_arg);
         if (want >= 1 && want <= 8)
             g.slot = (uint8_t)want;
     }

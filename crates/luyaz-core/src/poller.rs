@@ -660,14 +660,17 @@ pub fn name_of(status: &Value, peer: &str) -> Option<String> {
     })
 }
 
-fn alert_text(e: &Event) -> String {
+/// ASCII only: the queue drops anything else (luyaz-alerts `detail_zh` words it in Chinese).
+pub(crate) fn alert_text(e: &Event) -> String {
     let who = match (&e.peer_name, e.via_gateway) {
-        (Some(n), _) => format!("{n}（{}）", e.peer),
-        (None, true) => format!("{}（经网关转发）", e.peer),
+        // the address first: a long name is what the 120-character cut takes
+        (Some(n), _) => format!("{} ({n})", e.peer),
+        (None, true) => format!("{} (via gateway)", e.peer),
         (None, false) => e.peer.clone(),
     };
+    // the name last: the queue cuts at 120 characters, and a long one only loses its tail
     format!(
-        "{who} 经 Tailscale 持续访问 :{}，已 {} 分钟（约 {} 包/分钟），息屏约多耗 0.3–0.6 W",
+        "polls :{} over Tailscale for {} min, ~{} pkts/min: {who}",
         e.port, e.minutes, e.pkts_per_min
     )
 }

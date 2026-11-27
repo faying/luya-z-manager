@@ -12,7 +12,7 @@
 //!   was sent; a PUT the agent took but the readback did not show says "accepted, not read back".
 //! - The form is the tab's draft (Datastar signals `_dm`, `_dp`, `_ds`, set once from the device's
 //!   values when the page loads); the stream pushes only the status block and the "operator DNS
-//!   now" hint, polled every 30 s like the old page.
+//!   now" hint (shown on manual only), polled every 30 s like the old page.
 
 use std::convert::Infallible;
 use std::time::{Duration, SystemTime};
@@ -191,7 +191,8 @@ pub fn view(got: &Got, l: Lang) -> View {
         ),
         (Some(d), _) => (
             "ok",
-            l.pick("Auto (the carrier's servers)", "自动（用运营商的服务器）").to_owned(),
+            // not the switch's own label (11-15): the block says what is in use
+            l.pick("Using the carrier's DNS", "在用运营商的 DNS").to_owned(),
             join(&d.auto1, &d.auto2),
         ),
     };
@@ -205,7 +206,8 @@ pub fn view(got: &Got, l: Lang) -> View {
         reason,
         meta: stale.then(|| crate::agent::stopped(l, "Settings", "设置", got.at)),
         retry: got.err.is_some(),
-        operator: got.dns.as_ref().and_then(|d| join(&d.auto1, &d.auto2)),
+        // the hint under "Auto" only while on manual: on auto the status block already says them
+        operator: got.dns.as_ref().filter(|d| d.manual).and_then(|d| join(&d.auto1, &d.auto2)),
     }
 }
 
@@ -516,7 +518,12 @@ mod tests {
         let auto = Got { dns: parse(&json!({"dns_mode":"auto","prefer_dns_auto":"168.95.1.1","standby_dns_auto":"168.95.192.1"})), ..Default::default() };
         let v = view(&auto, Lang::En);
         assert_eq!(v.reason.as_deref(), Some("168.95.1.1 · 168.95.192.1"));
-        assert_eq!(v.operator.as_deref(), Some("168.95.1.1 · 168.95.192.1"));
+        assert_eq!(v.state, "Using the carrier's DNS");
+        assert_eq!(v.operator, None, "on auto the status block says them; no second copy");
+        let mut both = manual.dns.clone().unwrap();
+        (both.auto1, both.auto2) = ("168.95.1.1".into(), String::new());
+        let v = view(&Got { dns: Some(both), ..Default::default() }, Lang::En);
+        assert_eq!(v.operator.as_deref(), Some("168.95.1.1"), "on manual the hint names what auto would use");
         let down = Got { err: Some(Fail::Unreachable), ..Default::default() };
         let v = view(&down, Lang::En);
         assert_eq!((v.tone, v.state.as_str()), ("bad", "Can't read DNS settings"));

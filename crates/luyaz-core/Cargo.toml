@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-core"
-version = "1.95.0"
+version = "1.106.5"
 edition = "2024"
 rust-version = "1.99"
 description = "Luya-Z core daemon (luyaz-core): device read path, HTTP API and write path, policies, wake ledger."
@@ -27,6 +27,7 @@ mimalloc = { version = "0.1", default-features = false }
 # the agent's alert files, login and clock offset for the touch compatibility layer (compat.rs)
 luyaz-api = { path = "../luyaz-api" }
 luyaz-esim = { path = "../luyaz-esim" }
+luyaz-persist = { path = "../luyaz-persist" }
 luyaz-netwatch = { path = "../luyaz-netwatch" }
 luyaz-home-exit = { path = "../luyaz-home-exit" }
 luyaz-manual-first = { path = "../luyaz-manual-first" }
@@ -42,7 +43,7 @@ clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 fs2 = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 # O2 bound HTTPS (o2.rs); both already in the lock via reqwest and luyaz-netwatch
 webpki-roots = "1"
 socket2 = { version = "0.6", features = ["all"] }

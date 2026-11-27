@@ -67,6 +67,10 @@
   -webkit-backdrop-filter: saturate(1.2) blur(8px); backdrop-filter: saturate(1.2) blur(8px);
 }
 @media (min-width: 1024px) { .nd-topbar { padding-inline: 32px; } }
+/* A sub page's bar is back + 7 buttons of 44 (hit areas stay 44): with 4px gaps and 12px sides that
+ * is 396px, wider than a 390 iPhone, and the page slid sideways (11-14). Narrow screens drop the
+ * gaps and half the sides: 360px. */
+@media (max-width: 419px) { .nd-topbar { gap: 0; padding-inline: 8px; } }
 .nd-iconbtn, .nd-back {
   display: inline-flex; align-items: center; justify-content: center;
   width: 44px; height: 44px; flex-shrink: 0; border-radius: 999px; color: var(--nd-t2); cursor: pointer;

@@ -17,6 +17,9 @@ pub const SVC_NAS: u32 = 0x03;
 pub const MSG_BIND_SUBSCRIPTION: u16 = 0x0045;
 pub const MSG_GET_SIGNAL_INFO: u16 = 0x004F;
 pub const MSG_GET_SERVING_SYSTEM: u16 = 0x0024;
+/// UIM Event Registration and its card status indication (O-6).
+pub const MSG_UIM_EVENT_REG: u16 = 0x002E;
+pub const MSG_UIM_STATUS_CHANGE_IND: u16 = 0x0032;
 pub const MSG_IMSA_BIND: u16 = 0x0033;
 pub const MSG_IMSA_GET_REG: u16 = 0x0020;
 pub const MSG_IMSA_GET_SERVICES: u16 = 0x0021;
@@ -284,10 +287,62 @@ mod io {
         Some(r)
     }
 
+    /// UIM `GET_CARD_STATUS` on a fresh client: the reply body (read only; cards.rs decodes it).
+    pub fn read_uim_status() -> Option<Vec<u8>> {
+        let fd = open()?;
+        let uim = lookup(&fd, crate::cards::SVC_UIM)?;
+        request(&fd, uim, 1, crate::cards::MSG_UIM_GET_CARD_STATUS, &[]).filter(|b| result_ok(b))
+    }
+
+    /// UIM card status indications (O-6): register for card status changes (`EVENT_REG`
+    /// 0x002E, mask bit 0) on one client and hand each `STATUS_CHANGE_IND` (0x0032) body to
+    /// `on` until `secs` pass or `on` says stop. `None` when the registration is refused or the
+    /// socket fails.
+    pub fn watch_uim(secs: u64, mut on: impl FnMut(&[u8]) -> bool) -> Option<()> {
+        let fd = open()?;
+        let uim = lookup(&fd, crate::cards::SVC_UIM)?;
+        let b = request(&fd, uim, 1, MSG_UIM_EVENT_REG, &[0x01, 4, 0, 1, 0, 0, 0])?;
+        if !result_ok(&b) {
+            return None;
+        }
+        // wake twice a minute at most while nothing happens
+        let tv = libc::timeval { tv_sec: 30, tv_usec: 0 };
+        unsafe {
+            libc::setsockopt(fd.0, libc::SOL_SOCKET, libc::SO_RCVTIMEO, (&tv as *const libc::timeval).cast(), size_of::<libc::timeval>() as u32)
+        };
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        let mut buf = vec![0u8; 4096];
+        while std::time::Instant::now() < end {
+            let Some((n, from)) = recv(&fd, &mut buf) else {
+                // a timeout goes round again; any other error ends this registration
+                let e = std::io::Error::last_os_error().raw_os_error();
+                if e == Some(libc::EAGAIN) || e == Some(libc::EWOULDBLOCK) || e == Some(libc::EINTR) {
+                    continue;
+                }
+                return None;
+            };
+            if from.node != uim.node || from.port != uim.port || n < 7 || buf[0] != 0x04 {
+                continue;
+            }
+            if u16::from_le_bytes([buf[3], buf[4]]) == MSG_UIM_STATUS_CHANGE_IND && !on(&buf[7..n]) {
+                break;
+            }
+        }
+        Some(())
+    }
+
 }
 
 #[cfg(target_os = "linux")]
 pub use io::read_sub;
+#[cfg(target_os = "linux")]
+pub use io::read_uim_status;
+#[cfg(target_os = "linux")]
+pub use io::watch_uim;
+#[cfg(not(target_os = "linux"))]
+pub fn read_uim_status() -> Option<Vec<u8>> {
+    None
+}
 #[cfg(not(target_os = "linux"))]
 pub fn read_sub(_sub: u8) -> Option<Reading> {
     None
@@ -357,6 +412,45 @@ pub fn usable(last: Option<&(i64, Reading, u64)>, slot: i64, now: u64) -> Option
 
 /// `luyaz-core qmi-signal [sub…]`: one read per subscription (default 0 and 1), printed.
 pub fn main(args: &[String]) -> i32 {
+    // `uim`: the card table's reading, tails only (dual-slot T3 check)
+    if args.first().map(String::as_str) == Some("uim") {
+        let Some(body) = read_uim_status() else {
+            println!("uim: no reply");
+            return 1;
+        };
+        let Some(slots) = crate::cards::decode_card_status(&body) else {
+            println!("uim: no card status");
+            return 1;
+        };
+        for (i, s) in slots.iter().enumerate() {
+            let id = crate::cards::iccid_norm(&s.iccid);
+            println!("slot{} present={} app={} iccid=..{} ({} digits)", i + 1, s.present, s.app, crate::cards::tail(&id), id.len());
+        }
+        return 0;
+    }
+    // `uim-watch [secs]`: card status indications as they come (O-6), tails only
+    if args.first().map(String::as_str) == Some("uim-watch") {
+        let secs = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(120);
+        let t0 = std::time::Instant::now();
+        let r = watch_uim(secs, |body| {
+            let at = t0.elapsed().as_secs();
+            match crate::cards::decode_card_status(body) {
+                Some(slots) => {
+                    for (i, s) in slots.iter().enumerate() {
+                        println!("+{at}s slot{} present={} app={}", i + 1, s.present, s.app);
+                    }
+                }
+                None => println!("+{at}s indication without card status ({} bytes)", body.len()),
+            }
+            true
+        });
+        if r.is_none() {
+            println!("uim-watch: registration refused or no reply");
+            return 1;
+        }
+        println!("uim-watch: done");
+        return 0;
+    }
     let subs: Vec<u8> = if args.is_empty() { vec![0, 1] } else { args.iter().filter_map(|a| a.parse().ok()).collect() };
     for sub in subs {
         match read_sub(sub) {

@@ -285,6 +285,21 @@ fn norm_ch(s: &str) -> String {
     }
 }
 
+/// The bandwidths offered for band `i` (0 = 2.4 GHz): on a Wi-Fi 6 / 7 radio (HE / EHT) the widths
+/// in that same family, so a pick never drops the radio back to Wi-Fi 4 / 5 (11-15: the U60 runs
+/// EHT40 / EHT160 and the list only had HT and VHT); otherwise the old list.
+pub fn ht_choices(i: usize, cur: &str) -> Vec<String> {
+    let fam = cur.trim_end_matches(|c: char| c.is_ascii_digit());
+    if matches!(fam, "HE" | "EHT") && fam.len() < cur.len() {
+        let widths: &[&str] = if i == 0 { &["20", "40"] } else { &["20", "40", "80", "160"] };
+        std::iter::once("auto".to_string())
+            .chain(widths.iter().map(|w| format!("{fam}{w}")))
+            .collect()
+    } else {
+        HTMODES.iter().map(|h| h.to_string()).collect()
+    }
+}
+
 fn norm_ht(s: &str) -> String {
     if s.is_empty() || s.eq_ignore_ascii_case("auto") {
         "auto".into()
@@ -541,7 +556,7 @@ pub fn check(
             p.insert(format!("channel_{x}"), json!(d.ch));
         }
         if d.ht != s.ht {
-            if !HTMODES.contains(&d.ht.as_str()) {
+            if !ht_choices(i, &s.ht).contains(&d.ht) {
                 errs.push(err(l.pick("unknown bandwidth", "不认识的带宽")));
             }
             p.insert(format!("htmode_{x}"), json!(d.ht));
@@ -641,7 +656,11 @@ pub fn ht_label(l: Lang, h: &str) -> String {
     }
     match norm_ht(h).as_str() {
         "auto" => l.pick("Auto", "自动").into(),
-        o => o.into(),
+        // HT40 / VHT80 / EHT160: the width is what a person reads (the status block says 40 MHz)
+        o => match o.trim_start_matches(|c: char| c.is_ascii_alphabetic()) {
+            w if !w.is_empty() && w.bytes().all(|b| b.is_ascii_digit()) => format!("{w} MHz"),
+            _ => o.into(),
+        },
     }
 }
 
@@ -1317,7 +1336,11 @@ fn form_leaves(open: bool, st: &St, l: Lang) -> String {
                         &b.ch,
                         |c| ch_label(l, c),
                     ),
-                    ht: opts(&HTMODES, &b.ht, |h| ht_label(l, h)),
+                    ht: opts(
+                        &ht_choices(i, &b.ht).iter().map(String::as_str).collect::<Vec<_>>(),
+                        &b.ht,
+                        |h| ht_label(l, h),
+                    ),
                     tx: opts(&TXPOWERS, &b.tx, |t| tx_label(l, t)),
                 }
             })

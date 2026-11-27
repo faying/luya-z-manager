@@ -1,0 +1,10 @@
+[package]
+name = "luyaz-persist"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Luya-Z: one way to write and read a state file on the device: two write tiers (durable, cheap) and a read that tells missing, corrupt (moved aside), newer and an I/O error apart. std only."
+license = "PolyForm-Noncommercial-1.0.0"
+publish = false
+
+[dependencies]

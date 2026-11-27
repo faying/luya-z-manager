@@ -19,7 +19,7 @@
 //!   never read, never in HTML, a push or a URL. Notes on what that does and does not cover are in
 //!   the batch report.
 
-mod data;
+pub(crate) mod data;
 mod view;
 mod writes;
 
@@ -316,7 +316,27 @@ mod tests {
         assert!(!all.contains("%E") && !all.contains("aria-label=\"🇹🇼"));
         // the dashboard secret is never read
         assert!(!all.contains("secret"));
-        assert!(all.contains("Running") && all.contains("mihomo v1.19.14 · mode rule"));
+        assert!(all.contains("Running") && all.contains("mihomo v1.19.14 · rule mode"));
+    }
+
+    /// 11-14: the status stayed a green 「运行中」 through a 17-minute outage; the probe says
+    /// more now. Also: mihomo's words read as words (DIRECT, File, 2d 3h).
+    #[test]
+    fn a_failed_probe_turns_running_amber_and_mihomo_words_read_in_chinese() {
+        let mut g = got();
+        let mut v = g.status.v.clone().unwrap();
+        v["reach"] = json!({"ok": false, "why": "mihomo 对 X 最近一次健康检查是 4 小时前", "why_en": "x"});
+        g.status.set(Ok(v));
+        let ls = leaves(&g, Lang::Zh, "tab1", 1_792_000_000);
+        let st = &ls.iter().find(|(k, _)| k == "ch-status").unwrap().1;
+        assert!(st.contains("nd-status--warn") && st.contains("运行中，但出不去") && st.contains("4 小时前"), "{st}");
+        let all: String = ls.iter().map(|(_, h)| h.as_str()).collect();
+        assert!(all.contains(">直连<") && !all.contains(">DIRECT<"), "DIRECT in words");
+        assert!(all.contains("订阅链接") && all.contains("天"), "HTTP and the uptime in words");
+        // not measured lately: just running
+        let ok = leaves(&got(), Lang::Zh, "tab1", 1_792_000_000);
+        let st = &ok.iter().find(|(k, _)| k == "ch-status").unwrap().1;
+        assert!(st.contains("nd-status--ok"), "{st}");
     }
 
     #[test]

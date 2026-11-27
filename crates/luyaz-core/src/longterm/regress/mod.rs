@@ -443,13 +443,13 @@ impl Regress {
         self.file.open.len() - 1
     }
 
-    /// Close an open incident (`recovered`, `quiet`); `recovered` ones queue a close alert
-    /// (inbox only).
+    /// Close an open incident (`recovered`, `quiet`, `card`: the voice SIM it was about is gone);
+    /// `recovered` and `card` ones queue a close alert (inbox only).
     pub fn close(&mut self, idx: usize, at: &At, end: &str, detail: &str) {
         let mut i = self.file.open.remove(idx);
         i.to = Some(at.clone());
         i.end = Some(end.into());
-        if end == "recovered" {
+        if end == "recovered" || end == "card" {
             i.transition("close", clip(detail));
         }
         self.log.push(format!(

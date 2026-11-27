@@ -7,7 +7,7 @@ fn blk(data: Value) -> Value {
     json!({"revision": 1, "observed_at": 1, "stale": false, "data": data})
 }
 
-/// u60g 10-20 的形状：单卡、槽 1，内置卡没启用（没有 MCC）。识别码是假的。
+/// u60g 10-20 的形状：单卡、槽 1，卡槽 2 没启用（没有 MCC）。识别码是假的。
 fn single1() -> Value {
     json!({"active_slot": 1, "mode": "single", "smart": false, "switching": false, "slots": [
         {"slot": 1, "provisioned": true, "present": true, "ready": true, "operator": "CUCC", "mcc": "460", "mnc": "01", "iccid_tail": "1111"},
@@ -36,7 +36,7 @@ fn q(mode: &str, slot: &str, smart: &str) -> DualQuery {
 fn view_reads_the_dual_block() {
     let hub = hub_with(Some(single1()), 460);
     let v = hub.read(|st| view(st, Lang::Zh));
-    assert_eq!((v.mode.as_str(), v.main.as_str(), v.smart.as_str()), ("单卡", "卡槽 1（插拔卡）", "—"));
+    assert_eq!((v.mode.as_str(), v.main.as_str(), v.smart.as_str()), ("单卡", "卡槽 1", "—"));
     assert_eq!(v.slots[0].state, "已启用 · 就绪");
     assert_eq!(v.slots[1].state, "未启用");
     assert_eq!(v.slots[1].carrier, "CMCC");
@@ -110,6 +110,6 @@ fn confirm_is_a_dialog_that_cuts_the_uplink() {
     let c = confirm(&w, Some("R".into()), Lang::Zh);
     assert_eq!(c.tier, write::Tier::Dialog);
     assert!(c.cuts_uplink);
-    assert!(c.what.contains("双卡，主卡卡槽 2（内置卡）") && c.what.ends_with('R'));
+    assert!(c.what.contains("双卡，主卡卡槽 2") && c.what.ends_with('R'));
     assert!(c.recovery.unwrap().contains("2 分钟"));
 }

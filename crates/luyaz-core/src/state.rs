@@ -316,7 +316,7 @@ pub(crate) fn uci_parsed(package: &str) -> Option<crate::uci::Package> {
 }
 
 /// `uci show` 文本 → `路径 → 值`（值去掉最外层单引号）。解析路径和子进程路径共用。
-fn uci_show_map(raw: &[u8]) -> BTreeMap<String, String> {
+pub(crate) fn uci_show_map(raw: &[u8]) -> BTreeMap<String, String> {
     let text = String::from_utf8_lossy(raw);
     let mut out = BTreeMap::new();
     for entry in text.lines() {
@@ -952,6 +952,16 @@ fn runtime(runtime_zones: Vec<crate::contract::ThermalZone>) -> (i64, crate::con
     (overall, snapshot)
 }
 
+/// The identity fields `sim_identity_stamp` writes into the `sim` field and block (the main
+/// device's `/v2` golden calls this too, dual-slot-removable.md R6/D8 ①).
+pub(crate) fn sim_stamp(v: &mut Value, epoch: u64, phase: &str, say: Option<crate::sim_say::Say>) {
+    if let Some(o) = v.as_object_mut() {
+        o.insert("epoch".into(), json!(epoch));
+        o.insert("phase".into(), json!(phase));
+        crate::sim_say::stamp(o, say);
+    }
+}
+
 /// 旧接口的一轮采集。电池、充电器已迁到块模型（`block::phase1_blocks`），从 `hub` 取；
 /// stale 的块按读失败输出（V2-29）。其余读取仍走 `ubus_ttl`。
 /// SIM identity (P0-2): feed this round's identity + bearer to `sim_identity`, write its
@@ -971,7 +981,10 @@ fn sim_identity_stamp(fields: &mut serde_json::Map<String, Value>, blocks: &mut 
     let (epoch, phase, settled, say) = {
         let mut s = crate::sim_identity::global().lock().unwrap_or_else(|e| e.into_inner());
         if read {
-            s.observe(crate::sim_identity::Identity::new(iccid, imsi), bearer, now);
+            let fw = crate::sim_identity::Identity::new(iccid, imsi);
+            // dual-slot unit: slot 1's fields standing in for slot 2's card are not a change (T5)
+            let id = crate::cards::data_identity(sim, fw, s.known());
+            s.observe(id, bearer, now);
         }
         (s.epoch(), s.phase().as_str(), s.settled(), crate::sim_say::for_phase(s.phase()))
     };
@@ -980,13 +993,7 @@ fn sim_identity_stamp(fields: &mut serde_json::Map<String, Value>, blocks: &mut 
     if let Some(e) = settled {
         crate::sim_follow::settled(e);
     }
-    let stamp = |v: &mut Value| {
-        if let Some(o) = v.as_object_mut() {
-            o.insert("epoch".into(), json!(epoch));
-            o.insert("phase".into(), json!(phase));
-            crate::sim_say::stamp(o, say);
-        }
-    };
+    let stamp = |v: &mut Value| sim_stamp(v, epoch, phase, say);
     if let Some(v) = fields.get_mut("sim") {
         stamp(v);
     }
@@ -997,6 +1004,12 @@ fn sim_identity_stamp(fields: &mut serde_json::Map<String, Value>, blocks: &mut 
             stamp(v);
         }
     }
+}
+
+/// This round's `get_sim_info` answered (its block is not an error): only then is the `sim`
+/// field a reading. A failed read leaves an empty field that must not count as "no card".
+fn sim_read_ok(blocks: &[(&'static str, Result<Value, String>)]) -> bool {
+    blocks.iter().any(|(n, d)| *n == "sim" && d.is_ok())
 }
 
 /// 一轮采集：读（这里）→ 算（`project::snapshot::project`，纯函数）→ MU5252 外挂模组（边读边算）→ 记 `/v2` 块。
@@ -1012,6 +1025,11 @@ pub async fn collect(sample_interval_ms: u64, hub: &crate::block::Hub) -> Snapsh
     }
     let mut blocks = blocks;
     sim_identity_stamp(&mut fields, &mut blocks, std::time::Instant::now());
+    // the card table (cards.rs): the single-slot row comes from this round, a dual-slot unit
+    // starts its poller; a round whose get_sim_info failed is not offered (empty is not "no card")
+    if sim_read_ok(&blocks) {
+        crate::cards::offer(fields.get("sim"));
+    }
     // dual-SIM standby signal: tell the QMI sampler which slot to read (0 = none)
     let dual = fields.get("sim").and_then(|s| s.get("dual")).cloned();
     let want = dual
@@ -1025,6 +1043,9 @@ pub async fn collect(sample_interval_ms: u64, hub: &crate::block::Hub) -> Snapsh
     let now = tokio::time::Instant::now();
     for (name, data) in blocks {
         hub.record(name, data, now);
+    }
+    if let Some(b) = crate::cards::report() {
+        hub.record("cards", Ok(b), now);
     }
     Snapshot { ts: unix_now(), core: Default::default(), fields }
 }
@@ -2349,5 +2370,9 @@ mod sim_identity_stamp_tests {
         let s = crate::sim_identity::global().lock().unwrap();
         assert_eq!((s.epoch(), s.phase()), before);
         assert_eq!(fields["sim"]["epoch"], json!(before.0));
+        // the card table is not offered this round either (dual-slot T3)
+        assert!(!sim_read_ok(&blocks));
+        assert!(sim_read_ok(&[("sim", Ok(json!({"state": "sim ready"})))]));
+        assert!(!sim_read_ok(&[("battery", Ok(json!({})))]));
     }
 }

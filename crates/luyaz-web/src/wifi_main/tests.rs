@@ -296,7 +296,22 @@ fn the_form_renders_seeded_and_never_with_a_password() {
     w["band_5g"]["htmode"] = json!("HE80");
     let h = hub_with(w, json!({}));
     let open = h.read(|st| form(true, st, Lang::En));
-    assert!(open.contains("<option value=\"HE80\" selected>HE80</option>"));
+    assert!(open.contains("<option value=\"HE80\" selected>80 MHz</option>"));
+    // 11-15: a Wi-Fi 6/7 radio is offered its own family's widths, once each, never HT/VHT
+    // (2.4 GHz is HT20 here and keeps the old list)
+    assert!(open.contains("<option value=\"HE160\">160 MHz</option>"), "{open}");
+    assert!(open.contains("<option value=\"HE20\">20 MHz</option>"), "{open}");
+    assert_eq!(open.matches("<option value=\"VHT80\">").count(), 1, "only the 2.4 GHz list");
+}
+
+#[test]
+fn bandwidths_stay_in_the_radios_family() {
+    assert_eq!(ht_choices(0, "EHT40"), ["auto", "EHT20", "EHT40"]);
+    assert_eq!(ht_choices(1, "EHT160"), ["auto", "EHT20", "EHT40", "EHT80", "EHT160"]);
+    assert_eq!(ht_choices(1, "HE80")[3], "HE80");
+    for old in ["auto", "", "VHT80", "HT20", "EHT", "odd"] {
+        assert_eq!(ht_choices(1, old), HTMODES, "{old:?}: the old list");
+    }
 }
 
 #[test]

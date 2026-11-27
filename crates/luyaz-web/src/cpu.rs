@@ -54,10 +54,10 @@ pub struct View {
     pub reason: Option<String>,
     pub retry: bool,
     pub stale: bool,
-    /// The trend line's points (empty = collecting).
+    /// The trend line's points (empty = collecting); ` | ` between pieces broken at a gap.
     pub points: String,
     pub cores: Vec<Core>,
-    /// Used, available, cache and buffers, total (MiB), when memory is known.
+    /// Used, available, cache and buffers, total (MB), when memory is known.
     pub mem: Option<[(&'static str, String); 4]>,
 }
 
@@ -72,7 +72,8 @@ impl View {
 }
 
 fn mib(kb: f64) -> String {
-    format!("{} MiB", (kb / 1024.0).round())
+    // MB like the rest of the site (processes, CHILL); the number is still kb / 1024
+    format!("{} MB", (kb / 1024.0).round())
 }
 
 pub fn agent_cores(v: &Value) -> Option<Vec<AgentCore>> {
@@ -158,14 +159,26 @@ fn trend(st: &St, now: Instant) -> String {
     }
     let end = s.last().unwrap().0;
     let win = crate::trends::WINDOW.as_secs_f64();
-    s.iter()
-        .map(|(t, v)| {
-            let x = (1.0 - end.saturating_duration_since(*t).as_secs_f64() / win) * W;
-            let y = 2.0 + (100.0 - v.clamp(0.0, 100.0)) / 100.0 * (H - 4.0);
-            format!("{x:.0},{y:.0}")
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut out = String::new();
+    let mut prev: Option<Instant> = None;
+    for (t, v) in &s {
+        let x = (1.0 - end.saturating_duration_since(*t).as_secs_f64() / win) * W;
+        let y = 2.0 + (100.0 - v.clamp(0.0, 100.0)) / 100.0 * (H - 4.0);
+        if let Some(p) = prev {
+            // a gap (page closed, data service away) breaks the line, as on /trends
+            out.push_str(if t.saturating_duration_since(p) > crate::trends::GAP { " | " } else { " " });
+        }
+        out.push_str(&format!("{x:.0},{y:.0}"));
+        prev = Some(*t);
+    }
+    out
+}
+
+impl View {
+    /// [`View::points`] as polylines.
+    pub fn pieces(&self) -> Vec<&str> {
+        self.points.split(" | ").filter(|p| !p.is_empty()).collect()
+    }
 }
 
 pub fn view(st: &St, agent: Option<&[AgentCore]>, now: Instant, l: Lang) -> View {
@@ -401,13 +414,13 @@ mod tests {
         assert_eq!(v.state, "CPU 12.0%");
         assert_eq!(
             v.reason.as_deref(),
-            Some("内存已用 597 MiB / 1590 MiB（38%）")
+            Some("内存已用 597 MB / 1590 MB（38%）")
         );
         let mem = v.mem.unwrap();
-        assert_eq!(mem[0], ("已用", "597 MiB".into()));
-        assert_eq!(mem[1], ("可用", "993 MiB".into()));
-        assert_eq!(mem[2], ("缓存", "467 MiB".into()));
-        assert_eq!(mem[3], ("总量", "1590 MiB".into()));
+        assert_eq!(mem[0], ("已用", "597 MB".into()));
+        assert_eq!(mem[1], ("可用", "993 MB".into()));
+        assert_eq!(mem[2], ("缓存", "467 MB".into()));
+        assert_eq!(mem[3], ("总量", "1590 MB".into()));
         let c: Vec<_> = v
             .cores
             .iter()

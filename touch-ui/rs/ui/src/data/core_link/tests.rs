@@ -535,6 +535,21 @@ fn heat_block_parses_level_and_pause() {
     assert_eq!(d.heat_level, -1);
 }
 
+/// The `cards` block (dual-slot T3): both slots, tails only; a block with no rows, or none, is
+/// None (not an empty table); the `cards` block rides along in the rebuilt snapshot.
+#[test]
+fn cards_block_parses() {
+    let d = decode_snapshot(br#"{"cards":{"source":"uim","slots":[{"slot":1,"present":true,"app":"ready","provisioned":true,"role":"data","id":"plain","iccid_tail":"1234","eid_tail":""},{"slot":2,"present":true,"app":"detected","provisioned":false,"role":"off","id":"eid","iccid_tail":"5678","eid_tail":"0001"}]}}"#).unwrap();
+    let c = d.cards.unwrap();
+    assert_eq!(c.source, "uim");
+    let (a, b) = (&c.slots[0], &c.slots[1]);
+    assert!(a.slot == 1 && a.present == 1 && a.provisioned == 1 && a.role == "data" && a.id == "plain" && a.iccid_tail == "1234");
+    assert!(b.slot == 2 && b.app == "detected" && b.provisioned == 0 && b.role == "off" && b.id == "eid" && b.eid_tail == "0001");
+    assert!(decode_snapshot(br#"{"cards":{"source":"uim","slots":[]}}"#).unwrap().cards.is_none());
+    assert!(decode_snapshot(br#"{"sim":{"state":"ready"}}"#).unwrap().cards.is_none());
+    assert!(super::V2_NAMES.contains(&"cards"));
+}
+
 /// The 5 GHz channel guard (core `wifi_dfs` block): the worst state wins; no block = -1.
 #[test]
 fn wifi_dfs_block_parses_the_state() {

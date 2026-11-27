@@ -369,6 +369,8 @@ struct St {
     last: Option<Last>,
     /// DD18：「自动退回已打开」的提示有人点过「知道了」（`notice.json`）。
     notice_acked: bool,
+    /// P-9：哪个事务的退回记录存不了已经说过（每个事务说一次）。
+    unsaved_noted: Option<String>,
 }
 
 struct Inner<D> {
@@ -730,7 +732,15 @@ impl<D: Device> Engine<D> {
         if t.phase.is_final() {
             self.inner.store.clear();
         } else if force || t.seen_ms.saturating_sub(st.saved_seen_ms) >= SEEN_SAVE_MS {
-            let _ = self.inner.store.save(t);
+            // 用户的改动照做（P-9：不挡），但要退回的那种存不了记录就说一次：重启后不会自动退回
+            // （Agent 的事务在开始前就要求存得下，见 O6）
+            if !self.inner.store.save(t)
+                && t.rollback_enabled
+                && st.unsaved_noted.as_deref() != Some(t.op_id.as_str())
+            {
+                st.unsaved_noted = Some(t.op_id.clone());
+                note_unsaved(&t.item, &t.op_id);
+            }
             st.saved_seen_ms = t.seen_ms;
         }
     }
@@ -1721,5 +1731,21 @@ impl<D: Device> Engine<D> {
     }
 }
 
+
+/// P-9：这个事务的退回记录存不进 /data（盘满、只读）：日志一行，收件箱一条（不发短信）。
+fn note_unsaved(item: &str, op_id: &str) {
+    eprintln!("ops: {op_id} ({item}) goes ahead without its rollback record: none after a restart");
+    let text = format!("{item}: the change went ahead; its rollback record could not be saved ({op_id})");
+    #[cfg(test)]
+    UNSAVED.with(|u| u.borrow_mut().push(text));
+    #[cfg(not(test))]
+    super::agent::alert("ops-unsaved", &text);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What [`note_unsaved`] would have put in the inbox (tests).
+    pub(crate) static UNSAVED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 #[cfg(test)]
 mod tests;

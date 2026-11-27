@@ -573,6 +573,32 @@ contract! {
 }
 
 
+// The card table (dual-slot-removable.md §1, R13/D15): one row per physical slot, both units
+// (the single-slot one has one row). `source`: uim (QMI card status, dual-slot unit) | sim_info
+// (the single-slot unit, from get_sim_info). Per slot: `present` a card is in; `app` its USIM
+// ready | detected (in, not provisioned) | locked | perso | illegal | unknown | none; `role`
+// data | voice | standby | off; `id` eid | plain | pending | unknown (pending > 10 min) | none
+// (no card); tails only (last 4 of ICCID / EID).
+contract! {
+    pub struct Cards {
+        normal source: String,
+        nested slots: Vec<CardSlot>,
+    }
+}
+
+contract! {
+    pub struct CardSlot {
+        normal slot: i64,
+        normal present: bool,
+        normal app: String,
+        normal provisioned: bool,
+        normal role: String,
+        normal id: String,
+        personal iccid_tail: String,
+        personal eid_tail: String,
+    }
+}
+
 contract! {
     pub struct AdvicePref {
         normal secs: i64,
@@ -1172,6 +1198,7 @@ blocks! {
     "advice" => Advice,
     "apn" => Apn,
     "battery" => Battery,
+    "cards" => Cards,
     "charger" => Charger,
     "clients" => Clients,
     "dhcp" => Dhcp,

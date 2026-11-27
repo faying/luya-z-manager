@@ -409,6 +409,10 @@ pub fn view(st: &St, l: Lang) -> View {
             data: false,
         },
     ];
+    // open: 「加密方式 开放（无密码）」 already says it; no 「密码 无（开放）」 under it (11-14)
+    if g.encryption == "none" {
+        v.rows.retain(|r| r.label != l.pick("Password", "密码"));
+    }
     v
 }
 

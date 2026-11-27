@@ -298,10 +298,16 @@ pub fn identity() -> Value {
         sms_journal::Source::Unknown => json!({"phase": phase, "sim": null}),
     };
     // 卡里存的本机号码（上一轮采集的快照，不读基带）：App 用来写「从哪个号码发」。卡里没存就不带
-    // 双卡时是电话卡的号码（上网卡可能是没有号码的内置卡）
+    // 双卡时是电话卡的号码（上网卡可能是没有号码的内置卡）；电话卡没存号码就不带，
+    // 不借上网卡的号码（双卡槽 §4）
+    let voice_card = sms_journal::voice_card_known();
     if let Some(n) = sms_journal::voice_number()
         .filter(|n| crate::project::snapshot::valid_msisdn(n))
-        .or_else(|| own_number(crate::usage_log::latest("sim").as_ref()))
+        .or_else(|| {
+            (!voice_card)
+                .then(|| own_number(crate::usage_log::latest("sim").as_ref()))
+                .flatten()
+        })
     {
         v["number"] = json!(n);
     }

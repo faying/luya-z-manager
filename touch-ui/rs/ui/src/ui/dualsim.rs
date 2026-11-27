@@ -11,7 +11,7 @@ use crate::kit::{self, Hero, CARD_W, HERO_H, MARGIN, PAD};
 use crate::lang::tr;
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
-use ui_model::sim_dual_t;
+use ui_model::{cards_t, sim_dual_t};
 
 pub const DS_ROWS: usize = 5;
 const DS_ROW_H: i32 = 50;
@@ -77,9 +77,23 @@ pub fn current(d: &sim_dual_t) -> Option<usize> {
     }
 }
 
+/// The card table's row for slot n when it has both slots (its `present` and ICCID tail are read
+/// per slot; `sim.dual`'s come from settings that can lag a swap, dual-slot T3).
+fn table_row(c: Option<&cards_t>, n: i32) -> Option<&ui_model::card_slot_t> {
+    c.filter(|c| c.slots.len() >= 2).and_then(|c| c.slots.iter().find(|s| s.slot == n))
+}
+
+/// A card is in slot n: the card table's word when there is one, else `sim.dual`'s.
+fn slot_has(d: &sim_dual_t, c: Option<&cards_t>, n: i32) -> bool {
+    match (c.filter(|c| c.slots.len() >= 2), table_row(c, n)) {
+        (Some(_), r) => r.is_some_and(|r| r.present != 0),
+        (None, _) => d.slots.iter().any(|s| s.slot == n && s.present != 0),
+    }
+}
+
 /// Why choice i can't be taken (no card in a slot it needs), None when it can.
-fn missing(d: &sim_dual_t, i: usize) -> Option<i32> {
-    let has = |n: i32| d.slots.iter().any(|s| s.slot == n && s.present != 0);
+fn missing(d: &sim_dual_t, c: Option<&cards_t>, i: usize) -> Option<i32> {
+    let has = |n: i32| slot_has(d, c, n);
     let need: &[i32] = match i {
         0 => &[1],
         1 => &[2],
@@ -104,8 +118,8 @@ pub fn may_roam(d: &sim_dual_t, i: usize, serving_mcc: i32) -> bool {
 
 fn choice_name(i: usize) -> &'static str {
     [
-        tr("只用卡槽 1（插拔卡）"),
-        tr("只用卡槽 2（内置卡）"),
+        tr("只用卡槽 1"),
+        tr("只用卡槽 2"),
         tr("双卡 · 主卡 卡槽 1"),
         tr("双卡 · 主卡 卡槽 2"),
         tr("双卡 · 智能切换"),
@@ -125,11 +139,13 @@ fn now_words(i: Option<usize>) -> &'static str {
 }
 
 /// 「CUCC · 460-01 · 尾号 1234」, or why there is nothing to say.
-fn slot_words(d: &sim_dual_t, n: i32) -> Vec<u8> {
-    let Some(s) = d.slots.iter().find(|s| s.slot == n) else { return tr("没有卡").into() };
-    if s.present == 0 {
+fn slot_words(d: &sim_dual_t, c: Option<&cards_t>, n: i32) -> Vec<u8> {
+    if !slot_has(d, c, n) {
         return tr("没有卡").into();
     }
+    let none = ui_model::sim_slot_t::default();
+    let s = d.slots.iter().find(|s| s.slot == n).unwrap_or(&none);
+    let tail = table_row(c, n).map_or(s.iccid_tail.as_str(), |r| r.iccid_tail.as_str());
     let mut parts: Vec<String> = Vec::new();
     if !s.operator.is_empty() {
         parts.push(s.operator.clone());
@@ -137,10 +153,10 @@ fn slot_words(d: &sim_dual_t, n: i32) -> Vec<u8> {
     if !s.mcc.is_empty() {
         parts.push(format!("{}-{}", s.mcc, s.mnc));
     }
-    if !s.iccid_tail.is_empty() {
-        parts.push(String::from_utf8_lossy(&cf!(tr("尾号 %.4s"), s.iccid_tail.as_str())).into_owned());
+    if !tail.is_empty() {
+        parts.push(String::from_utf8_lossy(&cf!(tr("尾号 %.4s"), tail)).into_owned());
     }
-    if s.provisioned == 0 {
+    if table_row(c, n).map_or(s.provisioned, |r| r.provisioned) == 0 {
         parts.push(tr("没启用").into());
     }
     parts.join(" · ").into_bytes()
@@ -216,7 +232,7 @@ impl Ui {
         if let Some(m) = msg {
             ds.armed = None;
             ds.flash.set(th.t2, 3000, m.into());
-        } else if let Some(n) = missing(&d, i) {
+        } else if let Some(n) = missing(&d, self.model.data.cards.as_ref(), i) {
             ds.armed = None;
             ds.flash.set(th.bad_t, 4000, cf!(tr("卡槽 %d 没有卡"), n));
         } else if ds.armed == Some(i) && now.wrapping_sub(ds.arm_at) < ARM_MS {
@@ -247,6 +263,7 @@ impl Ui {
         let th = t();
         let now = lv::tick_get();
         let d = self.model.data.sim_dual.clone();
+        let cards = self.model.data.cards.clone();
         let serving = self.model.data.mcc;
         if self.ds.armed.is_some() && now.wrapping_sub(self.ds.arm_at) >= ARM_MS {
             self.ds.armed = None;
@@ -302,7 +319,7 @@ impl Ui {
             tr("点两次确认切换，会断网约 10 秒").into()
         };
         let busy = ds.want.is_some() || running;
-        let key = format!("{d:?}|{cur:?}|{:?}|{:?}|{}|{}|{}", ds.armed, ds.want, String::from_utf8_lossy(&line), busy, serving);
+        let key = format!("{d:?}|{cards:?}|{cur:?}|{:?}|{:?}|{}|{}|{}", ds.armed, ds.want, String::from_utf8_lossy(&line), busy, serving);
         if key == ds.key {
             return;
         }
@@ -319,7 +336,7 @@ impl Ui {
             let armed = ds.armed == Some(i);
             let going = ds.want == Some(i);
             let on = cur == Some(i);
-            let gone = missing(&d, i).is_some();
+            let gone = missing(&d, cards.as_ref(), i).is_some();
             let sub: Vec<u8> = if armed {
                 if may_roam(&d, i, serving) {
                     tr("再点一次切换 · 断网约 10 秒 · 可能算漫游").into()
@@ -328,8 +345,8 @@ impl Ui {
                 }
             } else {
                 match i {
-                    0 => slot_words(&d, 1),
-                    1 => slot_words(&d, 2),
+                    0 => slot_words(&d, cards.as_ref(), 1),
+                    1 => slot_words(&d, cards.as_ref(), 2),
                     2 => tr("两张卡都开，上网用卡槽 1").into(),
                     3 => tr("两张卡都开，上网用卡槽 2").into(),
                     _ => tr("两张卡都开，设备自己选上网的卡").into(),
@@ -386,11 +403,18 @@ mod tests {
     #[test]
     fn missing_and_roaming() {
         let mut d = dual("single", 0, 1, "");
-        assert_eq!(missing(&d, 1), None);
+        assert_eq!(missing(&d, None, 1), None);
         d.slots[1].present = 0;
-        assert_eq!(missing(&d, 1), Some(2));
-        assert_eq!(missing(&d, 4), Some(2));
-        assert_eq!(missing(&d, 0), None);
+        assert_eq!(missing(&d, None, 1), Some(2));
+        assert_eq!(missing(&d, None, 4), Some(2));
+        assert_eq!(missing(&d, None, 0), None);
+        // the card table, when it has both slots, says what is in them (sim.dual's lags a swap)
+        let row = |n: i32, present: i32, tail: &str| ui_model::card_slot_t { slot: n, present, iccid_tail: tail.into(), provisioned: 1, ..Default::default() };
+        let c = cards_t { source: "uim".into(), slots: vec![row(1, 1, "1234"), row(2, 1, "5678")] };
+        assert_eq!(missing(&d, Some(&c), 1), None);
+        assert!(String::from_utf8(slot_words(&d, Some(&c), 2)).unwrap().contains("5678"));
+        let c1 = cards_t { source: "sim_info".into(), slots: vec![row(1, 0, "")] };
+        assert_eq!(missing(&d, Some(&c1), 1), Some(2), "one row: sim.dual's word");
         // slot 2 off: no MCC, can't tell → warn; slot 1 home → no warning; no network → warn
         assert!(may_roam(&d, 1, 460) && may_roam(&d, 3, 460) && may_roam(&d, 4, 460));
         assert!(!may_roam(&d, 0, 460) && !may_roam(&d, 2, 460));

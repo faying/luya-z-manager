@@ -35,7 +35,7 @@ pub(crate) fn alerts_extra(d: &mut Value) {
         evs.insert(0, json!({"seq": 3, "time": null, "uptime": 300, "kind": "tailnet-poller",
             "label": "有设备经 Tailscale 持续访问管理接口，息屏更耗电",
             "label_en": "A device keeps polling the admin ports over Tailscale (more drain with the screen off)",
-            "text": "192.168.50.88（经网关转发）经 Tailscale 持续访问 :80", "unread": unread}));
+            "text": "polls :80 over Tailscale for 12 min, ~60 pkts/min: 192.168.50.88 (via gateway)", "unread": unread}));
     }
     if unread {
         let n = d["unread"].as_u64().unwrap_or(0);

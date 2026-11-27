@@ -38,6 +38,17 @@ fn modes_like_the_old_page() {
     assert!(v.dis && v.txn.as_deref() == Some("正在确认"));
 }
 
+/// 11-14 ③: the mode is the page-top status block; `#nm-now-v` stays on its text (e2e).
+#[test]
+fn the_mode_is_the_status_block() {
+    let hub = hub_with(json!({"signal": {"net_select": "Only_5G", "net_select_mode": "manual_select"}}));
+    let st = hub.read(|st| mode_view(st, Lang::Zh)).status();
+    assert!(st.starts_with("<div id=\"nm-status\"") && st.contains("nd-status--ok"), "{st}");
+    assert!(st.contains("id=\"nm-now-v\" data-data>只用 5G SA<") && st.contains("运营商是手动选的"), "{st}");
+    let none = Hub::new().read(|st| mode_view(st, Lang::Zh)).status();
+    assert!(none.contains("nd-status--neutral") && none.contains(">—<"), "{none}");
+}
+
 #[test]
 fn mode_confirm_warns_and_says_rollback_off() {
     let c = mode_confirm("Only_5G", true, Lang::Zh);

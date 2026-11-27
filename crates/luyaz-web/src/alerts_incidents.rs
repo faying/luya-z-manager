@@ -176,6 +176,8 @@ pub fn state(i: &Inc, l: Lang) -> (&'static str, String) {
             },
         ),
         Some("reboot") => ("neutral", l.pick("cut by a reboot", "因重启中断").into()),
+        // the voice SIM it was about was swapped out (core: dual-slot R8/D10)
+        Some("card") => ("neutral", l.pick("card changed, no longer watched", "换卡了，不再跟踪").into()),
         _ => ("ok", l.pick("Recovered", "已恢复").into()),
     }
 }
@@ -221,7 +223,8 @@ fn mark(tone: &str, text: &str) -> String {
 
 fn unread_mark(l: Lang) -> String {
     format!(
-        "<span class=\"al-unread\"><span aria-hidden=\"true\">▲ </span><span class=\"sr-only\">{}: </span></span>",
+        // a dot, not ▲: ▲ is the state's (owner 11-14, 「▲ ▲ 出口不通」)
+        "<span class=\"al-unread\" aria-hidden=\"true\"></span><span class=\"sr-only\">{}: </span>",
         l.pick("unread", "未读")
     )
 }
@@ -510,12 +513,16 @@ pub fn detail(id: &str, got: Result<Value, Fail>, now: i64, l: Lang) -> String {
         ));
         for e in a {
             let unread = e["unread"].as_bool().unwrap_or(false);
+            let kind = e["kind"].as_str().unwrap_or("");
             let t = e["time"].as_i64().map_or("—".to_string(), crate::alerts_page::mdhm);
             out.push_str(&format!(
                 "<li class=\"nd-row al-item\"><span class=\"nd-row__text\"><span class=\"nd-row__label\">{}{}</span><span class=\"nd-row__sub al-wrap\">{}</span></span><span class=\"al-time nd-mono\">{}</span></li>",
                 if unread { unread_mark(l) } else { String::new() },
-                esc(e["kind"].as_str().unwrap_or("")),
-                esc(e["text"].as_str().unwrap_or("")),
+                esc(&match l {
+                    Lang::Zh => luyaz_api::alerts::kind_label(kind),
+                    Lang::En => luyaz_api::alerts::kind_label_en(kind),
+                }),
+                esc(&crate::alerts_page::detail(kind, e["text"].as_str().unwrap_or(""), l)),
                 esc(&t)
             ));
         }
@@ -574,6 +581,10 @@ mod tests {
         assert_eq!(state(&l.closed[0], Lang::Zh).1, "已恢复");
         assert_eq!(state(&l.closed[1], Lang::Zh).1, "已结束 · 3 次");
         assert_eq!(state(&l.closed[1], Lang::En).1, "Ended · 3×");
+        let Got::List(c) = parse(&json!({"v": 1, "open": [], "closed": [inc("d", true, Some("card"))]})) else {
+            panic!()
+        };
+        assert_eq!(state(&c.closed[0], Lang::Zh), ("neutral", "换卡了，不再跟踪".to_string()));
         let now = 1_792_800_000 + 7800;
         let f = crate::alerts_page::mdhm(1_792_800_000);
         assert_eq!(when(&l.open[0], now, Lang::Zh), format!("{f} 起 · 已 2h 10m · 可能相关：core 上机"));
@@ -611,20 +622,22 @@ mod tests {
 
     #[test]
     fn details_in_order_and_their_failures() {
-        let mut v = inc("a", true, Some("quiet"));
+        // its own id: the details cache is global and states_and_lines_as_designed keeps "a"
+        let mut v = inc("dt", true, Some("quiet"));
         v["kind"] = json!("core-crash");
         v["label"] = json!("数据服务意外退出，已自动重启");
         v["observed"] = json!({"zh": "原厂动作：redial", "en": "stock firmware: redial"});
         v["memsnap"] = json!("Rss: 1 kB");
         v["build"] = json!("880e05c");
         v["alerts"] = json!([{"seq": 7, "time": 1_792_800_000, "kind": "core-crash", "text": "x", "unread": true}]);
-        let h = detail("a", Ok(v), 1_792_802_000, Lang::Zh);
+        let h = detail("dt", Ok(v), 1_792_802_000, Lang::Zh);
         let pos = |s: &str| h.find(s).unwrap_or_else(|| panic!("{s} in {h}"));
         assert!(pos("状态") < pos("同时观察到") && pos("同时观察到") < pos("开始") && pos("开始") < pos("可能相关的上机"));
         assert!(pos("可能相关的上机") < pos("内存快照") && pos("内存快照") < pos("build") && pos("build") < pos("归入的告警"));
         assert!(h.contains("1 小时内没再发生") && h.contains("数据服务意外退出") && h.contains("开始前 10 min 上机 core"));
         assert!(h.contains("al-unread"));
-        assert!(detail("a", Err(Fail::Refused(404, String::new(), String::new())), 0, Lang::Zh).contains("这条详情已超过保存期限"));
-        assert!(detail("a", Err(Fail::Unreachable), 0, Lang::Zh).contains("读不到详情"));
+        assert!(!h.contains("<span aria-hidden=\"true\">▲ </span><span class=\"sr-only\">"), "unread is a dot; ▲ is the state's (11-14)");
+        assert!(detail("dt", Err(Fail::Refused(404, String::new(), String::new())), 0, Lang::Zh).contains("这条详情已超过保存期限"));
+        assert!(detail("dt", Err(Fail::Unreachable), 0, Lang::Zh).contains("读不到详情"));
     }
 }

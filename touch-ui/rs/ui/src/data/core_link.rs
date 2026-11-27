@@ -10,7 +10,7 @@ use super::util::{find, jget, jstr, mono_ms32, text, trunc, wall};
 use crate::json;
 use crate::lang::tr;
 use crate::logic::{self, Ctl};
-use ui_model::{data_notice_t, core_snapshot_t, display_t, lan_client_t, regress_item_t, regress_t, sms_entry_t, sim_dual_t, sim_slot_t};
+use ui_model::{card_slot_t, cards_t, data_notice_t, core_snapshot_t, display_t, lan_client_t, regress_item_t, regress_t, sms_entry_t, sim_dual_t, sim_slot_t};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 pub const INBOX_CAP: usize = 32;
@@ -90,9 +90,10 @@ const B_REGRESS: usize = 15;
 const B_DISPLAY: usize = 16;
 const B_HEAT: usize = 17;
 const B_WIFI_DFS: usize = 18;
-const B_COUNT: usize = 19;
+const B_CARDS: usize = 19;
+const B_COUNT: usize = 20;
 const V2_NAMES: [&str; B_COUNT] =
-    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat", "wifi_dfs"];
+    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat", "wifi_dfs", "cards"];
 
 #[derive(Default, Clone)]
 struct Blk {
@@ -496,6 +497,7 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
             yes("on_dfs") as i32
         };
     }
+    d.cards = section("cards").and_then(|s| cards(&s));
     if let Some(s) = section("display") {
         d.display = Some(display(&s));
     }
@@ -580,6 +582,32 @@ fn display(s: &[u8]) -> display_t {
         d.said_id = jstr(w, "id", 64);
     }
     d
+}
+
+/// The `cards` block (core 1.100.0+); None when it is not an object or has no rows (a block
+/// without rows says nothing about the slots).
+fn cards(o: &[u8]) -> Option<cards_t> {
+    if o.first() != Some(&b'{') {
+        return None;
+    }
+    let mut slots = Vec::new();
+    let arr = json::get(o, "slots", 2048)?;
+    let mut p = 0;
+    while let Some((s, next)) = json::arr_next(&arr, p, 512) {
+        let yes = |k: &str| (json::get(&s, k, 8).as_deref() == Some(b"true")) as i32;
+        slots.push(card_slot_t {
+            slot: json::get_int(&s, "slot", 0) as i32,
+            present: yes("present"),
+            app: jstr(&s, "app", 16),
+            provisioned: yes("provisioned"),
+            role: jstr(&s, "role", 10),
+            id: jstr(&s, "id", 10),
+            iccid_tail: jstr(&s, "iccid_tail", 8),
+            eid_tail: jstr(&s, "eid_tail", 8),
+        });
+        p = next;
+    }
+    (!slots.is_empty()).then(|| cards_t { source: jstr(o, "source", 12), slots })
 }
 
 fn sim_dual(o: &[u8]) -> Option<sim_dual_t> {
@@ -833,7 +861,7 @@ impl CoreLink {
     /// The fresh blocks as one old-/state object: signal → net, charger → power, live →
     /// system + traffic, sms + sms_list → sms {unread, list}. None when it would not fit.
     fn v2_rebuild(&self) -> Option<Vec<u8>> {
-        const SAME: [(usize, &str); 14] = [
+        const SAME: [(usize, &str); 15] = [
             (B_SIGNAL, "net"),
             (B_BATTERY, "battery"),
             (B_CHARGER, "power"),
@@ -848,6 +876,7 @@ impl CoreLink {
             (B_POWERBANK, "powerbank"),
             (B_HEAT, "heat"),
             (B_WIFI_DFS, "wifi_dfs"),
+            (B_CARDS, "cards"),
         ];
         let mut out: Vec<u8> = b"{\"v2\":1".to_vec();
         let mut cat = |parts: &[&[u8]]| {
@@ -1248,6 +1277,11 @@ impl CoreLink {
     /// The card the screen shows (the committed snapshot's sim.iccid), "" without one.
     pub fn sim_iccid(&self) -> &str {
         if self.shown_ok { &self.shown_snap.sim_iccid } else { "" }
+    }
+
+    /// The committed snapshot's card table (`cards`), None without one.
+    pub fn cards(&self) -> Option<cards_t> {
+        if self.shown_ok { self.shown_snap.cards.clone() } else { None }
     }
 
     /// The card's key for "once per card" reads: the ICCID, else "imsi:" + IMSI (after a hot

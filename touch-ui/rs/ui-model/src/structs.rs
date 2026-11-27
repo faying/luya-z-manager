@@ -98,6 +98,11 @@ pub struct core_snapshot_t {
     /// `sim.dual` (global edition, manager docs/designs/dual-sim-global.md); None = one slot
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sim_dual: Option<sim_dual_t>,
+    /// The core's `cards` block (core 1.100.0+, manager docs/designs/dual-slot-removable.md §1):
+    /// one row per physical slot, two on a dual-slot unit; None = an older core, or a dual-slot
+    /// unit before its first read
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cards: Option<cards_t>,
     /// The core's `regress` block (incidents, core ≥ 1.45.0); None = a core without it
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regress: Option<regress_t>,
@@ -512,6 +517,63 @@ pub struct tailscale_peer_t {
     pub tx: i64,
     pub hs_ago: i64,
     pub seen_ago: i64,
+}
+
+/// The card table: `source` "uim" (a dual-slot unit, read per slot) or "sim_info" (the
+/// single-slot unit's one row).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct cards_t {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub slots: Vec<card_slot_t>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct card_slot_t {
+    #[serde(default)]
+    pub slot: i32,
+    #[serde(default)]
+    pub present: i32,
+    /// the USIM's state: ready, detected (not provisioned), locked, …, none
+    #[serde(default)]
+    pub app: String,
+    #[serde(default)]
+    pub provisioned: i32,
+    /// data | voice | standby | off
+    #[serde(default)]
+    pub role: String,
+    /// the card's identity: eid (an eUICC) | plain | pending | unknown | none
+    #[serde(default)]
+    pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub iccid_tail: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub eid_tail: String,
+}
+
+/// One eUICC's block on the eSIM page of a dual-slot unit: the card in `slot`, its list and
+/// where its read or switch stands.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct esim_card_t {
+    #[serde(default)]
+    pub slot: i32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub eid_tail: String,
+    /// the enabled profile's name, "-" none
+    #[serde(default)]
+    pub current: String,
+    /// the card's status line in the screen's language
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub ready: i32,
+    #[serde(default)]
+    pub loaded: i32,
+    #[serde(default)]
+    pub enabled_iccid: String,
+    #[serde(default)]
+    pub profiles: Vec<esim_profile_t>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

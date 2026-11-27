@@ -37,7 +37,12 @@ fn context_text(c: &Value, l: Lang) -> String {
     let rat = c["rat"].as_str().unwrap_or("");
     let band = c["band"].as_str().unwrap_or("");
     if !rat.is_empty() || !band.is_empty() {
-        out.push(format!("{rat} {band}").trim().to_string());
+        // the band may already carry the RAT ("LTE BAND 5"): 11-14 the record said "LTE LTE BAND 5"
+        if !rat.is_empty() && band.starts_with(rat) {
+            out.push(band.to_string());
+        } else {
+            out.push(format!("{rat} {band}").trim().to_string());
+        }
     }
     if let Some(p) = c["pci"].as_i64().filter(|p| *p > 0) {
         out.push(format!("PCI {p}"));
@@ -257,15 +262,55 @@ pub(crate) struct HistRow {
 struct Page {
     shell: crate::shell::Shell,
     l: Lang,
+    status: String,
     run: String,
     id: Option<u64>,
-    when: String,
-    ctx: String,
     cdf: Vec<CdfLine>,
     compare: Option<Compare>,
     history: Vec<HistRow>,
     svg_href: String,
     json_href: String,
+}
+
+/// The verdict's tone: unanswering is bad, slowing or queueing is warn, no conclusion (stopped,
+/// no baseline) is neutral, holding up is ok.
+fn tone(r: &Value) -> &'static str {
+    let f = &r["findings"];
+    if r["aborted"].is_string() || f["no_baseline"] == true {
+        "neutral"
+    } else if f["unresponsive_steps"][0].is_u64() {
+        "bad"
+    } else if f["first_slow_step"].is_u64() {
+        "warn"
+    } else {
+        "ok"
+    }
+}
+
+/// The page-top status block (11-14 ③): the shown run's verdict, its time and cell as meta.
+fn status(body: Option<&Value>, l: Lang) -> String {
+    let Some(b) = body else {
+        return crate::status_block::html("ld-status", "bad", l.pick("Could not read the runs", "读不到负载体检记录"), None, None);
+    };
+    let Some(w) = Some(&b["result"]).filter(|w| w.is_object()) else {
+        return crate::status_block::html("ld-status", "neutral", l.pick("No run yet", "还没有记录"), None, None);
+    };
+    let r = &w["report"];
+    let meta = [
+        w["id"].as_u64().map(|i| crate::alerts_page::mdhm(i as i64)).unwrap_or_default(),
+        context_text(&w["context"], l),
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect::<Vec<_>>()
+    .join(" · ");
+    crate::status_block::html(
+        "ld-status",
+        tone(r),
+        &crate::speedtest::ladder_headline(r, l),
+        Some(esc(l.pick("This moment only.", "只代表此刻。")).as_str()),
+        Some(esc(&meta).as_str()),
+    )
 }
 
 async fn result(app: &Shared, who: &Caller, id: Option<u64>) -> Option<Value> {
@@ -333,10 +378,9 @@ pub async fn page(
     let html = Page {
         shell,
         l,
+        status: status(body.as_ref(), l),
         run,
         id,
-        when: id.map(|i| crate::alerts_page::mdhm(i as i64)).unwrap_or_default(),
-        ctx: w.map(|w| context_text(&w["context"], l)).unwrap_or_default(),
         cdf: w.map(|w| cdf(&w["report"], l)).unwrap_or_default(),
         compare,
         history,
@@ -559,6 +603,19 @@ mod tests {
         assert_eq!(lines[3].kind, "up");
         assert!(lines[0].points.ends_with(",0.0"), "{}", lines[0].points);
     }
+    /// 11-14 ③: the shown run's verdict is the page-top status block, with its tone.
+    #[test]
+    fn the_verdict_is_the_status_block() {
+        let st = |report: Value| status(Some(&json!({"result": {"id": 1_794_680_000u64, "report": report, "context": {}}})), Lang::Zh);
+        let bad = st(json!({"findings": {"unresponsive_steps": [3]}, "steps": [{}, {}, {"kind": "both"}]}));
+        assert!(bad.starts_with("<div id=\"ld-status\"") && bad.contains("nd-status--bad") && bad.contains("网络就没反应了"), "{bad}");
+        assert!(bad.contains("11-14"), "its time as meta: {bad}");
+        assert!(st(json!({"aborted": "stopped", "findings": {}})).contains("nd-status--neutral"));
+        assert!(st(json!({"findings": {}})).contains("nd-status--ok"));
+        assert!(status(Some(&json!({"result": null})), Lang::Zh).contains("还没有记录"));
+        assert!(status(None, Lang::Zh).contains("nd-status--bad"));
+    }
+
     #[test]
     fn the_svg_stands_alone() {
         let s = svg(&run(1, 1, [40.0, 45.0, 190.0, 60.0, 41.0]), Lang::Zh);

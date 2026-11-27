@@ -240,6 +240,7 @@ impl Engine {
                 crate::engines::chill_probe::now(),
             ),
             ts: if read.ts_on { read.ts_ok } else { None },
+            chill_why: crate::engines::chill_probe::why().map(|(zh, en)| Said { zh, en }),
             observed: observed_net(),
             ..Default::default()
         };

@@ -1,0 +1,30 @@
+/* luyaz-web: /tools/speedtest/ladder only (its own asset since 11-15: in pages.css it rode on
+   every list page's first load and pushed /router/bandlock past 40 KiB). */
+.ld-export { display: flex; flex-wrap: wrap; gap: 8px; }
+.ld-when { margin-top: -8px; }
+.ld-axis { display: flex; justify-content: space-between; margin: 4px 0 0 40px; font-size: 11px; color: var(--nd-t3); }
+.ld-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12px; color: var(--nd-t2); }
+.ld-key::before { content: ""; display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: middle; border-radius: 2px; background: var(--ld-k); }
+.ld-k-idle { --ld-k: var(--nd-t3); }
+.ld-k-down { --ld-k: var(--nd-okMark); }
+.ld-k-both { --ld-k: var(--nd-accMark); }
+.ld-k-up { --ld-k: var(--nd-warnMark); }
+.ld-k-recovery { --ld-k: var(--nd-t2); }
+.ld-this { --ld-k: var(--nd-accMark); }
+.ld-that { --ld-k: var(--nd-t3); }
+.tr-line polyline[class^="ld-k-"], .tr-line polyline.ld-this, .tr-line polyline.ld-that { stroke: var(--ld-k); }
+.tr-line polyline.ld-k-recovery { stroke-dasharray: 4 3; }
+.tr-line polyline.ld-that { stroke-width: 1px; opacity: 0.7; }
+.ld-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.ld-table th, .ld-table td { padding: 10px 12px; text-align: left; vertical-align: top; border-top: 1px solid var(--nd-hair); }
+.ld-table thead th { border-top: 0; font-size: 12px; font-weight: 500; color: var(--nd-t3); }
+.ld-table tbody th { font-weight: 500; color: var(--nd-t1); }
+.ld-table td { font-variant-numeric: tabular-nums; color: var(--nd-t1); }
+.ld-current { background: var(--nd-wash); }
+/* the ladder page: the verdict is the status block on screen; the run repeats it only on paper */
+@media screen { .ld-printonly { display: none; } }
+@media print {
+  body * { visibility: hidden; }
+  .ld-print, .ld-print * { visibility: visible; }
+  .ld-print { position: absolute; left: 0; top: 0; width: 100%; }
+}

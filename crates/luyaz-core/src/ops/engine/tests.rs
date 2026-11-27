@@ -1947,3 +1947,22 @@ async fn bare_redial_is_busy_while_a_network_transaction_holds_the_gate() {
     // the engine's hold is untouched
     assert!(g.gate.lock().unwrap().txn_release(GATE_OWNER));
 }
+
+/// P-9：用户的改动在退回记录存不进 /data 时照做，但说一次（重启后不会自动退回）。
+#[tokio::test(start_paused = true)]
+async fn a_user_change_goes_ahead_without_its_record_and_says_so_once() {
+    super::UNSAVED.with(|u| u.borrow_mut().clear());
+    let dev = Dev::new();
+    let dir = temp_dir();
+    // pending.json 是个目录：rename 盖不上，跟盘满、只读一样写不进去
+    std::fs::create_dir_all(dir.join("pending.json")).unwrap();
+    let e = engine(&dev, true, Some(dir.clone()));
+    let op = op_of(&e.submit(req("Only_LTE", Source::Screen)).await);
+    let fin = settle(&e, &id(&op)).await;
+    assert_eq!(end(&fin), pair("confirmed", "verified"));
+    assert_eq!(dev.s().writes, ["Only_LTE"]);
+    let noted = super::UNSAVED.with(|u| u.borrow().clone());
+    assert_eq!(noted.len(), 1, "{noted:?}");
+    assert!(noted[0].contains(&id(&op)), "{noted:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

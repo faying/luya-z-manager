@@ -1034,3 +1034,140 @@ fn a_rollback_alert_passes_the_day_limit_but_not_the_hour_limit() {
     assert!(!rate_ok(&again, "ship-conn-rollback", now));
 }
 
+
+// 11-12: the clock stepped, every alert SMS was held two days and nobody knew.
+#[test]
+fn a_long_hold_tells_the_inbox_once_and_old_alerts_are_not_texted_after() {
+    let a = setup("held-long", &["web-crash"]);
+    let mut io = Fake::new();
+    io.clock_ok = false;
+    assert_eq!(a.sms_round("core", 10, &mut io), Round::Held);
+    assert!(a.exists("sms-held"));
+    io.up += HELD_NOTE_AFTER_S - 1;
+    a.sms_round("core", 10, &mut io);
+    assert!(a.events().iter().all(|e| e.kind != "sms-held"));
+    io.up += 1;
+    a.sms_round("core", 10, &mut io);
+    io.up += 60;
+    a.sms_round("sentinel", 20, &mut io);
+    let notes: Vec<_> = a
+        .events()
+        .into_iter()
+        .filter(|e| e.kind == "sms-held")
+        .collect();
+    assert_eq!(notes.len(), 1, "told once, whichever sender holds next");
+    assert!(notes[0].text.contains("held 10 min"));
+    // the clock is back 40 min after the alert: recorded, not texted; the note is inbox only
+    io.clock_ok = true;
+    io.up = 900 + HELD_STALE_S + 1;
+    assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(2));
+    assert!(io.sent().is_empty());
+    assert_eq!(
+        log_results(&a),
+        vec![(1, "web-crash".into(), "stale-held".into())]
+    );
+    assert!(
+        !a.exists("sms-held"),
+        "all dealt with: the next hold counts afresh"
+    );
+    // what comes after is texted as ever
+    a.add("web-crash", "text", T0, io.up).unwrap();
+    assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(1));
+    assert_eq!(io.sent().len(), 1);
+}
+
+#[test]
+fn after_a_short_hold_a_closed_regress_is_not_texted_an_open_one_is() {
+    let a = dir("held-closed");
+    a.write_whole("sms-to", "+8613800000000\n").unwrap();
+    a.add(
+        "regress-egress",
+        "[rg-egress-chill-0aaaaaaa-900-open] chill failing 5m",
+        T0,
+        900,
+    )
+    .unwrap();
+    a.add(
+        "regress-egress",
+        "[rg-egress-chill-0aaaaaaa-900-close] chill through 3 checks",
+        T0,
+        950,
+    )
+    .unwrap();
+    a.add(
+        "regress-egress",
+        "[rg-egress-tailscale-0aaaaaaa-960-open] tailscale failing 5m",
+        T0,
+        960,
+    )
+    .unwrap();
+    let mut io = Fake::new();
+    io.clock_ok = false;
+    assert_eq!(a.sms_round("core", 10, &mut io), Round::Held);
+    io.clock_ok = true;
+    io.up = 1100;
+    assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(3));
+    assert_eq!(
+        log_results(&a),
+        vec![
+            (1, "regress-egress".into(), "stale-held".into()),
+            (3, "regress-egress".into(), "sent".into()),
+        ]
+    );
+    assert_eq!(io.sent().len(), 1);
+}
+
+#[test]
+fn without_a_hold_an_old_alert_still_goes_out() {
+    // cellular down for an hour (design §5): sent late, at its own time
+    let a = setup("no-hold-old", &["web-crash"]);
+    let mut io = Fake::new();
+    io.up = 900 + HELD_STALE_S * 2;
+    assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(1));
+    assert_eq!(io.sent().len(), 1);
+}
+
+#[test]
+fn a_hold_across_a_reboot_starts_its_count_again() {
+    let a = setup("held-reboot", &["web-crash"]);
+    let mut io = Fake::new();
+    io.clock_ok = false;
+    io.up = 5000;
+    a.sms_round("core", 10, &mut io);
+    io.boot = "boot-b".into();
+    io.up = 100 + HELD_NOTE_AFTER_S;
+    a.sms_round("core", 10, &mut io);
+    assert!(a.events().iter().all(|e| e.kind != "sms-held"));
+    assert!(
+        fs::read_to_string(a.path("sms-held"))
+            .unwrap()
+            .starts_with("boot-b\t")
+    );
+}
+
+#[test]
+fn a_reboot_ends_the_hold_old_alerts_are_dropped_new_ones_texted() {
+    let a = setup("held-reboot-new", &["web-crash"]);
+    let mut io = Fake::new();
+    io.clock_ok = false;
+    assert_eq!(a.sms_round("core", 10, &mut io), Round::Held);
+    // the reboot: the clock is fine again, an alert of the new boot is queued before any round
+    io.boot = "boot-b".into();
+    io.up = 120;
+    io.clock_ok = true;
+    a.add(
+        "regress-reboot",
+        "[rg-reboot-0bbbbbbb-120-open] code 1134",
+        T0,
+        120,
+    )
+    .unwrap();
+    assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(2));
+    assert_eq!(
+        log_results(&a),
+        vec![
+            (1, "web-crash".into(), "stale-held".into()),
+            (2, "regress-reboot".into(), "sent".into()),
+        ]
+    );
+}

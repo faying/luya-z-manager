@@ -16,3 +16,6 @@
 .sch-time { width: 10rem; }
 .sch-at { max-width: 16rem; }
 @media (max-width: 479px) { .sch-row { flex-wrap: wrap; } .sch-row__acts { width: 100%; } }
+
+/* no jobs: the status block says so; no empty card under it (11-14) */
+#sch-list:not(:has(*)) { display: none; }

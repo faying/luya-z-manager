@@ -8,6 +8,26 @@
 //! ([`wait_lease_free`]), re-reads the state file when it starts, and stops (holding the current
 //! SMS, as a transient failure) once [`Host::active`] says the host no longer owns forwarding.
 
+/// A log line that cannot be written is dropped instead of panicking (std's `eprintln!` panics,
+/// and the core's device build aborts on any panic: a full /tmp stopped it on 10-26). Same as
+/// luyaz-core's `main.rs` (P-7); defined before every `mod`, so the whole crate uses it.
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +44,7 @@ mod model;
 mod queue;
 mod send;
 mod text;
+pub use text::{readable as readable_sms, MMS_NOTICE, MMS_PLACEHOLDER};
 
 pub use lease::{remove_lease, wait_lease_free, write_lease, LEASE_FILE, LEASE_WAIT};
 pub use model::{ForwardDestination, ForwardLogEntry, ForwardRule, HttpHeader, SmsFilter, SmsForwardConfig};
@@ -1161,7 +1182,7 @@ fn decode_item(item: &Value) -> (u64, Option<DecodedSms>) {
         .unwrap_or("")
         .to_string();
     let sender = if is_ucs2_hex(sender_raw) { decode_ucs2_hex(sender_raw) } else { sender_raw.to_string() };
-    let content = if is_ucs2_hex(content_raw) { decode_ucs2_hex(content_raw) } else { content_raw.to_string() };
+    let content = text::readable(if is_ucs2_hex(content_raw) { decode_ucs2_hex(content_raw) } else { content_raw.to_string() });
     (id, Some(DecodedSms { id, sender, content, date, late_secs: None }))
 }
 

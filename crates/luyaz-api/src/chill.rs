@@ -319,6 +319,9 @@ pub enum Got {
 
 /// The URL every exit probe asks for (manual-first, deep diagnosis' proxy layer).
 pub const PROBE_URL: &str = "https://www.gstatic.com/generate_204";
+/// A second 204 address on the same route, for the exit check's retry (another host, so one slow
+/// TLS front does not decide it).
+pub const PROBE_URL_ALT: &str = "https://www.google.com/generate_204";
 
 /// Percent-encoding for one path segment or query value of mihomo's API.
 pub fn enc(s: &str) -> String {

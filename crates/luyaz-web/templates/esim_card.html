@@ -1,0 +1,21 @@
+{% if n != 0 %}<section class="grid gap-6" aria-labelledby="es-hd{{ sx }}">
+{{ self.leaf("es-hd")|safe }}
+{% endif %}{{ self.leaf("es-status")|safe }}
+<section aria-labelledby="es-prof-t{{ sx }}"><{{ h }} id="es-prof-t{{ sx }}" class="nd-group-title">{{ l.pick("Profiles", "配置文件") }}</{{ h }}>
+<p class="nd-aux -mt-1 mb-3 px-1">{% if n == 0 %}{{ l.pick("Switching re-attaches the modem on the new profile: usually about 40 s without a reboot. If the new profile doesn't take, the device reboots (about 90 s).", "切换时基带用新配置重新注网：通常约 40 秒，不用重启。新配置没生效时设备会重启（约 90 秒）。") }}{% else %}{{ l.pick("On the slot in use for data, switching re-attaches the modem on the new profile (usually about 40 s; if it doesn't take, the device reboots, about 90 s). On a slot that isn't, only the card changes: the new profile takes effect after a restart, and the device never reboots by itself for it.", "在上网的卡槽上切换时，基带用新配置重新注网（通常约 40 秒；没生效时设备会重启，约 90 秒）。不在上网的卡槽只换卡上的配置：重启设备后生效，设备不会因此自己重启。") }}{% endif %}</p>
+{{ self.leaf("es-list")|safe }}
+<div class="mt-2 px-1">{{ prof_op|safe }}<div id="es-retry{{ sx }}"></div><div id="es-after{{ sx }}"></div></div>
+</section>
+<section aria-labelledby="es-add-t{{ sx }}"><{{ h }} id="es-add-t{{ sx }}" class="nd-group-title">{{ l.pick("Add profile", "添加配置") }}</{{ h }}>
+<div class="nd-group grid gap-4 p-4">
+<div class="grid gap-1"><label for="es-code{{ sx }}" class="font-semibold">{{ l.pick("Activation code", "激活码") }}</label><input id="es-code{{ sx }}" class="nd-field nd-mono" data-bind="_esCode{{ sig }}" placeholder="LPA:1$smdp.example.com$XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+<div class="grid gap-1"><label for="es-conf{{ sx }}" class="font-semibold">{{ l.pick("Confirmation code (optional)", "确认码（可选）") }}</label><input id="es-conf{{ sx }}" class="nd-field" data-bind="_esConf{{ sig }}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+<p class="nd-aux">{{ l.pick("Paste the carrier's activation code, the text printed under the QR code. The profile lands on the card switched off; switch to it when you want it.", "贴上运营商给的激活码，就是二维码下面那行字。配置下到卡里先不启用，要用时再切过去。") }}</p>
+{{ self.leaf("es-dlgo")|safe }}
+{{ dl_op|safe }}
+</div>
+</section>
+{{ self.leaf("es-notif")|safe }}
+<div class="-mt-4 px-1">{{ nt_op|safe }}</div>
+{{ self.leaf("es-chip")|safe }}
+{% if n != 0 %}</section>{% endif %}

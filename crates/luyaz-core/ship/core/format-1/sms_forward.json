@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "poll_interval_secs": 30,
+  "mark_read_after_forward": true,
+  "delete_after_forward": false,
+  "rules": [
+    {"id": 1, "name": "all", "enabled": true, "filter": {"type": "all"},
+     "destination": {"type": "telegram", "chat_id": "100", "bot_token": "000000:example", "silent": true}},
+    {"id": 2, "name": "sender", "enabled": true, "filter": {"type": "sender", "patterns": ["+1555"]},
+     "destination": {"type": "webhook", "url": "https://example.com/hook", "method": "POST",
+                     "headers": [{"name": "X-Example", "value": "1"}]}},
+    {"id": 3, "name": "content", "enabled": false, "filter": {"type": "content", "keywords": ["code"]},
+     "destination": {"type": "sms", "forward_number": "+15550100"}},
+    {"id": 4, "name": "both", "enabled": true,
+     "filter": {"type": "sender_and_content", "patterns": ["+1555"], "keywords": ["code"]},
+     "destination": {"type": "ntfy", "topic": "example", "token": "tk_example", "url": "https://ntfy.example.com"}},
+    {"id": 5, "name": "discord", "enabled": true, "filter": {"type": "all"},
+     "destination": {"type": "discord", "webhook_url": "https://example.com/discord"}},
+    {"id": 6, "name": "slack", "enabled": true, "filter": {"type": "all"},
+     "destination": {"type": "slack", "webhook_url": "https://example.com/slack"}}
+  ]
+}

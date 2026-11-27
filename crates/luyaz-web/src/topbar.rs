@@ -112,7 +112,7 @@ impl Via {
             Via::Local => "",
             Via::Tailnet => l.pick(
                 "Connected over Tailscale, so changing the network, the bands or Tailscale can cut you off",
-                "你正经 Tailscale 连到设备；改网络、锁频、关 Tailscale 可能让你断开",
+                "你现在经 Tailscale 连到设备；改网络、锁频、关 Tailscale 可能让你断开",
             ),
             Via::SubnetRoute => l.pick(
                 "Connected through another Tailscale node's subnet route, so changing the network, the LAN address or Tailscale can cut you off",
@@ -301,15 +301,60 @@ pub fn classify(
 const LAN_TTL: Duration = Duration::from_secs(30);
 const ROUTE_TTL: Duration = Duration::from_secs(60);
 
-/// `ip`'s output; empty when it failed. None = there is no `ip` at all: not the device (a Mac, the
-/// browser-check container), where every viewer is local as before.
-fn run_ip(args: &[&str]) -> Option<String> {
-    match std::process::Command::new("ip").args(args).output() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => Some(String::new()),
-        Ok(o) if !o.status.success() => Some(String::new()),
-        Ok(o) => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+/// How long one `ip` run may take. It answers in milliseconds; this runs on the server's only
+/// runtime thread (ext-1117 A2), so a hung `ip` used to stop every page.
+const IP_DEADLINE: Duration = Duration::from_secs(1);
+
+/// What one `ip` run gave.
+#[derive(Debug, PartialEq)]
+enum IpRun {
+    /// No `ip` at all: not the device (a Mac, the browser-check container), where every viewer is
+    /// local as before.
+    Missing,
+    /// It ran past [`IP_DEADLINE`] and was killed.
+    TimedOut,
+    /// Its output; empty when it failed.
+    Out(String),
+}
+
+fn run_ip(args: &[&str]) -> IpRun {
+    run_within("ip", args, IP_DEADLINE)
+}
+
+/// Run `prog`, killing it at `deadline`. The output is read after it exits (`ip`'s is a few KB,
+/// well under a pipe buffer, so it cannot block on a full pipe before exiting).
+fn run_within(prog: &str, args: &[&str], deadline: Duration) -> IpRun {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new(prog)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return IpRun::Missing,
+        Err(_) => return IpRun::Out(String::new()),
+        Ok(c) => c,
+    };
+    let until = Instant::now() + deadline;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(5)),
+            Ok(None) | Err(_) => break None,
+        }
+    };
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return IpRun::TimedOut;
+    };
+    let mut out = String::new();
+    if let Some(mut so) = child.stdout.take() {
+        let _ = so.read_to_string(&mut out);
     }
+    IpRun::Out(if status.success() { out } else { String::new() })
 }
 
 /// The LAN networks, or None off the device (no `ip`).
@@ -319,7 +364,18 @@ fn cached_lan() -> Option<Vec<Net>> {
     match &*c {
         Some((at, nets)) if at.elapsed() < LAN_TTL => nets.clone(),
         _ => {
-            let nets = run_ip(&["-o", "addr", "show"]).map(|o| lan_nets(&o));
+            let nets = match run_ip(&["-o", "addr", "show"]) {
+                IpRun::Missing => None,
+                IpRun::Out(o) => Some(lan_nets(&o)),
+                // hung: keep what we had (the interfaces rarely change), try again after the TTL
+                IpRun::TimedOut => {
+                    eprintln!("[luyaz-web] `ip -o addr` did not answer in {}s", IP_DEADLINE.as_secs());
+                    match c.as_ref() {
+                        Some((_, Some(prev))) => Some(prev.clone()),
+                        _ => Some(Vec::new()),
+                    }
+                }
+            };
             // a fallback that changes every warning is said once, not silently
             static SAID: std::sync::Once = std::sync::Once::new();
             match &nets {
@@ -344,7 +400,11 @@ fn cached_route(peer: IpAddr) -> bool {
     if let Some((_, ts)) = m.get(&peer).filter(|(at, _)| at.elapsed() < ROUTE_TTL) {
         return *ts;
     }
-    let ts = via_tailscale(&run_ip(&["route", "get", &peer.to_string()]).unwrap_or_default());
+    let ts = match run_ip(&["route", "get", &peer.to_string()]) {
+        IpRun::Out(o) => via_tailscale(&o),
+        // failed or hung: not known to come over the tailnet (Via::Unknown, as for a failure)
+        IpRun::Missing | IpRun::TimedOut => false,
+    };
     if m.len() > 256 {
         m.retain(|_, (at, _)| at.elapsed() < ROUTE_TTL);
     }
@@ -627,12 +687,14 @@ pub fn bar(st: &St, ctx: &Ctx) -> Option<Bar> {
     } else {
         None
     };
-    // the core prefixes some texts with its event id ("[fa717fe4-22962] …"); not for people
-    let text = latest.and_then(|e| e["text"].as_str()).unwrap_or("");
-    let text = match text.strip_prefix('[').and_then(|r| r.split_once("] ")) {
-        Some((id, rest)) if !id.contains(' ') => rest,
-        _ => text,
-    };
+    let text = latest.map_or(String::new(), |e| {
+        crate::alerts_page::detail(
+            e["kind"].as_str().unwrap_or(""),
+            e["text"].as_str().unwrap_or(""),
+            l,
+        )
+    });
+    let text = text.as_str();
     let detail = [text, sms_note.unwrap_or("")]
         .iter()
         .filter(|s| !s.is_empty())
@@ -905,8 +967,27 @@ pub async fn read(
     }))
 }
 
+/// The core prefixes some alert texts with its event id ("[fa717fe4-22962] …",
+/// "[rg-egress-chill-…-open] …"); not for people.
+pub fn without_event_id(text: &str) -> &str {
+    match text.strip_prefix('[').and_then(|r| r.split_once("] ")) {
+        Some((id, rest)) if !id.contains(' ') => rest,
+        _ => text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hung_command_is_killed_at_its_deadline() {
+        let started = std::time::Instant::now();
+        assert_eq!(super::run_within("sleep", &["30"], Duration::from_millis(200)), super::IpRun::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(super::run_within("no-such-program-ext1117", &[], Duration::from_secs(1)), super::IpRun::Missing);
+        assert_eq!(super::run_within("sh", &["-c", "echo hi"], Duration::from_secs(5)), super::IpRun::Out("hi\n".into()));
+        assert_eq!(super::run_within("sh", &["-c", "echo hi; exit 3"], Duration::from_secs(5)), super::IpRun::Out(String::new()));
+    }
+
     use super::*;
     use crate::sse::Frame;
     use axum::http::HeaderValue;

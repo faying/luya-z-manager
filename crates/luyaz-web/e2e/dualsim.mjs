@@ -19,7 +19,7 @@ let failed = 0;
 const ok = (c, m) => { console.log(`${c ? "ok  " : "FAIL"} ${m}`); if (!c) failed++; };
 const CJK = /[　-〿一-鿿＀-￯]/g;
 
-// u60g 10-20: single SIM on slot 1, the built-in card off (no MCC). Identifiers are made up.
+// u60g 10-20: single SIM on slot 1, slot 2 off (no MCC). Identifiers are made up.
 const SINGLE1 = { active_slot: 1, mode: "single", smart: false, switching: false, slots: [
   { slot: 1, provisioned: true, present: true, ready: true, operator: "CUCC", mcc: "460", mnc: "01", iccid_tail: "1111" },
   { slot: 2, provisioned: false, present: true, ready: null, operator: "CMCC", mcc: "", mnc: "", iccid_tail: "2222" }] };
@@ -54,7 +54,7 @@ async function own(p) {
   const done = () => until(p, () => /已改成|已切换|没有生效|设备已接受/.test(document.querySelector("#ds-op")?.textContent ?? ""), null, 20000);
 
   // the slots as u60d reports them
-  ok(await txt(p, "#ds-mode") === "单卡" && await txt(p, "#ds-main") === "卡槽 1（插拔卡）", `now: ${await txt(p, "#ds-mode")} / ${await txt(p, "#ds-main")}`);
+  ok(await txt(p, "#ds-mode") === "单卡" && await txt(p, "#ds-main") === "卡槽 1", `now: ${await txt(p, "#ds-mode")} / ${await txt(p, "#ds-main")}`);
   const now = await txt(p, "#ds-now");
   ok(/已启用 · 就绪/.test(now) && /未启用/.test(now) && /CUCC · 460-01/.test(now) && /…2222/.test(now), `slots: ${now.slice(0, 120)}`);
   ok(await btn.isEnabled(), "Switch on");
@@ -72,7 +72,7 @@ async function own(p) {
   await btn.click();
   await p.waitForSelector("dialog#ds-confirm[open]", { timeout: 8000 }).catch(() => {});
   const dlg = await txt(p, "#ds-confirm");
-  ok(/切换 SIM 卡？/.test(dlg) && /双卡，主卡卡槽 2（内置卡）/.test(dlg) && /看不出这张卡在这里算不算漫游/.test(dlg) && /约 10 秒/.test(dlg) && /2 分钟/.test(dlg), `dialog: ${dlg.slice(0, 140)}`);
+  ok(/切换 SIM 卡？/.test(dlg) && /双卡，主卡卡槽 2/.test(dlg) && /看不出这张卡在这里算不算漫游/.test(dlg) && /约 10 秒/.test(dlg) && /2 分钟/.test(dlg), `dialog: ${dlg.slice(0, 140)}`);
   ok(await p.evaluate(() => document.activeElement?.textContent?.trim()) === "取消", "focus on Cancel");
   const ax = await new AxeBuilder({ page: p }).analyze();
   ok(ax.violations.length === 0, `dialog axe: ${ax.violations.map((v) => v.id).join(", ") || "0"}`);
@@ -92,7 +92,7 @@ async function own(p) {
   const sent = (await stats()).txns.slice(s0.txns.length);
   ok(sent.length === 1 && sent[0].action === "sim.dual" && JSON.stringify(sent[0].params) === '{"active_slot":2,"mode":"dual","smart":false}' && /^lw-/.test(sent[0].op_id) && sent[0].source === "web", `one sim.dual (${JSON.stringify(sent)})`);
   await until(p, () => document.querySelector("#ds-mode")?.textContent === "双卡");
-  ok(await txt(p, "#ds-mode") === "双卡" && await txt(p, "#ds-main") === "卡槽 2（内置卡）", "read back in the rows");
+  ok(await txt(p, "#ds-mode") === "双卡" && await txt(p, "#ds-main") === "卡槽 2", "read back in the rows");
 
   // the same again: refused before a dialog
   await btn.click();

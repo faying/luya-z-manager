@@ -117,6 +117,8 @@ const OWN_PREFIX: &[&str] = &[
     "/tools/at",
     "/tools/processes",
     "/tools/enable-adb",
+    // the AI agent permissions page: in the route table and --pages since D-g, never here (404)
+    "/tools/agent",
     "/router/dns",
     // travel-assist §4
     "/usage",
@@ -406,6 +408,16 @@ mod tests {
         assert!(own("/router/schedule", &pages) && own("/router/schedule/x", &pages));
         assert!(!own("/router/schedule", &[]));
         assert!(!own("/router/schedulex", &pages));
+    }
+
+    /// Every page in the route table is served here once it is in --pages (11-14: /tools/agent
+    /// was in both and still a 404, missing from OWN_PREFIX).
+    #[test]
+    fn every_listed_page_is_served() {
+        let pages: Vec<String> = crate::routes::ROUTES.iter().map(|r| r.href.to_string()).collect();
+        for p in &pages {
+            assert!(own(p, &pages) || p == "/health", "{p} is listed but nothing here serves it");
+        }
     }
 
     #[test]

@@ -24,8 +24,8 @@ fn feed(k: &mut Tracker, t: &mut Duration, reading: Reading, n: u32) -> Level {
 #[test]
 fn reached_levels_at_the_lines() {
     let l = Limits::default();
-    assert_eq!(reached(&r(43, 60, true), &l), Level::Normal);
-    assert_eq!(reached(&r(44, 60, true), &l), Level::Warm);
+    assert_eq!(reached(&r(46, 60, true), &l), Level::Normal);
+    assert_eq!(reached(&r(47, 60, true), &l), Level::Warm);
     assert_eq!(
         reached(&r(49, 60, false), &l),
         Level::Normal,
@@ -52,7 +52,7 @@ fn one_hot_reading_is_not_enough() {
 fn a_rising_pair_enters_the_lower_of_the_two() {
     let (mut k, mut t) = (Tracker::default(), Duration::ZERO);
     feed(&mut k, &mut t, r(56, 60, true), 1);
-    assert_eq!(feed(&mut k, &mut t, r(45, 60, true), 1), Level::Warm);
+    assert_eq!(feed(&mut k, &mut t, r(48, 60, true), 1), Level::Warm);
     assert_eq!(feed(&mut k, &mut t, r(56, 60, true), 2), Level::Critical);
 }
 
@@ -79,20 +79,35 @@ fn a_warm_reading_in_the_hold_restarts_it() {
 }
 
 #[test]
-fn hot_cools_to_warm_while_charging_and_warm() {
+fn hot_holds_while_the_battery_is_warm_then_warm_comes_back() {
     let (mut k, mut t) = (Tracker::default(), Duration::ZERO);
     feed(&mut k, &mut t, r(30, 82, true), 2);
     assert_eq!(k.level, Level::Hot);
-    // chip cooled, battery 45 and charging: drops to warm, not normal
-    assert_eq!(feed(&mut k, &mut t, r(45, 60, true), 11), Level::Warm);
+    // chip cooled but the battery is 48 and charging: over hot's battery exit, stays hot
+    assert_eq!(feed(&mut k, &mut t, r(48, 60, true), 20), Level::Hot);
+    // battery 46: under hot's exit and under warm's entry, so normal after the hold
+    assert_eq!(feed(&mut k, &mut t, r(46, 60, true), 11), Level::Normal);
+    // warm again only after two readings at 47
+    assert_eq!(feed(&mut k, &mut t, r(47, 60, true), 1), Level::Normal);
+    assert_eq!(feed(&mut k, &mut t, r(47, 60, true), 1), Level::Warm);
+}
+
+#[test]
+fn warm_leaves_at_43_not_before() {
+    let (mut k, mut t) = (Tracker::default(), Duration::ZERO);
+    feed(&mut k, &mut t, r(47, 50, true), 2);
+    assert_eq!(k.level, Level::Warm);
+    assert_eq!(feed(&mut k, &mut t, r(44, 50, true), 20), Level::Warm);
+    assert_eq!(feed(&mut k, &mut t, r(43, 50, true), 10), Level::Warm);
+    assert_eq!(feed(&mut k, &mut t, r(43, 50, true), 1), Level::Normal);
 }
 
 #[test]
 fn warm_ends_at_once_on_unplugging() {
     let (mut k, mut t) = (Tracker::default(), Duration::ZERO);
-    feed(&mut k, &mut t, r(45, 60, true), 2);
+    feed(&mut k, &mut t, r(48, 60, true), 2);
     assert_eq!(k.level, Level::Warm);
-    assert_eq!(feed(&mut k, &mut t, r(45, 60, false), 1), Level::Normal);
+    assert_eq!(feed(&mut k, &mut t, r(48, 60, false), 1), Level::Normal);
 }
 
 #[test]

@@ -1259,3 +1259,13 @@ fn queue_status_reports_the_oldest_pending_wait() {
     let q = queue::Queue::default();
     assert!(q.status()["oldest_pending_secs"].is_null());
 }
+
+#[test]
+fn the_firmware_mms_placeholder_is_forwarded_as_a_notice() {
+    // UCS-2 hex of "multimedia_information", sender "99" (WAP Push), as the firmware stores it
+    let hex: String = "multimedia_information".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let (_, sms) = decode_item(&json!({"id": 5, "number": "99", "content": hex, "tag": 1, "date": "26,11,17,10,00,00,+32"}));
+    assert_eq!(sms.unwrap().content, MMS_NOTICE);
+    let (_, sms) = decode_item(&json!({"id": 6, "number": "99", "content": "multimedia information", "tag": 1}));
+    assert_eq!(sms.unwrap().content, "multimedia information");
+}

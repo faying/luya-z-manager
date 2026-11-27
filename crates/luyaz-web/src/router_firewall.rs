@@ -607,7 +607,10 @@ pub fn view(st: &St, l: Lang) -> View {
     let level = fw.as_ref().and_then(|f| f.level);
     let level_text = match &fw {
         Some(f) if f.level.is_none() && !f.level_raw.is_empty() => f.level_raw.clone(),
-        Some(f) => f.level.map_or("—", |k| level_label(l, k)).into(),
+        Some(f) => f
+            .level
+            .map_or(l.pick("not reported by the device", "设备没报告"), |k| level_label(l, k))
+            .into(),
         None => "—".into(),
     };
     let upnp_sub = match (&up, rb) {

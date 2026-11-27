@@ -219,7 +219,8 @@ const PAGES = {
       await until(p, () => /PCI 604/.test(document.querySelector("#cl-nrlock")?.textContent ?? ""));
       ok(await txt(p, "#cl-nrlock") === "PCI 604 · ARFCN 627264 · n78", `pushed: ${await txt(p, "#cl-nrlock")}`);
       ok(await field("cl-lte-t", 0).inputValue() === "12", "typing survived the push");
-      const note = await txt(p, "#cl-now p.t-note");
+      // the on-cell note is the status block's reason since lweb 1.58.8
+      const note = await txt(p, "#cl-status");
       ok(/调制解调器(还在|已在)/.test(note) || !/^NR$/.test(await txt(p, "#cl-now a.nd-row .nd-row__value")), `on-cell note: ${note}`);
 
       // NR: fill, tier-3 dialog, Esc sends nothing

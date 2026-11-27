@@ -697,7 +697,7 @@ pub(super) async fn current_iccid(c: &Compat) -> String {
             card_field(&sim, data_on_slot2(&sim), "sim_iccid")
         }
     };
-    raw.trim().trim_end_matches(['F', 'f']).to_string()
+    crate::cards::iccid_norm(&raw)
 }
 
 /// `get_auto_apn_list`'s args for the card data is on (its list is per slot).
@@ -1090,7 +1090,36 @@ pub async fn scenario_pin(State(c): State<Compat>, body: Bytes) -> Response {
 
 /// PUT /api/services/chill/exit `{"state"}` (the agent's `chill::exit_set`): group first, then
 /// mode, both straight to mihomo; then, abroad, the scenario engine's "back to proxy when home".
-pub async fn chill_exit(State(c): State<Compat>, headers: axum::http::HeaderMap, body: Bytes) -> Response {
+pub async fn chill_exit(State(c): State<Compat>, req: axum::extract::Request) -> Response {
+    let peer = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0);
+    let (parts, body) = req.into_parts();
+    // while the caller's connection is open: its process is still there to be named
+    let who = super::chill_who::caller(&c.root, &parts.headers, peer);
+    let body = axum::body::to_bytes(body, 64 * 1024)
+        .await
+        .unwrap_or_default();
+    let asked = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v["state"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| "?".into());
+    let r = chill_exit_write(State(c.clone()), parts.headers, body).await;
+    let result = if r.status().is_success() {
+        "ok".to_owned()
+    } else {
+        format!("HTTP {}", r.status().as_u16())
+    };
+    super::chill_who::record(&c.root, c.clock.now(), "exit", &asked, &result, &who);
+    r
+}
+
+async fn chill_exit_write(
+    State(c): State<Compat>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Response {
     use luyaz_api::chill as ch;
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let want = match ch::exit_wanted(&parsed) {

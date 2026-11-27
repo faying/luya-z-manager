@@ -44,6 +44,26 @@
 //! thread behind a one-slot job, the same shape as the ShellCrash profile manager; clients poll
 //! `/api/esim/job`.
 
+/// A log line that cannot be written is dropped instead of panicking (std's `eprintln!` panics,
+/// and the core's device build aborts on any panic: a full /tmp stopped it on 10-26). Same as
+/// luyaz-core's `main.rs` (P-7); defined before every `mod`, so the whole crate uses it.
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 use std::{
     path::Path,
     process::{Command, Stdio},
@@ -254,6 +274,9 @@ pub struct Esim {
     host: Arc<Card>,
     list: Arc<Mutex<ListCache>>,
     receipts: Arc<Mutex<Receipts>>,
+    eids: Arc<Mutex<Eids>>,
+    /// When [`Esim::reread`] last power-cycled a slot (spacing, `REREAD_GAP`).
+    reread_at: Arc<Mutex<Option<Instant>>>,
 }
 
 /// The host with the card behind one lock (resilience audit R2): every lpac run
@@ -274,14 +297,89 @@ impl Card {
         Held(g, self.inner.lock_card(true).unwrap_or(None))
     }
     /// `None` while another call (or another process) has the card.
-    fn try_lpac(&self, args: &[&str], timeout: Duration) -> Option<Result<Value, String>> {
+    fn try_lpac_on(&self, slot: u8, args: &[&str], timeout: Duration) -> Option<Result<Value, String>> {
+        let _h = self.try_hold()?;
+        Some(self.inner.lpac_on(slot, args, timeout))
+    }
+    /// A `qmi_uim_probe` call only if the card is free now (the EID read never queues).
+    fn try_sh(&self, cmd: &str, limit: Duration) -> Option<String> {
+        let _h = self.try_hold()?;
+        Some(self.inner.sh(cmd, limit))
+    }
+    fn try_hold(&self) -> Option<Held<'_>> {
         let g = match self.lock.try_lock() {
             Ok(g) => g,
             Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => return None,
         };
-        let _h = Held(g, self.inner.lock_card(false).ok()?);
-        Some(self.inner.lpac(args, timeout))
+        Some(Held(g, self.inner.lock_card(false).ok()?))
+    }
+}
+
+/// The card host aimed at one slot: every lpac run goes to `slot` (the engine's helpers take a
+/// `&dyn Host` and need not know which slot they work on).
+struct OnSlot {
+    card: Arc<Card>,
+    slot: u8,
+}
+
+impl Host for OnSlot {
+    fn installed(&self) -> bool {
+        self.card.installed()
+    }
+    fn lpac(&self, args: &[&str], timeout: Duration) -> Result<Value, String> {
+        self.card.lpac_on(self.slot, args, timeout)
+    }
+    fn lpac_on(&self, slot: u8, args: &[&str], timeout: Duration) -> Result<Value, String> {
+        self.card.lpac_on(slot, args, timeout)
+    }
+    fn card_slots(&self) -> Vec<(u8, u64)> {
+        self.card.card_slots()
+    }
+    fn sh(&self, cmd: &str, limit: Duration) -> String {
+        self.card.sh(cmd, limit)
+    }
+    fn exists(&self, path: &str) -> bool {
+        self.card.exists(path)
+    }
+    fn reboot(&self) {
+        self.card.reboot()
+    }
+    fn data_up(&self) -> bool {
+        self.card.data_up()
+    }
+    fn net_probe(&self) -> NetProbe {
+        self.card.net_probe()
+    }
+    fn wake(&self, hold: bool) {
+        self.card.wake(hold)
+    }
+    fn sleep(&self, d: Duration) {
+        self.card.sleep(d)
+    }
+    fn now(&self) -> Instant {
+        self.card.now()
+    }
+    fn lock_card(&self, wait: bool) -> Result<Option<std::fs::File>, ()> {
+        self.card.lock_card(wait)
+    }
+    fn last_auto_reboot(&self) -> Option<u64> {
+        self.card.last_auto_reboot()
+    }
+    fn note_auto_reboot(&self, unix: u64) {
+        self.card.note_auto_reboot(unix)
+    }
+    fn wall_unix(&self) -> u64 {
+        self.card.wall_unix()
+    }
+    fn note_write(&self, w: Option<&Value>) -> bool {
+        self.card.note_write(w)
+    }
+    fn pending_write(&self) -> Option<Value> {
+        self.card.pending_write()
+    }
+    fn switch_event(&self, ev: SwitchEvent) {
+        self.card.switch_event(ev)
     }
 }
 
@@ -298,6 +396,13 @@ impl Host for Card {
     fn lpac(&self, args: &[&str], timeout: Duration) -> Result<Value, String> {
         let _g = self.hold();
         self.inner.lpac(args, timeout)
+    }
+    fn lpac_on(&self, slot: u8, args: &[&str], timeout: Duration) -> Result<Value, String> {
+        let _g = self.hold();
+        self.inner.lpac_on(slot, args, timeout)
+    }
+    fn card_slots(&self) -> Vec<(u8, u64)> {
+        self.inner.card_slots()
     }
     fn sh(&self, cmd: &str, limit: Duration) -> String {
         if cmd.starts_with(QMI_PROBE) {
@@ -339,7 +444,7 @@ impl Host for Card {
     fn wall_unix(&self) -> u64 {
         self.inner.wall_unix()
     }
-    fn note_write(&self, w: Option<&Value>) {
+    fn note_write(&self, w: Option<&Value>) -> bool {
         self.inner.note_write(w)
     }
     fn pending_write(&self) -> Option<Value> {
@@ -356,6 +461,8 @@ impl Host for Card {
 struct ListCache {
     last: Option<(Value, Instant)>,
     switched_at: Option<Instant>,
+    /// the card `last` is from: (slot, insertion generation)
+    of: (u8, u64),
 }
 
 impl Esim {
@@ -375,7 +482,250 @@ impl Esim {
             cancel: Arc::new(AtomicBool::new(false)),
             list: Arc::new(Mutex::new(ListCache::default())),
             receipts: Arc::new(Mutex::new(Receipts::default())),
+            eids: Arc::new(Mutex::new(Eids::default())),
+            reread_at: Arc::new(Mutex::new(None)),
         }
+    }
+}
+
+/* -------------------------------------------------------------- *
+ *  Which card (docs/designs/dual-slot-removable.md §2, R2, R12)
+ * -------------------------------------------------------------- */
+
+/// What is in a card slot, as [`Esim::eid_of_slot`] answers core's card table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EidAnswer {
+    Found(String),
+    /// The ISD-R cannot be opened there: a plain card.
+    NotEuicc,
+    /// Not known yet (being read, the card is busy, or the answer was not clear).
+    Later,
+}
+
+/// A plain card answers QMI error 80 when the ISD-R channel is opened; an eUICC settling after
+/// a profile switch can too. So "not an eUICC" needs a second 80 at least this long after the
+/// first, and none within `EID_SETTLE` of a switch on that slot.
+const EID_PLAIN_AFTER: Duration = Duration::from_secs(60);
+const EID_SETTLE: Duration = Duration::from_secs(300);
+/// EID reads of one slot are at least this far apart; after `EID_MISSES` answers that say
+/// nothing (neither an EID nor error 80), `EID_SLOW` apart.
+const EID_GAP: Duration = Duration::from_secs(30);
+const EID_MISSES: u32 = 5;
+const EID_SLOW: Duration = Duration::from_secs(600);
+
+#[derive(Clone, Debug, PartialEq)]
+enum Said {
+    Found(String),
+    NotEuicc,
+    /// one error-80 answer at this time
+    Suspect(Instant),
+}
+
+/// The EID answers per slot, each for one insertion generation.
+#[derive(Default)]
+struct Eids {
+    by_slot: std::collections::HashMap<u8, (u64, Said)>,
+    reading: std::collections::HashSet<u8>,
+    /// the slot and time of the last switch on it (its card may answer 80 for a while, and
+    /// its new profile's ICCID makes a new generation of the same card)
+    switched: Option<(u8, Instant)>,
+    /// per slot: the last read started, and answers in a row that said nothing
+    tried: std::collections::HashMap<u8, (Instant, u32)>,
+}
+
+/// `qmi_uim_probe eid <slot> 2>&1` → `Some(Ok(EID))`, `Some(Err(()))` for QMI error 80 at the
+/// ISD-R open, `None` for anything else.
+fn parse_eid_probe(out: &str) -> Option<Result<String, ()>> {
+    for l in out.lines() {
+        if let Some(e) = l.trim().strip_prefix("EID=") {
+            let e = e.trim();
+            if e.len() == 32 && e.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(Ok(e.to_ascii_uppercase()));
+            }
+        }
+    }
+    out.contains("qmi_error=80").then_some(Err(()))
+}
+
+/// One EID read of `slot` (generation `generation`), only if the card is free now.
+fn read_eid(card: &Card, eids: &Mutex<Eids>, running: &AtomicBool, slot: u8, generation: u64) {
+    if running.load(Ordering::SeqCst) || !card.exists(QMI_PROBE) {
+        return;
+    }
+    let Some(out) = card.try_sh(&format!("{QMI_PROBE} eid {slot} 2>&1"), PROBE_TIMEOUT) else {
+        return;
+    };
+    let now = card.now();
+    let mut e = eids.lock().unwrap_or_else(|x| x.into_inner());
+    let said = parse_eid_probe(&out);
+    let misses = e.tried.get(&slot).map_or(0, |t| t.1);
+    e.tried.insert(slot, (now, if said.is_none() { misses + 1 } else { 0 }));
+    match said {
+        Some(Ok(eid)) => {
+            e.by_slot.insert(slot, (generation, Said::Found(eid)));
+        }
+        Some(Err(())) => {
+            if e.switched.is_some_and(|(s, t)| s == slot && now.saturating_duration_since(t) < EID_SETTLE) {
+                return;
+            }
+            let next = match e.by_slot.get(&slot) {
+                Some((g, Said::Suspect(t))) if *g == generation => {
+                    if now.saturating_duration_since(*t) >= EID_PLAIN_AFTER {
+                        Said::NotEuicc
+                    } else {
+                        return;
+                    }
+                }
+                _ => Said::Suspect(now),
+            };
+            e.by_slot.insert(slot, (generation, next));
+        }
+        None => {}
+    }
+}
+
+/// The card a request is for: its slot and, when known, (generation, EID).
+#[derive(Debug, Clone, PartialEq)]
+struct Pick {
+    slot: u8,
+    /// the slot's insertion generation (0 on a host without a card table)
+    generation: u64,
+    card: Option<(u64, String)>,
+    /// more than one slot has a card (the answers then say which card)
+    dual: bool,
+}
+
+impl Esim {
+    /// The EID of the card in `slot` at insertion `generation` (core's card table asks every
+    /// poll). Never waits: an unknown card is read on a thread and `Later` comes back.
+    pub fn eid_of_slot(&self, slot: u8, generation: u64) -> EidAnswer {
+        if let Some(a) = self.eid_known(slot, generation) {
+            return a;
+        }
+        if self.busy() {
+            return EidAnswer::Later;
+        }
+        {
+            let mut e = self.eids.lock().unwrap_or_else(|e| e.into_inner());
+            let now = self.host.now();
+            // paced: never back to back, and slowly once the answers say nothing
+            if let Some(&(at, misses)) = e.tried.get(&slot) {
+                let gap = if misses >= EID_MISSES { EID_SLOW } else { EID_GAP };
+                if now.saturating_duration_since(at) < gap {
+                    return EidAnswer::Later;
+                }
+            }
+            if !e.reading.insert(slot) {
+                return EidAnswer::Later;
+            }
+            e.tried.entry(slot).and_modify(|t| t.0 = now).or_insert((now, 0));
+        }
+        let (card, eids, running) = (Arc::clone(&self.host), Arc::clone(&self.eids), Arc::clone(&self.running));
+        std::thread::spawn(move || {
+            read_eid(&card, &eids, &running, slot, generation);
+            eids.lock().unwrap_or_else(|e| e.into_inner()).reading.remove(&slot);
+        });
+        EidAnswer::Later
+    }
+
+    /// What is known about (slot, generation) without reading; `None` = not known yet. Our own
+    /// switch on the slot changes the card's ICCID, so a new generation: within `EID_SETTLE` of
+    /// it the eUICC is the same one, and its EID carries over.
+    fn eid_known(&self, slot: u8, generation: u64) -> Option<EidAnswer> {
+        let mut e = self.eids.lock().unwrap_or_else(|e| e.into_inner());
+        let now = self.host.now();
+        let ours = e.switched.is_some_and(|(s, t)| s == slot && now.saturating_duration_since(t) < EID_SETTLE);
+        match e.by_slot.get(&slot).cloned() {
+            Some((g, Said::Found(x))) if g == generation => Some(EidAnswer::Found(x)),
+            Some((g, Said::NotEuicc)) if g == generation => Some(EidAnswer::NotEuicc),
+            Some((g, Said::Found(x))) if ours && g < generation => {
+                e.by_slot.insert(slot, (generation, Said::Found(x.clone())));
+                Some(EidAnswer::Found(x))
+            }
+            _ => None,
+        }
+    }
+
+    /// The card a request names (`eid`) or, with none named, the only eSIM card. One slot with
+    /// a card (the single-slot unit): that slot, as always. Two: an omitted `eid` is only
+    /// answered once both are identified, and two eSIM cards need one named.
+    fn pick(&self, want: Option<&str>) -> Result<Pick, Reply> {
+        let slots = self.host.card_slots();
+        let want = want.map(|w| w.trim().to_ascii_uppercase()).filter(|w| !w.is_empty());
+        let known: Vec<(u8, u64, Option<EidAnswer>)> =
+            slots.iter().map(|&(s, g)| (s, g, self.eid_known(s, g))).collect();
+        // named by slot (`@<n>`): that slot's card, once it is known to be an eSIM card; the
+        // single-slot unit's own slot is the card as always
+        if let Some(n) = want.as_deref().and_then(|w| w.strip_prefix('@')) {
+            let Some(&(slot, g, ref k)) = n.parse::<u8>().ok().and_then(|n| known.iter().find(|(s, _, _)| *s == n))
+            else {
+                return Err(refuse(404, "no card in that slot"));
+            };
+            if slots.len() <= 1 {
+                return self.pick(None);
+            }
+            return match k {
+                Some(EidAnswer::Found(e)) => Ok(Pick { slot, generation: g, card: Some((g, e.clone())), dual: true }),
+                Some(EidAnswer::NotEuicc) => Err(refuse(404, "the card in that slot is not an eSIM card")),
+                _ => {
+                    let _ = self.eid_of_slot(slot, g);
+                    Err(refuse(503, "the card is still being identified: try again in a moment"))
+                }
+            };
+        }
+        let found: Vec<(u8, u64, String)> = known
+            .iter()
+            .filter_map(|(s, g, k)| match k {
+                Some(EidAnswer::Found(e)) => Some((*s, *g, e.clone())),
+                _ => None,
+            })
+            .collect();
+        if slots.len() <= 1 {
+            let (slot, g) = slots.first().copied().unwrap_or((1, 0));
+            let card = found.first().map(|(_, g, e)| (*g, e.clone()));
+            // a named card must be this one: an activation code is single-use
+            if let Some(w) = &want {
+                match &card {
+                    Some((_, e)) if e == w => {}
+                    Some(_) => return Err(refuse(404, "no eSIM card with that EID here")),
+                    None => {
+                        let _ = self.eid_of_slot(slot, g);
+                        return Err(refuse(503, "the card is still being identified: try again in a moment"));
+                    }
+                }
+            }
+            return Ok(Pick { slot, generation: g, card, dual: false });
+        }
+        // two slots: start a read for any card not identified yet (the single-slot unit's
+        // card is read by the card table, once per insertion, not on every request)
+        for (s, g, k) in &known {
+            if k.is_none() {
+                let _ = self.eid_of_slot(*s, *g);
+            }
+        }
+        let pending = known.iter().any(|(_, _, k)| k.is_none());
+        let pick = |(s, g, e): &(u8, u64, String)| Pick {
+            slot: *s,
+            generation: *g,
+            card: Some((*g, e.clone())),
+            dual: true,
+        };
+        match (&want, found.as_slice()) {
+            (Some(w), f) => match f.iter().find(|(_, _, e)| e == w) {
+                Some(x) => Ok(pick(x)),
+                None if pending => Err(refuse(503, "the cards are still being identified: try again in a moment")),
+                None => Err(refuse(404, "no eSIM card with that EID here")),
+            },
+            (None, _) if pending => Err(refuse(503, "the cards are still being identified: try again in a moment")),
+            (None, [one]) => Ok(pick(one)),
+            (None, []) => Err(refuse(404, "no eSIM card in either slot")),
+            (None, _) => Err(refuse(400, "two eSIM cards: say which one (eid)")),
+        }
+    }
+
+    /// The host aimed at `slot`.
+    fn on(&self, slot: u8) -> Arc<OnSlot> {
+        Arc::new(OnSlot { card: Arc::clone(&self.host), slot })
     }
 }
 
@@ -390,6 +740,19 @@ pub trait Host: Send + Sync + 'static {
     fn installed(&self) -> bool;
     /// Run lpac; the `data` of its final `{"type":"lpa"}` line.
     fn lpac(&self, args: &[&str], timeout: Duration) -> Result<Value, String>;
+    /// lpac on card slot `slot` (lpac's `UIM_SLOT`; 1 = the first). The default knows slot 1 only.
+    fn lpac_on(&self, slot: u8, args: &[&str], timeout: Duration) -> Result<Value, String> {
+        if slot == 1 {
+            self.lpac(args, timeout)
+        } else {
+            Err(format!("no card slot {slot} here"))
+        }
+    }
+    /// The card slots with a card in, each with its insertion generation (core's card table,
+    /// docs/designs/dual-slot-removable.md §1). The default: one slot that never changes.
+    fn card_slots(&self) -> Vec<(u8, u64)> {
+        vec![(1, 0)]
+    }
     /// A shell command's stdout (ubus reads, the UIM power-cycle, the mdm restart), its process
     /// group killed past `limit` (empty output then). See the `*_TIMEOUT` constants.
     fn sh(&self, cmd: &str, limit: Duration) -> String;
@@ -429,8 +792,11 @@ pub trait Host: Send + Sync + 'static {
     }
     /// Where a switch is (the core's SIM identity tracking; its caches).
     fn switch_event(&self, _ev: SwitchEvent) {}
-    /// Keep (`Some`) or clear (`None`) the in-flight write record (`PENDING_WRITE`).
-    fn note_write(&self, _w: Option<&Value>) {}
+    /// Keep (`Some`) or clear (`None`) the in-flight write record (`PENDING_WRITE`). `false`:
+    /// keeping it failed, and a write must not start without its record.
+    fn note_write(&self, _w: Option<&Value>) -> bool {
+        true
+    }
     /// The write record a previous run left behind, if any.
     fn pending_write(&self) -> Option<Value> {
         None
@@ -477,8 +843,10 @@ fn net_check(h: &dyn Host) -> (&'static str, u32) {
 /// A switch's steps as the host hears them.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SwitchEvent {
-    /// Starting: the data call is about to go away for a profile `target`.
-    Leaving { target: String },
+    /// Starting a switch to profile `target` on card slot `slot`. `data_slot`: that slot carries
+    /// data, so the data call is about to go away; otherwise the switch stays on the card
+    /// (standby / off slot) and the data card's identity does not move.
+    Leaving { target: String, slot: u8, data_slot: bool },
     /// The card took the profile; the modem stack is being resynced.
     CardSwitched,
     /// The job ended, whichever way (also just before an automatic reboot): its `reason`
@@ -518,6 +886,8 @@ pub struct RealHost {
     pub net_probe: Box<dyn Fn() -> NetProbe + Send + Sync>,
     pub planned_reboot: Box<dyn Fn() + Send + Sync>,
     pub switch_event: Box<dyn Fn(SwitchEvent) + Send + Sync>,
+    /// [`Host::card_slots`]: core's card table (present slots, insertion generation).
+    pub card_slots: Box<dyn Fn() -> Vec<(u8, u64)> + Send + Sync>,
 }
 
 impl Host for RealHost {
@@ -525,7 +895,13 @@ impl Host for RealHost {
         installed()
     }
     fn lpac(&self, args: &[&str], timeout: Duration) -> Result<Value, String> {
-        run_lpac(args, timeout)
+        run_lpac(1, args, timeout)
+    }
+    fn lpac_on(&self, slot: u8, args: &[&str], timeout: Duration) -> Result<Value, String> {
+        run_lpac(slot, args, timeout)
+    }
+    fn card_slots(&self) -> Vec<(u8, u64)> {
+        (self.card_slots)()
     }
     fn sh(&self, cmd: &str, limit: Duration) -> String {
         run_cmd(cmd, limit)
@@ -584,21 +960,23 @@ impl Host for RealHost {
     fn switch_event(&self, ev: SwitchEvent) {
         (self.switch_event)(ev)
     }
-    fn note_write(&self, w: Option<&Value>) {
+    fn note_write(&self, w: Option<&Value>) -> bool {
         match w {
-            Some(w) => {
-                let tmp = format!("{PENDING_WRITE}.tmp");
-                if std::fs::write(&tmp, w.to_string()).is_ok() {
-                    let _ = std::fs::rename(&tmp, PENDING_WRITE);
+            Some(w) => match write_record(Path::new(PENDING_WRITE), w) {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("esim: keeping the write record {PENDING_WRITE}: {e}");
+                    false
                 }
-            }
+            },
             None => {
                 let _ = std::fs::remove_file(PENDING_WRITE);
+                true
             }
         }
     }
     fn pending_write(&self) -> Option<Value> {
-        serde_json::from_str(&std::fs::read_to_string(PENDING_WRITE).ok()?).ok()
+        read_record(Path::new(PENDING_WRITE), now_unix())
     }
 }
 
@@ -615,7 +993,7 @@ fn installed() -> bool {
 
 /// One lpac call. lpac prints a JSON object per line (progress records, then one
 /// `{"type":"lpa"}` result); the answer is that result's `data`.
-fn run_lpac(args: &[&str], deadline: Duration) -> Result<Value, String> {
+fn run_lpac(slot: u8, args: &[&str], deadline: Duration) -> Result<Value, String> {
     let bundle_ready = installed();
     if !bundle_ready {
         return Err(String::from("lpac not installed under /data/esim"));
@@ -624,24 +1002,41 @@ fn run_lpac(args: &[&str], deadline: Duration) -> Result<Value, String> {
     // killed, the modem keeps that channel open for good (measured 10-18: not
     // reclaimed after 3 min, and two kills used up every free channel), so the
     // watchdog closes it after the kill.
-    let chan = free_channel();
-    let ran = run_group(
-        Command::new(LPAC_BIN).args(args).envs([
-            // APDUs over QRTR to the modem; HTTP to the SM-DP+ through curl.
-            ("LPAC_APDU", "qmi_qrtr"),
-            ("LPAC_HTTP", "curl"),
-            // The bundle's own libraries, plus the statx shim.
-            ("LD_LIBRARY_PATH", LIB_DIR),
-            ("LD_PRELOAD", COMPAT_SHIM),
-        ]),
-        deadline,
-    )
-    .map_err(|err| format!("spawn lpac failed: {err}"))?;
+    let chan = free_channel_on(slot);
+    let mut cmd = Command::new(LPAC_BIN);
+    cmd.args(args).envs([
+        // APDUs over QRTR to the modem; HTTP to the SM-DP+ through curl.
+        ("LPAC_APDU", "qmi_qrtr"),
+        ("LPAC_HTTP", "curl"),
+        // The bundle's own libraries, plus the statx shim.
+        ("LD_LIBRARY_PATH", LIB_DIR),
+        ("LD_PRELOAD", COMPAT_SHIM),
+    ]);
+    // the card in another slot (u60g 11-16: lpac reads slot 2 with UIM_SLOT=2); slot 1 runs
+    // exactly as before
+    if slot != 1 {
+        cmd.env("UIM_SLOT", slot.to_string());
+    }
+    let ran = run_group(&mut cmd, deadline).map_err(|err| format!("spawn lpac failed: {err}"))?;
     lpac_result(ran, deadline, || {
-        release_after_kill(chan, free_channel, |c| {
-            run_cmd(&format!("{QMI_PROBE} close {c} 2>/dev/null"), PROBE_TIMEOUT);
+        release_after_kill(chan, || free_channel_on(slot), |c| {
+            if slot == 1 {
+                run_cmd(&format!("{QMI_PROBE} close {c} 2>/dev/null"), PROBE_TIMEOUT);
+            } else if probe_closes_by_slot() {
+                run_cmd(&format!("{QMI_PROBE} close {c} {slot} 2>/dev/null"), PROBE_TIMEOUT);
+            } else {
+                // an older probe reads `close <c> <slot>` as slot 1's channel c: leave it
+                eprintln!("esim: channel {c} on slot {slot} left open (the probe cannot close by slot)");
+            }
         });
     })
+}
+
+/// The deployed probe takes `close <chan> [slot]` (its usage line says so); an older one would
+/// close the channel on slot 1 instead.
+fn probe_closes_by_slot() -> bool {
+    static KNOWS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *KNOWS.get_or_init(|| run_cmd(&format!("{QMI_PROBE} 2>&1"), PROBE_TIMEOUT).contains("close <chan> [slot]"))
 }
 
 /// After a kill: close `guess` (the channel lpac was expected to get) only when it is
@@ -695,7 +1090,21 @@ fn lpac_result(ran: Ran, timeout: Duration, release: impl FnOnce()) -> Result<Va
 /// Lowest free logical channel on the card, read by opening and closing one
 /// (`qmi_uim_probe open` prints `[open] channel=N` on stderr).
 pub fn free_channel() -> Option<u8> {
-    channel_of(&run_cmd(&format!("{QMI_PROBE} open 2>&1"), PROBE_TIMEOUT))
+    free_channel_on(1)
+}
+
+/// [`free_channel`] on card slot `slot`.
+fn free_channel_on(slot: u8) -> Option<u8> {
+    channel_of(&run_cmd(&probe_open(slot), PROBE_TIMEOUT))
+}
+
+/// The probe's channel open on `slot` (slot 1 as it always was).
+fn probe_open(slot: u8) -> String {
+    if slot == 1 {
+        format!("{QMI_PROBE} open 2>&1")
+    } else {
+        format!("{QMI_PROBE} open {slot} 2>&1")
+    }
 }
 
 /// What the deep diagnosis' channel check found (deep-diag-v2 Q1).
@@ -775,6 +1184,8 @@ const MDM_INITD: &str = "/etc/init.d/zte_topsw_mdm";
  *   device; 30 s is generous, the switch then falls back to the reboot if nothing converged. */
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SIMRESET_TIMEOUT: Duration = Duration::from_secs(15);
+/// Least time between two [`Esim::reread`]s: each one power-cycles a card.
+const REREAD_GAP: Duration = Duration::from_secs(20);
 const UBUS_TIMEOUT: Duration = Duration::from_secs(10);
 const MDM_RESTART_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -905,24 +1316,26 @@ fn kill_group(child: &mut std::process::Child) {
 /// The identity the stock modem stack has cached, as (imsi, iccid). It trails the card
 /// until the stack reads it again. `sim_iccid` ends in a BCD filler nibble ("...072F")
 /// and is briefly empty after a re-read, which is why callers go by the IMSI first.
-fn ubus_sim_identity(h: &dyn Host) -> (String, String) {
+fn ubus_sim_identity(h: &dyn Host, slot: u8) -> (String, String) {
     let raw = h.sh(
         "ubus -t 5 call zwrt_zte_mdm.api get_sim_info '{}'",
         UBUS_TIMEOUT,
     );
     let info: Value = serde_json::from_str(&raw).unwrap_or_default();
     let field = |k: &str| info[k].as_str().map(str::to_owned).unwrap_or_default();
-    (field("sim_imsi"), field("sim_iccid"))
+    // `sim_*` is slot 1, `sim2_*` slot 2 (R1/D3: the target slot's own fields)
+    let p = if slot == 1 { "sim_".to_string() } else { format!("sim{slot}_") };
+    (field(&format!("{p}imsi")), field(&format!("{p}iccid")))
 }
 
 /// True once the stock stack is on the profile we switched to: the barrier is healthy
 /// and either the IMSI moved off the one read before the switch, or the ICCID (once it
 /// is filled in) matches the target.
-fn switch_converged(h: &dyn Host, target_iccid: &str, old_imsi: &str) -> bool {
+fn switch_converged(h: &dyn Host, slot: u8, target_iccid: &str, old_imsi: &str) -> bool {
     if !ubus_sync_ok(h) {
         return false;
     }
-    let (now_imsi, now_iccid) = ubus_sim_identity(h);
+    let (now_imsi, now_iccid) = ubus_sim_identity(h, slot);
     // With no IMSI from before the switch, "changed" means nothing; fall back to the ICCID.
     let moved = match (now_imsi.is_empty(), old_imsi.is_empty()) {
         (false, false) => now_imsi != old_imsi,
@@ -955,6 +1368,25 @@ fn valid_iccid(s: &str) -> bool {
 }
 
 /// A request field as trimmed, non-empty text.
+/// The card a request names: its `eid`, else its `slot` as [`slot_ref`] (the UIs only see an
+/// EID's tail in core's card table, so they name the slot; dual-slot T8).
+fn named(v: &Value) -> Option<String> {
+    if let Some(e) = body_str(v, "eid") {
+        return Some(e.to_owned());
+    }
+    let slot = match v.get("slot")? {
+        Value::Number(n) => n.as_u64()?,
+        Value::String(t) => t.trim().parse().ok()?,
+        _ => return None,
+    };
+    u8::try_from(slot).ok().map(slot_ref)
+}
+
+/// A card named by its slot where an EID goes (`pick`, the `*_of` reads): `@<slot>`.
+pub fn slot_ref(slot: u8) -> String {
+    format!("@{slot}")
+}
+
 fn body_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     let text = v.get(key)?.as_str()?.trim();
     (!text.is_empty()).then_some(text)
@@ -978,21 +1410,53 @@ fn is_transitional(err: &str) -> bool {
 
 /// ICCIDs compared the way the card and the ZTE stack spell them: lpac and
 /// `sim_iccid` can carry the BCD pad nibble ("…072F").
-/// Is slot 1 (the eSIM card's) out of use on a dual-SIM device: switched off
-/// (`sim1_provision_state` "0") or not the slot data is on (`current_sim_slot`)?
-/// `get_sim_info`'s `sim_*` fields are always slot 1, `sim2_*` slot 2. Missing
-/// fields (a single-slot device, a failed read) mean in use.
-fn esim_slot_idle(h: &dyn Host) -> bool {
+/// The switch target's slot as `get_sim_info` has it now (`sim1/2_provision_state`,
+/// `current_sim_slot`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Role {
+    /// data is on this slot: only then may a switch reset, restart the stack or reboot
+    data: bool,
+    /// the answer had dual-slot fields (the role can change under a switch: re-check it)
+    dual: bool,
+}
+
+/// Slot 1: out of use only when switched off or data is on another slot; missing fields (a
+/// single-slot device, a failed read) mean in use, as always. Any other slot is the data slot
+/// only on a positive read: provisioned and `current_sim_slot` naming it.
+fn slot_role(h: &dyn Host, slot: u8) -> Role {
     let v = serde_json::from_str::<Value>(&h.sh(
         "ubus -t 5 call zwrt_zte_mdm.api get_sim_info '{}' # slots",
         UBUS_TIMEOUT,
     ))
     .unwrap_or(Value::Null);
-    let off = v["sim1_provision_state"].as_str() == Some("0");
-    let elsewhere = v["current_sim_slot"]
-        .as_str()
-        .is_some_and(|s| !s.is_empty() && s != "1");
-    off || elsewhere
+    let prov = v[format!("sim{slot}_provision_state")].as_str();
+    let cur = v["current_sim_slot"].as_str().filter(|s| !s.is_empty());
+    let dual = v.get("sim1_provision_state").is_some() || cur.is_some() || v["support_dual_sim"] == "1";
+    let data = if slot == 1 {
+        prov != Some("0") && cur.is_none_or(|c| c == "1")
+    } else {
+        prov == Some("1") && cur == Some(slot.to_string().as_str())
+    };
+    Role { data, dual }
+}
+
+/// Before a step with side effects (R7/D9): the slot is still the data slot and still holds
+/// the card the switch started on. Not by generation: the switch's own enable gives the card a
+/// new ICCID and so a new generation; by a card still being there whose EID, once read, is
+/// still `eid`.
+fn still_ours(h: &dyn Host, eids: &Mutex<Eids>, slot: u8, eid: Option<&str>) -> bool {
+    if !slot_role(h, slot).data {
+        return false;
+    }
+    let Some(eid) = eid else { return true };
+    let Some(&(_, g)) = h.card_slots().iter().find(|(s, _)| *s == slot) else {
+        return false;
+    };
+    match eids.lock().unwrap_or_else(|e| e.into_inner()).by_slot.get(&slot) {
+        Some((x, Said::Found(e))) if *x == g => e == eid,
+        Some((x, Said::NotEuicc)) if *x == g => false,
+        _ => true,
+    }
 }
 
 fn iccid_eq(a: &str, b: &str) -> bool {
@@ -1269,6 +1733,8 @@ struct Receipts {
     gave_up: bool,
     /// the thread in [`Esim::run_receipts`], woken when `next` changes
     waker: Option<std::thread::Thread>,
+    /// the card slot whose notifications wait (0 = slot 1)
+    slot: u8,
 }
 
 /// A trigger: start the ladder over, the first round `delay` from `now`.
@@ -1402,7 +1868,22 @@ impl Esim {
 
     /// One due round of the re-send.
     fn receipts_round(&self) {
-        let h: &dyn Host = &*self.host;
+        // the card whose notifications wait; none named yet (the start's round): the only eSIM
+        // card, once the cards are identified (a dual-slot unit's eUICC may be in slot 2)
+        let named = self.receipts.lock().unwrap_or_else(|e| e.into_inner()).slot;
+        let slot = match named {
+            0 => match self.pick(None) {
+                Ok(p) => p.slot,
+                Err(_) => {
+                    self.receipts.lock().unwrap_or_else(|e| e.into_inner()).next =
+                        Some(self.host.now() + RECEIPT_BUSY_AGAIN);
+                    return;
+                }
+            },
+            s => s,
+        };
+        let on = self.on(slot);
+        let h: &dyn Host = &*on;
         if !h.installed() {
             idle_receipts(&self.receipts);
             return;
@@ -1499,10 +1980,18 @@ impl Esim {
     /// GET /api/esim/status: who the chip is and how much room it has. With no
     /// bundle on the device the answer is `installed: false` and the UIs explain setup.
     pub fn status(&self) -> (u16, Value) {
+        self.status_of(None)
+    }
+    /// [`Esim::status`] of the card `eid` names (none: the only eSIM card).
+    pub fn status_of(&self, eid: Option<&str>) -> (u16, Value) {
         if !self.host.installed() {
             return (200, json!({"ok": true, "data": {"installed": false}}));
         }
-        match self.host.lpac(&["chip", "info"], LPAC_TIMEOUT_FAST) {
+        let pick = match self.pick(eid) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
+        match self.host.lpac_on(pick.slot, &["chip", "info"], LPAC_TIMEOUT_FAST) {
             Ok(chip) => {
                 let addrs = &chip["EuiccConfiguredAddresses"];
                 let info = &chip["EUICCInfo2"];
@@ -1515,13 +2004,17 @@ impl Esim {
                     "firmware_version": info["euiccFirmwareVer"],
                     "free_nvm": info["extCardResource"]["freeNonVolatileMemory"],
                 });
-                (200, json!({"ok": true, "data": data}))
+                (200, json!({"ok": true, "data": with_card(data, &pick)}))
             }
             Err(e) => (502, json!({"ok": false, "error": e})),
         }
     }
     /// GET /api/esim/profiles
     pub fn profiles(&self) -> (u16, Value) {
+        self.profiles_of(None)
+    }
+    /// [`Esim::profiles`] of the card `eid` names (none: the only eSIM card).
+    pub fn profiles_of(&self, eid: Option<&str>) -> (u16, Value) {
         if !self.host.installed() {
             return (
                 200,
@@ -1536,17 +2029,25 @@ impl Esim {
                 json!({"ok": true, "data": {"installed": true, "busy": true, "profiles": Value::Null}}),
             );
         }
-        let Some(res) = self.host.try_lpac(&["profile", "list"], LPAC_TIMEOUT_FAST) else {
+        let pick = match self.pick(eid) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
+        let key = (pick.slot, pick.generation);
+        let Some(res) = self.host.try_lpac_on(pick.slot, &["profile", "list"], LPAC_TIMEOUT_FAST) else {
             // another read has the card: the last list if there is one, else "busy" as above
             let now = self.host.now();
-            return match &self.list.lock().unwrap().last {
+            let c = self.list.lock().unwrap();
+            // only this card's list: another card's (or a card since pulled) is not "stale"
+            let last = c.last.as_ref().filter(|_| c.of == key);
+            return match last {
                 Some((l, at)) => (
                     200,
-                    json!({"ok": true, "data": {
+                    json!({"ok": true, "data": with_card(json!({
                         "installed": true, "busy": false, "profiles": l,
                         "stale": true, "updating": true,
                         "age_s": now.saturating_duration_since(*at).as_secs(),
-                    }}),
+                    }), &pick)}),
                 ),
                 None => (
                     200,
@@ -1557,11 +2058,13 @@ impl Esim {
         match res {
             Ok(d) => {
                 if d.is_array() {
-                    self.list.lock().unwrap().last = Some((d.clone(), self.host.now()));
+                    let mut c = self.list.lock().unwrap();
+                    c.last = Some((d.clone(), self.host.now()));
+                    c.of = key;
                 }
                 (
                     200,
-                    json!({"ok": true, "data": {"installed": true, "busy": false, "profiles": d}}),
+                    json!({"ok": true, "data": with_card(json!({"installed": true, "busy": false, "profiles": d}), &pick)}),
                 )
             }
             Err(e) => {
@@ -1570,18 +2073,18 @@ impl Esim {
                 let settling = c
                     .switched_at
                     .is_some_and(|t| now.saturating_duration_since(t) < LIST_STALE_WINDOW);
-                match &c.last {
+                match c.last.as_ref().filter(|_| c.of == key) {
                     Some((l, at)) if settling && is_transitional(&e) => {
                         eprintln!(
                             "esim: profile list while the card settles: {e}; last good list served"
                         );
                         (
                             200,
-                            json!({"ok": true, "data": {
+                            json!({"ok": true, "data": with_card(json!({
                                 "installed": true, "busy": false, "profiles": l,
                                 "stale": true, "updating": true,
                                 "age_s": now.saturating_duration_since(*at).as_secs(),
-                            }}),
+                            }), &pick)}),
                         )
                     }
                     _ => (502, json!({"ok": false, "error": e})),
@@ -1591,16 +2094,24 @@ impl Esim {
     }
     /// GET /api/esim/notifications
     pub fn notifications(&self) -> (u16, Value) {
+        self.notifications_of(None)
+    }
+    /// [`Esim::notifications`] of the card `eid` names (none: the only eSIM card).
+    pub fn notifications_of(&self, eid: Option<&str>) -> (u16, Value) {
         if !self.host.installed() {
             return (200, json!({"ok": true, "data": []}));
         }
         if self.running.load(Ordering::Relaxed) {
             return (200, json!({"ok": true, "data": Value::Null}));
         }
+        let pick = match self.pick(eid) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
         // another call has the card: null, the same answer as under a job
         let Some(res) = self
             .host
-            .try_lpac(&["notification", "list"], LPAC_TIMEOUT_FAST)
+            .try_lpac_on(pick.slot, &["notification", "list"], LPAC_TIMEOUT_FAST)
         else {
             return (200, json!({"ok": true, "data": Value::Null}));
         };
@@ -1647,7 +2158,8 @@ impl Esim {
             return ChannelCheck::Busy;
         }
         // PROBE_TIMEOUT kills a hung probe, so the slot cannot stay taken.
-        let probe = format!("{QMI_PROBE} open 2>&1");
+        let slot = self.pick(None).map_or(1, |p| p.slot);
+        let probe = probe_open(slot);
         let out = contained(|| Ok(self.host.sh(&probe, PROBE_TIMEOUT))).unwrap_or_default();
         self.running.store(false, Ordering::SeqCst);
         channel_check_of(&out)
@@ -1672,6 +2184,65 @@ impl Esim {
         }
         self.cancel.store(true, Ordering::SeqCst);
         (200, json!({"ok": true}))
+    }
+    /// POST /api/esim/reread `{"slot": N}` — read a card slot that is not in use again (a UIM
+    /// power-cycle of that slot), any card, eSIM or not. The modem does not notice a card put
+    /// into a slot by itself (dual-slot design, T9), so after a swap this stands in for a restart.
+    /// Only an off slot of a dual-slot unit: never the data slot (its data would drop) and never a
+    /// provisioned standby slot (T9 O-3: the stock stack then loses that card until a restart).
+    /// Errors: `slot` (not 1 or 2), `single_slot`, `no_tool`, `data_slot`, `standby_slot`,
+    /// `too_soon` (within `REREAD_GAP` of the last), `operation in progress`, `reset_failed`.
+    pub fn reread(&self, body: &[u8]) -> (u16, Value) {
+        let v = match json_body(body) {
+            Ok(parsed) => parsed,
+            Err(reply) => return reply,
+        };
+        let Some(slot) = v["slot"].as_u64().filter(|n| matches!(n, 1 | 2)).map(|n| n as u8) else {
+            return refuse(400, "slot");
+        };
+        let role = slot_role(&*self.host, slot);
+        if !role.dual {
+            return refuse(404, "single_slot");
+        }
+        if !self.host.exists(QMI_PROBE) {
+            return refuse(404, "no_tool");
+        }
+        if role.data {
+            return refuse(409, "data_slot");
+        }
+        let info = serde_json::from_str::<Value>(&self.host.sh(
+            "ubus -t 5 call zwrt_zte_mdm.api get_sim_info '{}' # slots",
+            UBUS_TIMEOUT,
+        ))
+        .unwrap_or(Value::Null);
+        if info[format!("sim{slot}_provision_state")] == "1" {
+            return refuse(409, "standby_slot");
+        }
+        {
+            let last = self.reread_at.lock().unwrap_or_else(|e| e.into_inner());
+            if last.is_some_and(|t| self.host.now().saturating_duration_since(t) < REREAD_GAP) {
+                return refuse(429, "too_soon");
+            }
+        }
+        // the job slot, not a job: the last switch's record stays what the pages show
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            return busy_reply();
+        }
+        *self.reread_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(self.host.now());
+        // the probe says each step's outcome on stderr
+        let out = contained(|| Ok(self.host.sh(&format!("{QMI_PROBE} simreset {slot} 2>&1"), SIMRESET_TIMEOUT)))
+            .unwrap_or_default();
+        self.running.store(false, Ordering::SeqCst);
+        eprintln!("esim: reread slot {slot}: {}", out.lines().last().unwrap_or("no output"));
+        if out.contains("[power_up] OK") {
+            (200, json!({"ok": true, "data": {"slot": slot}}))
+        } else {
+            refuse(502, "reset_failed")
+        }
     }
     /// POST /api/esim/nickname with `{iccid, nickname}`; an empty nickname removes it.
     /// Answered inline, since it is one quick exchange with the card.
@@ -1698,9 +2269,14 @@ impl Esim {
         if !nickname_chars_ok(nickname) {
             return refuse(400, "nickname has control characters");
         }
+        let pick = match self.pick(named(&v).as_deref()) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
+        let on = self.on(pick.slot);
+        let h: &dyn Host = &*on;
         // the other profiles as they are before: a rename must leave them alone
-        let before = self
-            .host
+        let before = h
             .lpac(&["profile", "list"], LPAC_TIMEOUT_FAST)
             .ok()
             .filter(Value::is_array);
@@ -1716,14 +2292,14 @@ impl Esim {
                 return refuse(409, "snapshot_changed");
             }
         }
-        if let Err(e) = self.host.lpac(
+        if let Err(e) = h.lpac(
             &["profile", "nickname", &iccid, nickname],
             LPAC_TIMEOUT_FAST,
         ) {
             return (502, json!({"ok": false, "error": e}));
         }
         // read it back from the card: the write answering ok is not the name being there
-        let Some(list) = read_profiles_retry(self.host.as_ref()) else {
+        let Some(list) = read_profiles_retry(h) else {
             return (200, json!({"ok": true, "verified": false}));
         };
         if before
@@ -1772,6 +2348,10 @@ impl Esim {
             Ok(id) => id,
             Err(reply) => return reply,
         };
+        let pick = match self.pick(named(&v).as_deref()) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
         let Some(job_id) = self.try_start_job("switch", &iccid) else {
             return busy_reply();
         };
@@ -1784,9 +2364,13 @@ impl Esim {
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
         let cancel = Arc::clone(&self.cancel);
-        let h = Arc::clone(&self.host);
+        let h = self.on(pick.slot);
         let list = Arc::clone(&self.list);
         let receipts = Arc::clone(&self.receipts);
+        let eids = Arc::clone(&self.eids);
+        let (slot, key) = (pick.slot, (pick.slot, pick.generation));
+        // the card the switch is for: re-checked before every step with side effects
+        let eid = pick.card.as_ref().map(|(_, e)| e.clone()).filter(|_| pick.dual);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
@@ -1795,16 +2379,25 @@ impl Esim {
                 // not go through core: tell it first, so a network-mode change still
                 // confirming is not rolled back over the new card (D40). Best effort.
                 interrupt();
+                // Dual-SIM (DSDS, the global device): only a card in the slot data is on gets
+                // the reset and the wait for identity. Off or standby, the modem does not read
+                // the card again, so the identity never moves and waiting for it ended in a
+                // reboot for nothing (10-22, twice). Slot 2 counts as the data slot only on a
+                // positive read (dual-slot-removable.md §2).
+                // The IMSI the stock stack reports now; the switch has landed once it changes.
+                // Read first, then the slots, as always (hosts count these reads).
+                let (old_imsi, _) = ubus_sim_identity(h, slot);
+                let role = slot_role(h, slot);
+                let other_slot = !role.data;
+                // before the enable, so core knows whether the data card is about to move
                 h.switch_event(SwitchEvent::Leaving {
                     target: iccid.clone(),
+                    slot,
+                    data_slot: role.data,
                 });
-                // The IMSI the stock stack reports now; the switch has landed once it changes.
-                let (old_imsi, _) = ubus_sim_identity(h);
-                // Dual-SIM (DSDS, the global device): the eSIM card sits in slot 1 (the
-                // removable slot). When the modem has slot 1 switched off or data on the
-                // other slot, it does not re-read the card, so the identity never moves
-                // and waiting for it ends in a reboot for nothing (10-22, twice).
-                let other_slot = esim_slot_idle(h);
+                // the role may change under the switch (R7/D9): re-read before every step
+                // with side effects; a single-slot answer cannot change
+                let still = || !role.dual || still_ours(h, &eids, slot, eid.as_deref());
                 // Highest pending notification before the enable: anything above it
                 // afterwards is this switch's own.
                 let seq_before = h
@@ -1831,7 +2424,9 @@ impl Esim {
                         .map_or(CardSays::Unknown, |l| target_state(l, &iccid));
                     if let Some(l) = readback {
                         // the list the UIs fall back on while the card settles (R4)
-                        list.lock().unwrap().last = Some((l, h.now()));
+                        let mut c = list.lock().unwrap();
+                        c.last = Some((l, h.now()));
+                        c.of = key;
                     }
                     card_s = h.now().saturating_duration_since(card_t).as_secs();
                     if let Err(e) = &res {
@@ -1889,20 +2484,28 @@ impl Esim {
                 }
                 job.lock().unwrap().message = "switching".into();
                 h.switch_event(SwitchEvent::CardSwitched);
+                // this switch's notifications are on this card
+                receipts.lock().unwrap().slot = slot;
+                // the card's ICCID moves now: its new generation is the same eUICC
+                eids.lock().unwrap_or_else(|e| e.into_inner()).switched = Some((slot, h.now()));
                 // Card-local and quick, so done on both paths below (the reboot one
                 // can't come back to it).
                 let to_send = prune_notifications(h, seq_before);
 
-                if other_slot {
+                // the slot stopped being the data slot (or lost the card) while the card was busy:
+                // the same as a standby slot (R7/D9)
+                let moved = !other_slot && !still();
+                if other_slot || moved {
                     eprintln!(
-                        "esim: switch {iccid}: card {card_s} s; slot 1 is off or data is on the other slot, nothing to wait for"
+                        "esim: switch {iccid}: card {card_s} s; slot {slot} is off or not the data slot{}, nothing to reset or wait for",
+                        if moved { " any more" } else { "" }
                     );
                     list.lock().unwrap().switched_at = Some(h.now());
                     finish_job_with(
                         &job,
                         &running,
                         Ok(format!(
-                            "switched on the card ({card_s} s) — the eSIM slot is off or not the data slot, so data stays where it is"
+                            "switched on the card ({card_s} s) — the eSIM slot is off or not the data slot, so data stays where it is; the card takes effect after a restart"
                         )),
                         false,
                         "inactive_slot",
@@ -1916,7 +2519,25 @@ impl Esim {
                 // the card again, then restart only zte_topsw_mdm so userspace does too; the
                 // data call follows by itself. A reboot remains the fallback below.
                 if h.exists(QMI_PROBE) {
-                    let _ = h.sh(&format!("{QMI_PROBE} simreset"), SIMRESET_TIMEOUT);
+                    let reset = if slot == 1 {
+                        format!("{QMI_PROBE} simreset")
+                    } else {
+                        format!("{QMI_PROBE} simreset {slot}")
+                    };
+                    let _ = h.sh(&reset, SIMRESET_TIMEOUT);
+                }
+                if !still() {
+                    eprintln!("esim: switch {iccid}: slot {slot} is no longer the data slot: the stack is not restarted");
+                    list.lock().unwrap().switched_at = Some(h.now());
+                    h.wake(false);
+                    finish_job_with(
+                        &job,
+                        &running,
+                        Ok(format!("switched on the card ({card_s} s) — slot {slot} is no longer the data slot, so data stays where it is; the card takes effect after a restart")),
+                        false,
+                        "inactive_slot",
+                    );
+                    return;
                 }
                 let _ = h.sh(&format!("{MDM_INITD} restart"), MDM_RESTART_TIMEOUT);
 
@@ -1926,7 +2547,7 @@ impl Esim {
                 let mut converged = false;
                 while h.now().saturating_duration_since(t) < IDENTITY_WAIT {
                     h.sleep(IDENTITY_POLL);
-                    if switch_converged(h, &iccid, &old_imsi) {
+                    if switch_converged(h, slot, &iccid, &old_imsi) {
                         converged = true;
                         break;
                     }
@@ -1934,7 +2555,7 @@ impl Esim {
                 if !converged {
                     let g = h.now();
                     while h.now().saturating_duration_since(g) < IDENTITY_GRACE {
-                        if switch_converged(h, &iccid, &old_imsi) {
+                        if switch_converged(h, slot, &iccid, &old_imsi) {
                             converged = true;
                             break;
                         }
@@ -1981,6 +2602,20 @@ impl Esim {
                             )),
                             false,
                             "identity_stuck",
+                        );
+                        return;
+                    }
+                    if !still() {
+                        eprintln!(
+                            "esim: switch {iccid}: identity not back after {ident_s} s, but slot {slot} is no longer the data slot: not rebooting"
+                        );
+                        h.wake(false);
+                        finish_job_with(
+                            &job,
+                            &running,
+                            Ok(format!("switched on the card — slot {slot} is no longer the data slot, so nothing was restarted")),
+                            false,
+                            "inactive_slot",
                         );
                         return;
                     }
@@ -2054,6 +2689,8 @@ impl Esim {
                 let j = job.lock().unwrap();
                 (j.reason.clone(), j.rebooting)
             };
+            // the card may answer QMI error 80 for a while: no "plain card" verdict meanwhile
+            eids.lock().unwrap_or_else(|e| e.into_inner()).switched = Some((slot, h.now()));
             h.switch_event(SwitchEvent::Ended { reason, rebooting });
         });
         started_reply(job_id)
@@ -2083,12 +2720,19 @@ impl Esim {
         if !acceptable(&conf) {
             return refuse(400, "invalid confirmation code");
         }
+        let pick = match self.pick(named(&v).as_deref()) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
+        if let Some(r) = self.unsettled() {
+            return r;
+        }
         let Some(job_id) = self.try_start_job("download", "") else {
             return busy_reply();
         };
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
-        let h = Arc::clone(&self.host);
+        let h = self.on(pick.slot);
         let receipts = Arc::clone(&self.receipts);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
@@ -2102,9 +2746,11 @@ impl Esim {
                 // reading it back: the profile may well have landed (`settle_write`).
                 let w = h
                     .lpac(&["profile", "list"], LPAC_TIMEOUT_FAST)
-                    .map(|l| json!({"kind": "download", "before": iccids_of(&l)}));
+                    .map(|l| tag_record(json!({"kind": "download", "before": iccids_of(&l)}), &pick));
                 if let Ok(w) = &w {
-                    h.note_write(Some(w));
+                    if !h.note_write(Some(w)) {
+                        return Err(NOT_RECORDED.to_string());
+                    }
                 }
                 // lpac's error (its stderr tail, the server's answer) goes to the UIs
                 // and the log: never with the codes in it.
@@ -2123,6 +2769,7 @@ impl Esim {
                 // Superseded enable/disable ones go first, so `-a` doesn't send
                 // stale state changes late.
                 if send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX).left > 0 {
+                    receipts.lock().unwrap().slot = pick.slot;
                     arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
                 }
                 Ok(msg)
@@ -2146,7 +2793,14 @@ impl Esim {
         if self.busy() {
             return busy_reply();
         }
-        let list = match self.host.lpac(&["profile", "list"], LPAC_TIMEOUT_FAST) {
+        let pick = match self.pick(named(&v).as_deref()) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
+        if let Some(r) = self.unsettled() {
+            return r;
+        }
+        let list = match self.host.lpac_on(pick.slot, &["profile", "list"], LPAC_TIMEOUT_FAST) {
             Ok(list) => list,
             Err(why) => return (502, json!({"ok": false, "error": why})),
         };
@@ -2169,14 +2823,16 @@ impl Esim {
         };
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
-        let h = Arc::clone(&self.host);
+        let h = self.on(pick.slot);
         let receipts = Arc::clone(&self.receipts);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
             let res = contained(|| {
-                let w = json!({"kind": "delete", "iccid": iccid});
-                h.note_write(Some(&w));
+                let w = tag_record(json!({"kind": "delete", "iccid": iccid}), &pick);
+                if !h.note_write(Some(&w)) {
+                    return Err(NOT_RECORDED.to_string());
+                }
                 let done = match h.lpac(&["profile", "delete", &iccid], LPAC_TIMEOUT_FAST) {
                     Ok(_) => Ok("profile deleted".to_string()),
                     Err(e) => settle_write(h, &w, &e),
@@ -2184,6 +2840,7 @@ impl Esim {
                 h.note_write(None);
                 let msg = done?;
                 if send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX).left > 0 {
+                    receipts.lock().unwrap().slot = pick.slot;
                     arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
                 }
                 Ok(msg)
@@ -2195,19 +2852,27 @@ impl Esim {
     }
     /// POST /api/esim/notifications/process: send every pending notification to its
     /// SM-DP+ and clear it from the card.
-    pub fn notifications_process(&self, _body: &[u8]) -> (u16, Value) {
+    pub fn notifications_process(&self, body: &[u8]) -> (u16, Value) {
+        let eid = serde_json::from_slice::<Value>(body)
+            .ok()
+            .and_then(|v| named(&v));
+        let pick = match self.pick(eid.as_deref()) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
         let Some(job_id) = self.try_start_job("notifications", "") else {
             return busy_reply();
         };
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
-        let h = Arc::clone(&self.host);
+        let h = self.on(pick.slot);
         let receipts = Arc::clone(&self.receipts);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             let res = contained(|| {
                 let sent = send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX);
                 if sent.left > 0 {
+                    receipts.lock().unwrap().slot = pick.slot;
                     arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
                 } else {
                     idle_receipts(&receipts);
@@ -2282,6 +2947,27 @@ fn hide_codes(err: String, secrets: &[&str]) -> String {
         .fold(err, |e, c| e.replace(c, "[code]"))
 }
 
+/// An answer about one card: on a dual-slot unit it says which (slot, EID when known); the
+/// single-slot unit's answers stay as they were.
+fn with_card(mut data: Value, p: &Pick) -> Value {
+    if p.dual {
+        data["slot"] = json!(p.slot);
+        data["eid"] = p.card.as_ref().map_or(Value::Null, |(_, e)| json!(e));
+    }
+    data
+}
+
+/// A write record names its card (R10/D12): the EID when known, the slot when not slot 1.
+fn tag_record(mut w: Value, p: &Pick) -> Value {
+    if let Some((_, e)) = &p.card {
+        w["eid"] = json!(e);
+    }
+    if p.slot != 1 {
+        w["slot"] = json!(p.slot);
+    }
+    w
+}
+
 /// lpac answered `err` on write `w`: settle it from the card.
 fn settle_write(h: &dyn Host, w: &Value, err: &str) -> Result<String, String> {
     let kind = w["kind"].as_str().unwrap_or("write");
@@ -2312,13 +2998,93 @@ impl Esim {
             return;
         };
         let kind = w["kind"].as_str().unwrap_or("write").to_owned();
+        if kind == "unknown" {
+            // the record was unreadable (moved aside): nothing to compare the card with
+            if self.try_start_job("write", "").is_some() {
+                self.host.note_write(None);
+                finish_job(
+                    &self.job,
+                    &self.running,
+                    Err("a write was in flight when the core stopped, but its record could not be read: check the profile list".into()),
+                    false,
+                );
+            }
+            return;
+        }
+        if let Some(slot) = self.locate(&w) {
+            self.settle_on(w, slot);
+            return;
+        }
+        // its card is not here, or not identified yet (R10/D12): wait for it without holding
+        // the job slot; new writes are refused meanwhile (`unsettled`)
+        let me = self.handle();
+        std::thread::spawn(move || {
+            for _ in 0..LOCATE_TRIES {
+                me.host.sleep(SETTLE_EVERY);
+                if let Some(slot) = me.locate(&w) {
+                    me.settle_on(w, slot);
+                    return;
+                }
+            }
+            eprintln!("esim: interrupted {kind}: its card did not turn up; the record stays for the next start");
+        });
+    }
+
+    /// The same engine (every part is shared).
+    fn handle(&self) -> Esim {
+        Esim {
+            job: Arc::clone(&self.job),
+            running: Arc::clone(&self.running),
+            cancel: Arc::clone(&self.cancel),
+            host: Arc::clone(&self.host),
+            list: Arc::clone(&self.list),
+            receipts: Arc::clone(&self.receipts),
+            eids: Arc::clone(&self.eids),
+            reread_at: Arc::clone(&self.reread_at),
+        }
+    }
+
+    /// The slot holding a write record's card: by its EID; an older record (no EID) goes to the
+    /// only card on a single-slot unit, else the only eSIM card. `None`: not here (yet).
+    fn locate(&self, w: &Value) -> Option<u8> {
+        let slots = self.host.card_slots();
+        if let Some(e) = w["eid"].as_str() {
+            let at = slots
+                .iter()
+                .find(|&&(s, g)| self.eid_known(s, g) == Some(EidAnswer::Found(e.to_string())));
+            if at.is_none() {
+                for &(s, g) in &slots {
+                    let _ = self.eid_of_slot(s, g);
+                }
+            }
+            return at.map(|x| x.0);
+        }
+        self.pick(None).ok().map(|p| p.slot)
+    }
+
+    /// A write cut off by a restart whose card is not here: a new write would replace its
+    /// record, so it waits (409) until that card is back and the write is settled.
+    fn unsettled(&self) -> Option<Reply> {
+        let w = self.host.pending_write()?;
+        if w["eid"].is_null() || self.locate(&w).is_some() {
+            return None;
+        }
+        Some(refuse(
+            409,
+            "a write cut off by a restart is not settled yet and its eSIM card is not here: put that card back in first",
+        ))
+    }
+
+    /// Settle the interrupted write `w` on the card in `slot`.
+    fn settle_on(&self, w: Value, slot: u8) {
+        let kind = w["kind"].as_str().unwrap_or("write").to_owned();
         let iccid = w["iccid"].as_str().unwrap_or("").to_owned();
         let Some(_) = self.try_start_job(&kind, &iccid) else {
             return;
         };
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
-        let h = Arc::clone(&self.host);
+        let h = self.on(slot);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             let mut seen = None;
@@ -2349,9 +3115,51 @@ impl Esim {
     }
 }
 
+/// The in-flight write record, kept before lpac touches the card: whole file, fsync, rename,
+/// fsync of the directory, so a power cut right after the write starts still finds it.
+fn write_record(p: &Path, w: &Value) -> std::io::Result<()> {
+    // before lpac touches the card: fsync the file and its directory (P-3, P-6)
+    luyaz_persist::write(p, w.to_string().as_bytes(), luyaz_persist::Tier::Durable)
+}
+
+/// The record a previous run left. Missing → `None`. A record that cannot be read or parsed
+/// is not "nothing in flight": it is moved to `.corrupt-<unix>` and comes back as
+/// `{"kind":"unknown"}`, so the owner is told to check the profile list (11-12).
+fn read_record(p: &Path, unix: u64) -> Option<Value> {
+    use luyaz_persist::{Load, Parsed};
+    let parse = |b: &[u8]| match serde_json::from_slice::<Value>(b) {
+        Ok(v) if v["kind"].is_string() => Parsed::Ok(v),
+        Ok(_) => Parsed::Corrupt("no kind".into()),
+        Err(e) => Parsed::Corrupt(e.to_string()),
+    };
+    match luyaz_persist::load_at(p, parse, unix) {
+        Load::Missing => None,
+        Load::Ok(v) => Some(v),
+        Load::Corrupt { why, moved_to } => {
+            eprintln!("esim: write record {}: {why}: moved to {}", p.display(), moved_to.display());
+            Some(json!({"kind": "unknown"}))
+        }
+        // could not read it (or move it): it may hold a write in flight, so not "nothing"
+        Load::Newer(e) => {
+            eprintln!("esim: write record {}: {e}", p.display());
+            Some(json!({"kind": "unknown"}))
+        }
+        Load::Io(e) => {
+            eprintln!("esim: write record {}: {e}", p.display());
+            Some(json!({"kind": "unknown"}))
+        }
+    }
+}
+
+/// A download or delete refused because its in-flight record could not be kept.
+const NOT_RECORDED: &str =
+    "could not keep a record of the write before starting it (is /data full?); nothing was sent to the card";
+
 /// Settling an interrupted write right after boot: the card may need a while.
 const SETTLE_TRIES: u32 = 6;
 const SETTLE_EVERY: Duration = Duration::from_secs(20);
+/// Waiting for the card of an interrupted write to turn up: 10 min, then the next start.
+const LOCATE_TRIES: u32 = 30;
 
 /* -------------------------------------------------------------- *
  *  Job lifecycle
@@ -2769,6 +3577,23 @@ mod tests {
         data_slot: &'static str,
         /// each lpac run takes this long (real time), to make calls overlap
         lpac_ms: u64,
+        /// dual-slot (T4): the slots with a card and their generation (empty = the default one)
+        slots: Vec<(u8, u64)>,
+        /// `qmi_uim_probe eid 1` / `eid 2` output
+        eid_out: [&'static str; 2],
+        /// `sim2_provision_state` ("" = absent); set, slot 2's IMSI is the one that moves
+        sim2_provision: &'static str,
+        /// `current_sim_slot` once the first enable ran ("" = unchanged)
+        data_slot_after_enable: &'static str,
+        /// `get_sim_info` answers nothing
+        sim_info_broken: bool,
+        /// the card table sees slot 2's generation go up with every enable (a profile switch
+        /// gives the card a new ICCID)
+        bump_on_enable: bool,
+        /// `current_sim_slot` once a `simreset` ran ("" = unchanged)
+        data_slot_after_reset: &'static str,
+        /// `current_sim_slot` once the stack restart ran ("" = unchanged)
+        data_slot_after_restart: &'static str,
         /// lpac runs and probe calls going on right now, and the most seen at once
         on_card: std::sync::atomic::AtomicU32,
         most_on_card: std::sync::atomic::AtomicU32,
@@ -2810,6 +3635,10 @@ mod tests {
         nickname_lost: bool,
         /// `profile nickname` also renames the first profile
         nickname_spills: bool,
+        /// the switch's steps as the host heard them
+        events: Vec<SwitchEvent>,
+        /// every write record kept
+        records: Vec<Value>,
     }
 
     pub(super) struct OnCard<'a>(&'a Fake);
@@ -2838,6 +3667,29 @@ mod tests {
     impl Host for Fake {
         fn installed(&self) -> bool {
             true
+        }
+        fn lpac_on(&self, slot: u8, args: &[&str], t: Duration) -> Result<Value, String> {
+            let r = self.lpac(args, t);
+            if slot != 1 {
+                let mut s = self.state.lock().unwrap();
+                if let Some(l) = s.log.last_mut() {
+                    l.push_str(&format!(" UIM_SLOT={slot}"));
+                }
+            }
+            r
+        }
+        fn card_slots(&self) -> Vec<(u8, u64)> {
+            if self.slots.is_empty() {
+                return vec![(1, 0)];
+            }
+            let n = u64::from(self.state.lock().unwrap().enables);
+            self.slots
+                .iter()
+                .map(|&(s, g)| (s, if self.bump_on_enable && s == 2 { g + n } else { g }))
+                .collect()
+        }
+        fn switch_event(&self, ev: SwitchEvent) {
+            self.state.lock().unwrap().events.push(ev);
         }
         fn lpac(&self, args: &[&str], _t: Duration) -> Result<Value, String> {
             let _on = self.on_card();
@@ -2923,6 +3775,16 @@ mod tests {
             if cmd.contains("get_sync_info") {
                 return r#"{"noSyncModuleName":"sync success"}"#.into();
             }
+            if let Some(n) = cmd.split("qmi_uim_probe eid ").nth(1) {
+                let i = usize::from(n.starts_with('2'));
+                return self.eid_out[i].to_string();
+            }
+            if cmd.contains("qmi_uim_probe simreset") && cmd.ends_with("2>&1") {
+                return "[power_down] OK (qmi_error=0)\n[power_up] OK (qmi_error=0)\n".into();
+            }
+            if cmd.contains("get_sim_info") && self.sim_info_broken {
+                return String::new();
+            }
             if cmd.contains("get_sim_info") {
                 // the slot read before the switch is not an identity read
                 if !cmd.ends_with("# slots") {
@@ -2935,11 +3797,26 @@ mod tests {
                     "440100000000001"
                 };
                 let mut v = json!({"sim_imsi": imsi, "sim_iccid": ""});
+                if !self.sim2_provision.is_empty() {
+                    v = json!({"sim_imsi": "440100000000009", "sim_iccid": "", "sim2_imsi": imsi, "sim2_iccid": "",
+                               "sim2_provision_state": self.sim2_provision});
+                }
                 if !self.sim1_provision.is_empty() {
                     v["sim1_provision_state"] = self.sim1_provision.into();
                 }
-                if !self.data_slot.is_empty() {
-                    v["current_sim_slot"] = self.data_slot.into();
+                let reset = s.log.iter().any(|l| l.contains("simreset"));
+                let restarted = s.log.iter().any(|l| l.contains("zte_topsw_mdm restart"));
+                let data = if !self.data_slot_after_restart.is_empty() && restarted {
+                    self.data_slot_after_restart
+                } else if !self.data_slot_after_reset.is_empty() && reset {
+                    self.data_slot_after_reset
+                } else if !self.data_slot_after_enable.is_empty() && s.enables > 0 {
+                    self.data_slot_after_enable
+                } else {
+                    self.data_slot
+                };
+                if !data.is_empty() {
+                    v["current_sim_slot"] = data.into();
                 }
                 return v.to_string();
             }
@@ -2979,12 +3856,35 @@ mod tests {
         fn wall_unix(&self) -> u64 {
             1_000_000
         }
-        fn note_write(&self, w: Option<&Value>) {
-            self.state.lock().unwrap().pending = w.cloned();
+        fn note_write(&self, w: Option<&Value>) -> bool {
+            let mut s = self.state.lock().unwrap();
+            if let Some(w) = w {
+                s.records.push(w.clone());
+            }
+            s.pending = w.cloned();
+            true
         }
         fn pending_write(&self) -> Option<Value> {
             self.state.lock().unwrap().pending.clone()
         }
+    }
+
+    #[test]
+    fn the_write_record_is_kept_whole_and_a_bad_one_is_not_nothing() {
+        let d = std::env::temp_dir().join(format!("esim-rec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("esim-pending.json");
+        assert_eq!(read_record(&p, 7), None, "missing: nothing in flight");
+        let w = json!({"kind": "delete", "iccid": "8986"});
+        write_record(&p, &w).unwrap();
+        assert_eq!(read_record(&p, 7), Some(w.clone()));
+        std::fs::write(&p, "{\"kind\":").unwrap();
+        assert_eq!(read_record(&p, 7), Some(json!({"kind": "unknown"})));
+        assert!(!p.exists() && d.join("esim-pending.json.corrupt-7").exists());
+        // the record cannot be kept (its directory is gone): the write is refused
+        assert!(write_record(&d.join("gone").join("esim-pending.json"), &w).is_err());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     fn write_job(e: &Esim) -> JobState {
@@ -3665,6 +4565,83 @@ mod tests {
         assert!(fake.state.lock().unwrap().rebooted);
     }
 
+    /// A command that aims at a card slot other than 1: `UIM_SLOT=<n>` with n≠1, or a
+    /// `qmi_uim_probe` subcommand followed by a slot argument other than 1.
+    fn aims_past_slot1(cmd: &str) -> bool {
+        let env = cmd
+            .split_whitespace()
+            .filter_map(|w| w.strip_prefix("UIM_SLOT="))
+            .any(|n| n != "1");
+        let mut probe = cmd
+            .split_whitespace()
+            .skip_while(|w| !w.ends_with("qmi_uim_probe"))
+            .skip(1);
+        // `close <n> [slot]` names a logical channel first, then the slot
+        let sub = probe.next();
+        if sub == Some("close") {
+            probe.next();
+        }
+        env || probe
+            .next()
+            .is_some_and(|a| a.parse::<u32>().is_ok_and(|n| n != 1))
+    }
+
+    #[test]
+    fn slot_aim_detector() {
+        assert!(!aims_past_slot1("sh /data/esim/qmi_uim_probe simreset"));
+        assert!(!aims_past_slot1("sh /data/esim/qmi_uim_probe simreset 1"));
+        assert!(!aims_past_slot1("sh /data/esim/qmi_uim_probe open 2>&1"));
+        assert!(!aims_past_slot1("lpac profile list UIM_SLOT=1"));
+        assert!(aims_past_slot1("sh /data/esim/qmi_uim_probe simreset 2"));
+        assert!(aims_past_slot1("sh /data/esim/qmi_uim_probe eid 2"));
+        assert!(aims_past_slot1("lpac profile list UIM_SLOT=2"));
+        assert!(!aims_past_slot1(
+            "/data/esim/qmi_uim_probe close 2 2>/dev/null"
+        ));
+        assert!(aims_past_slot1("/data/esim/qmi_uim_probe close 3 2 2>/dev/null"));
+        assert!(!aims_past_slot1("/data/esim/qmi_uim_probe close 3 1 2>/dev/null"));
+    }
+
+    /// Dual-slot regression contract (dual-slot-removable.md R6/D8 ②): on a single-slot
+    /// device (`get_sim_info` has no `sim1_provision_state` / `current_sim_slot`) nothing the
+    /// engine runs aims at slot 2 — switches that converge, that reboot, and the list read.
+    /// The slot reaches the `Host` (`lpac_on`, T4) and `Fake` logs any slot but 1 as
+    /// `UIM_SLOT=<n>`, so this covers lpac too. Do not change these assertions.
+    #[test]
+    fn a_single_slot_device_never_aims_at_slot_2() {
+        let runs = [
+            Fake {
+                enable_works: true,
+                converges: true,
+                ..Fake::default()
+            },
+            Fake {
+                enable_works: true,
+                converges: false,
+                no_data: true,
+                ..Fake::default()
+            },
+        ];
+        for f in runs {
+            let (_, fake) = switch_with(f);
+            let s = fake.state.lock().unwrap();
+            assert!(s.log.iter().any(|l| l.ends_with("simreset")), "{:?}", s.log);
+            let bad: Vec<_> = s.log.iter().filter(|l| aims_past_slot1(l)).collect();
+            assert!(bad.is_empty(), "{bad:?}");
+        }
+        let fake = Arc::new(Fake::default());
+        let e = Esim::new(fake.clone());
+        let _ = e.profiles();
+        let _ = e.status();
+        let s = fake.state.lock().unwrap();
+        assert!(
+            s.log.iter().any(|l| l.starts_with("lpac profile list")),
+            "{:?}",
+            s.log
+        );
+        assert!(!s.log.iter().any(|l| aims_past_slot1(l)), "{:?}", s.log);
+    }
+
     #[test]
     fn identity_past_the_deadline_reboots() {
         let (j, fake) = switch_with(Fake {
@@ -3991,5 +4968,452 @@ mod tests {
                 .as_bytes(),
         );
         assert!(!format!("{r:?}").contains(CONF));
+    }
+
+    // ---- two card slots (docs/designs/dual-slot-removable.md §2, T4) ----
+
+    /// `qmi_uim_probe eid N 2>&1` on u60g 11-16 (EID shortened to fakes)
+    const EID_OUT: &str = "[uim] using node=3 port=82\n[open] channel=1 SW=9000\n[close] channel 1 released\n[es10c] GetEID response (21 bytes):\nEID=89049000000000123456780011223344\n";
+    const PLAIN_OUT: &str = "[uim] using node=3 port=82\n< OPEN_LOGICAL_CHANNEL (19 bytes):\n[result] FAILURE qmi_error=80\n[!] open channel rejected by modem (qmi_error=80)\n";
+    const EID2: &str = "89049000000000123456780011223344";
+
+    #[test]
+    fn the_eid_probe_answers_eid_plain_or_nothing() {
+        assert_eq!(parse_eid_probe(EID_OUT), Some(Ok(EID2.to_string())));
+        assert_eq!(parse_eid_probe(PLAIN_OUT), Some(Err(())));
+        assert_eq!(parse_eid_probe("[!] no UIM service on QRTR bus\n"), None);
+        assert_eq!(parse_eid_probe("EID=12\n"), None);
+        assert_eq!(parse_eid_probe(""), None);
+    }
+
+    /// u60g as found 11-16: a plain card in slot 1 (data), an eUICC in slot 2 (standby).
+    /// The owner's「重新读取」: only an off slot of a dual-slot unit, spaced, never under a job.
+    #[test]
+    fn reread_resets_only_an_off_slot() {
+        let body = |n: u8| format!(r#"{{"slot":{n}}}"#);
+        // u60g single mode: data on slot 1, slot 2 off
+        let fake = Arc::new(Fake { sim2_provision: "0", ..u60g() });
+        let e = Esim::new(fake.clone());
+        let (code, v) = e.reread(body(2).as_bytes());
+        assert_eq!(code, 200, "{v}");
+        assert!(fake.state.lock().unwrap().log.iter().any(|l| l.ends_with("qmi_uim_probe simreset 2 2>&1")));
+        // spaced: a second press right away is refused, the card is not cycled again
+        assert_eq!(e.reread(body(2).as_bytes()).1["error"], "too_soon");
+        fake.sleep(REREAD_GAP);
+        assert_eq!(e.reread(body(2).as_bytes()).0, 200);
+        // the data slot never
+        let (code, v) = e.reread(body(1).as_bytes());
+        assert_eq!((code, v["error"].as_str()), (409, Some("data_slot")));
+        assert_eq!(e.reread(br#"{"slot":3}"#).1["error"], "slot");
+        // not while a job holds the card
+        fake.sleep(REREAD_GAP);
+        e.running.store(true, Ordering::SeqCst);
+        assert_eq!(e.reread(body(2).as_bytes()).0, 409);
+        e.running.store(false, Ordering::SeqCst);
+        // dual mode: slot 2 is a provisioned standby slot (O-3)
+        let fake = Arc::new(u60g());
+        let e = Esim::new(fake.clone());
+        assert_eq!(e.reread(body(2).as_bytes()).1["error"], "standby_slot");
+        // data on slot 2 alone: slot 1 is the off one
+        let fake = Arc::new(Fake { data_slot: "2", sim1_provision: "0", ..u60g() });
+        let e = Esim::new(fake.clone());
+        assert_eq!(e.reread(body(2).as_bytes()).1["error"], "data_slot");
+        assert_eq!(e.reread(body(1).as_bytes()).0, 200);
+        // a single-slot unit has nothing to read again
+        let fake = Arc::new(Fake::default());
+        let e = Esim::new(fake.clone());
+        assert_eq!(e.reread(body(2).as_bytes()).1["error"], "single_slot");
+        assert!(!fake.state.lock().unwrap().log.iter().any(|l| l.contains("simreset")));
+    }
+
+    fn u60g() -> Fake {
+        Fake {
+            enable_works: true,
+            converges: true,
+            slots: vec![(1, 1), (2, 1)],
+            eid_out: [PLAIN_OUT, EID_OUT],
+            sim1_provision: "1",
+            sim2_provision: "1",
+            data_slot: "1",
+            ..Fake::default()
+        }
+    }
+
+    /// Read every slot's EID now; a second error 80 a minute later makes a plain card.
+    fn identify(e: &Esim) {
+        // a read `pick` started on its own thread holds the card meanwhile
+        for _ in 0..400 {
+            if e.eids.lock().unwrap().reading.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        for _ in 0..2 {
+            for (s, g) in e.host.card_slots() {
+                read_eid(&e.host, &e.eids, &e.running, s, g);
+            }
+            e.host.sleep(EID_PLAIN_AFTER);
+        }
+    }
+
+    #[test]
+    fn a_plain_card_needs_two_error_80_a_minute_apart_and_none_after_a_switch() {
+        let e = Esim::new(Arc::new(u60g()));
+        read_eid(&e.host, &e.eids, &e.running, 1, 1);
+        assert_eq!(e.eid_known(1, 1), None, "one 80 is not enough");
+        read_eid(&e.host, &e.eids, &e.running, 1, 1);
+        assert_eq!(e.eid_known(1, 1), None, "nor two in a row");
+        e.host.sleep(EID_PLAIN_AFTER);
+        read_eid(&e.host, &e.eids, &e.running, 1, 1);
+        assert_eq!(e.eid_known(1, 1), Some(EidAnswer::NotEuicc));
+        read_eid(&e.host, &e.eids, &e.running, 2, 1);
+        assert_eq!(e.eid_known(2, 1), Some(EidAnswer::Found(EID2.into())));
+        // another generation: unknown again
+        assert_eq!(e.eid_known(2, 2), None);
+        // an eUICC settling after a switch on its slot can answer 80: not taken as plain
+        e.eids.lock().unwrap().switched = Some((1, e.host.now()));
+        e.eids.lock().unwrap().by_slot.remove(&1);
+        for _ in 0..3 {
+            read_eid(&e.host, &e.eids, &e.running, 1, 1);
+            e.host.sleep(EID_PLAIN_AFTER);
+        }
+        assert_eq!(e.eid_known(1, 1), None);
+        // under a job the card is not touched
+        e.running.store(true, Ordering::SeqCst);
+        let before = e.host.inner.card_slots();
+        assert_eq!(e.eid_of_slot(1, 9), EidAnswer::Later);
+        assert_eq!(before.len(), 2);
+    }
+
+    #[test]
+    fn which_card_a_request_is_for() {
+        let e = Esim::new(Arc::new(u60g()));
+        // two slots, not identified yet: an omitted eid waits
+        assert_eq!(e.pick(None).unwrap_err().0, 503);
+        identify(&e);
+        let p = e.pick(None).unwrap();
+        assert_eq!((p.slot, p.card.as_ref().map(|c| c.1.as_str()), p.dual), (2, Some(EID2), true));
+        assert_eq!(e.pick(Some(&EID2.to_lowercase())).unwrap().slot, 2);
+        assert_eq!(e.pick(Some("89049000000000000000000000000000")).unwrap_err().0, 404);
+        // two eSIM cards: one must be named
+        let two = Esim::new(Arc::new(Fake { eid_out: [EID_OUT.replace("11223344", "11112222").leak(), EID_OUT], ..u60g() }));
+        identify(&two);
+        assert_eq!(two.pick(None).unwrap_err().0, 400);
+        assert_eq!(two.pick(Some(EID2)).unwrap().slot, 2);
+        // no eSIM card in either slot
+        let none = Esim::new(Arc::new(Fake { eid_out: [PLAIN_OUT, PLAIN_OUT], ..u60g() }));
+        identify(&none);
+        assert_eq!(none.pick(None).unwrap_err().0, 404);
+        // one slot with a card (slot 2 only): that slot, identified or not
+        let one = Esim::new(Arc::new(Fake { slots: vec![(2, 4)], ..u60g() }));
+        assert_eq!(one.pick(None).unwrap().slot, 2);
+        // the single-slot unit: slot 1, as always
+        assert_eq!(Esim::new(Arc::new(Fake::default())).pick(None).unwrap(), Pick { slot: 1, generation: 0, card: None, dual: false });
+    }
+
+    /// T8: the UIs see an EID's tail only, so a card may be named by its slot (`@n`)
+    #[test]
+    fn a_card_named_by_its_slot() {
+        let e = Esim::new(Arc::new(u60g()));
+        assert_eq!(e.pick(Some("@2")).unwrap_err().0, 503, "not identified yet");
+        identify(&e);
+        assert_eq!(e.pick(Some("@2")).unwrap().card.map(|c| c.1), Some(EID2.to_string()));
+        assert_eq!(e.pick(Some("@1")).unwrap_err().0, 404, "slot 1 holds a plain card");
+        assert_eq!(e.pick(Some("@3")).unwrap_err().0, 404);
+        let two = Esim::new(Arc::new(Fake { eid_out: [EID_OUT.replace("11223344", "11112222").leak(), EID_OUT], ..u60g() }));
+        identify(&two);
+        assert_eq!(two.pick(Some("@1")).unwrap().slot, 1);
+        assert_eq!(two.pick(Some("@2")).unwrap().slot, 2);
+        // the single-slot unit: its own slot is the card as always, no identification needed
+        let single = Esim::new(Arc::new(Fake::default()));
+        assert_eq!(single.pick(Some("@1")).unwrap(), single.pick(None).unwrap());
+        // the body may carry it as a number or a string; an `eid` wins
+        assert_eq!(named(&json!({"slot": 2})).as_deref(), Some("@2"));
+        assert_eq!(named(&json!({"slot": "1"})).as_deref(), Some("@1"));
+        assert_eq!(named(&json!({"eid": "8904", "slot": 2})).as_deref(), Some("8904"));
+        assert_eq!(named(&json!({})), None);
+    }
+
+    fn switch_dual(f: Fake, eid: Option<&str>) -> (Value, Arc<Fake>, Esim) {
+        let fake = Arc::new(f);
+        let e = Esim::new(fake.clone());
+        identify(&e);
+        let body = match eid {
+            Some(x) => format!(r#"{{"iccid":"89852000000000000002","eid":"{x}"}}"#),
+            None => r#"{"iccid":"89852000000000000002"}"#.to_string(),
+        };
+        let (code, v) = e.switch(body.as_bytes(), Box::new(|| {}));
+        assert_eq!(code, 200, "{v}");
+        for _ in 0..500 {
+            let (_, j) = e.job();
+            if j["data"]["status"] != "running" {
+                return (j["data"].clone(), fake, e);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("switch never ended");
+    }
+
+    /// The invariant (§2): a reset, a stack restart or a reboot only when the target card is in
+    /// the data slot, and the reset names that slot.
+    fn invariant(f: &Fake, data_at_start: bool, slot: u8) {
+        let s = f.state.lock().unwrap();
+        let reset: Vec<_> = s.log.iter().filter(|l| l.contains("simreset")).collect();
+        let restart = s.log.iter().any(|l| l.contains("zte_topsw_mdm restart"));
+        if !data_at_start {
+            assert!(reset.is_empty() && !restart && !s.rebooted, "{:?}", s.log);
+        }
+        for r in reset {
+            assert_eq!(r.ends_with("simreset"), slot == 1, "{r}");
+            assert_eq!(r.ends_with(&format!("simreset {slot}")), slot != 1, "{r}");
+        }
+    }
+
+    #[test]
+    fn a_standby_slot_card_only_switches_on_the_card() {
+        let (j, fake, _) = switch_dual(u60g(), None);
+        assert_eq!((j["status"].as_str(), j["reason"].as_str()), (Some("done"), Some("inactive_slot")), "{j}");
+        invariant(&fake, false, 2);
+        let s = fake.state.lock().unwrap();
+        assert!(s.log.iter().any(|l| l == "lpac profile enable 89852000000000000002 UIM_SLOT=2"), "{:?}", s.log);
+        assert!(!s.log.iter().any(|l| l.starts_with("lpac") && !l.ends_with("UIM_SLOT=2")), "{:?}", s.log);
+        assert!(s.events.contains(&SwitchEvent::Leaving { target: "89852000000000000002".into(), slot: 2, data_slot: false }));
+    }
+
+    #[test]
+    fn a_data_slot_card_in_slot_2_resets_slot_2_and_waits_for_its_identity() {
+        let (j, fake, e) = switch_dual(Fake { data_slot: "2", ..u60g() }, Some(EID2));
+        assert_eq!(j["status"], "done", "{j}");
+        assert_eq!(j["reason"], "", "{j}");
+        invariant(&fake, true, 2);
+        let s = fake.state.lock().unwrap();
+        assert!(s.log.iter().any(|l| l.ends_with("simreset 2")), "{:?}", s.log);
+        assert!(s.events.contains(&SwitchEvent::Leaving { target: "89852000000000000002".into(), slot: 2, data_slot: true }));
+        assert_eq!(e.receipts.lock().unwrap().slot, 2);
+    }
+
+    #[test]
+    fn slot_2_is_the_data_slot_only_on_a_positive_read() {
+        for f in [
+            Fake { data_slot: "2", sim_info_broken: true, ..u60g() },
+            Fake { data_slot: "2", sim2_provision: "0", ..u60g() },
+            Fake { data_slot: "", ..u60g() },
+        ] {
+            let (j, fake, _) = switch_dual(f, Some(EID2));
+            assert_eq!(j["reason"], "inactive_slot", "{j}");
+            invariant(&fake, false, 2);
+        }
+    }
+
+    #[test]
+    fn the_data_slot_moving_during_the_card_step_stops_the_reset() {
+        // R7/D9: the eUICC is the data card when the switch starts; data moves to slot 1 while
+        // the card is busy, so nothing is reset, restarted or rebooted
+        let f = Fake { data_slot: "2", data_slot_after_enable: "1", converges: false, ..u60g() };
+        let (j, fake, _) = switch_dual(f, Some(EID2));
+        assert_eq!(j["reason"], "inactive_slot", "{j}");
+        let s = fake.state.lock().unwrap();
+        assert!(!s.log.iter().any(|l| l.contains("simreset") || l.contains("zte_topsw_mdm restart")), "{:?}", s.log);
+        assert!(!s.rebooted);
+        // and the same after a busy retry
+        drop(s);
+        let f = Fake { data_slot: "2", data_slot_after_enable: "1", busy: true, busy_for: 1, ..u60g() };
+        let (j, fake, _) = switch_dual(f, Some(EID2));
+        assert_eq!(j["reason"], "inactive_slot", "{j}");
+        assert!(!fake.state.lock().unwrap().rebooted);
+    }
+
+    #[test]
+    fn the_invariant_holds_across_scenarios() {
+        let cases = [
+            (Fake { data_slot: "2", ..u60g() }, true),
+            (Fake { data_slot: "2", converges: false, no_data: true, ..u60g() }, true),
+            (Fake { data_slot: "1", ..u60g() }, false),
+            (Fake { data_slot: "1", converges: false, ..u60g() }, false),
+            (Fake { data_slot: "2", sim2_provision: "0", converges: false, ..u60g() }, false),
+            (Fake { data_slot: "2", data_slot_after_enable: "1", converges: false, ..u60g() }, false),
+        ];
+        for (f, data) in cases {
+            let (_, fake, _) = switch_dual(f, Some(EID2));
+            invariant(&fake, data, 2);
+        }
+    }
+
+    #[test]
+    fn reads_and_writes_go_to_the_card_named() {
+        let fake = Arc::new(u60g());
+        let e = Esim::new(fake.clone());
+        identify(&e);
+        let (_, v) = e.profiles_of(None);
+        assert_eq!((v["data"]["slot"].as_i64(), v["data"]["eid"].as_str()), (Some(2), Some(EID2)), "{v}");
+        assert!(fake.state.lock().unwrap().log.iter().any(|l| l == "lpac profile list UIM_SLOT=2"));
+        // the write record names the card
+        e.delete(br#"{"iccid":"89852000000000000001"}"#);
+        let j = write_job(&e);
+        assert_eq!(j.status, "done", "{}", j.message);
+        assert!(fake.state.lock().unwrap().log.iter().any(|l| l == "lpac profile delete 89852000000000000001 UIM_SLOT=2"));
+        let rec = fake.state.lock().unwrap().records.last().cloned().unwrap();
+        assert_eq!((rec["eid"].as_str(), rec["slot"].as_u64()), (Some(EID2), Some(2)), "{rec}");
+        // single-slot answers keep their shape
+        let (_, v) = Esim::new(Arc::new(Fake::default())).profiles();
+        assert!(v["data"].get("slot").is_none() && v["data"].get("eid").is_none(), "{v}");
+    }
+
+    #[test]
+    fn an_interrupted_write_is_settled_on_its_own_card_only() {
+        // the record names the eUICC in slot 2: settled there
+        let f = u60g();
+        f.state.lock().unwrap().pending = Some(json!({"kind": "delete", "iccid": "89852000000000000007", "eid": EID2, "slot": 2}));
+        let fake = Arc::new(f);
+        let e = Esim::bare(fake.clone());
+        identify(&e);
+        e.settle_interrupted();
+        let j = write_job(&e);
+        assert_eq!(j.status, "done", "{}", j.message);
+        assert!(fake.state.lock().unwrap().log.iter().any(|l| l == "lpac profile list UIM_SLOT=2"));
+        assert!(fake.state.lock().unwrap().pending.is_none());
+        // its card is not here: no job, the record stays, a new write is refused
+        let f = Fake { slots: vec![(1, 1)], ..u60g() };
+        let w = json!({"kind": "delete", "iccid": "89852000000000000007", "eid": EID2, "slot": 2});
+        f.state.lock().unwrap().pending = Some(w.clone());
+        let fake = Arc::new(f);
+        let e = Esim::bare(fake.clone());
+        e.settle_interrupted();
+        for _ in 0..200 {
+            if fake.state.lock().unwrap().slept >= SETTLE_EVERY * LOCATE_TRIES {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!e.busy());
+        assert_eq!(fake.state.lock().unwrap().pending, Some(w));
+        assert_eq!(e.download(br#"{"code":"LPA:1$x$y"}"#).0, 409);
+    }
+
+    /// R5 (handed over by T3): an ICCID with the BCD filler F equals the one without; empty
+    /// equals nothing.
+    #[test]
+    fn iccids_compare_without_the_filler() {
+        assert!(iccid_eq("8985200000000000002F", "8985200000000000002"));
+        assert!(iccid_eq(" 8985200000000000002 ", "8985200000000000002f"));
+        assert!(!iccid_eq("", ""));
+        assert!(!iccid_eq("F", ""));
+        assert!(!iccid_eq("8985200000000000002", "8985200000000000003"));
+    }
+
+    #[test]
+    fn our_own_switch_giving_the_card_a_new_generation_is_not_another_card() {
+        // the enable gives the eUICC a new ICCID, the card table a new generation: still ours,
+        // so the reset, the stack restart and the wait all run
+        let (j, fake, e) = switch_dual(Fake { data_slot: "2", bump_on_enable: true, ..u60g() }, Some(EID2));
+        assert_eq!((j["status"].as_str(), j["reason"].as_str()), (Some("done"), Some("")), "{j}");
+        let s = fake.state.lock().unwrap();
+        assert!(s.log.iter().any(|l| l.ends_with("simreset 2")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("zte_topsw_mdm restart")), "{:?}", s.log);
+        drop(s);
+        // and the card is still picked without naming it (its EID carried to the new generation)
+        let p = e.pick(None).unwrap();
+        assert_eq!((p.slot, p.generation, p.card.map(|c| c.1)), (2, 2, Some(EID2.to_string())));
+    }
+
+    #[test]
+    fn the_data_slot_moving_after_the_reset_stops_the_restart_and_the_reboot() {
+        let f = Fake { data_slot: "2", data_slot_after_reset: "1", converges: false, bump_on_enable: true, ..u60g() };
+        let (j, fake, _) = switch_dual(f, Some(EID2));
+        assert_eq!(j["reason"], "inactive_slot", "{j}");
+        let s = fake.state.lock().unwrap();
+        assert!(s.log.iter().any(|l| l.ends_with("simreset 2")));
+        assert!(!s.log.iter().any(|l| l.contains("zte_topsw_mdm restart")), "{:?}", s.log);
+        assert!(!s.rebooted);
+    }
+
+    #[test]
+    fn another_card_in_the_slot_stops_the_switch_steps() {
+        // a different eUICC turned up in the data slot mid-switch: its EID is not the target's
+        let fake = Arc::new(Fake { data_slot: "2", bump_on_enable: true, converges: false, ..u60g() });
+        let e = Esim::new(fake.clone());
+        identify(&e);
+        let eids = Arc::clone(&e.eids);
+        let h: &dyn Host = &*e.host;
+        eids.lock().unwrap().by_slot.insert(2, (1, Said::Found("89049000000000000000000000009999".into())));
+        assert!(!still_ours(h, &eids, 2, Some(EID2)));
+        eids.lock().unwrap().by_slot.insert(2, (1, Said::Found(EID2.into())));
+        assert!(still_ours(h, &eids, 2, Some(EID2)));
+        // not read yet for this generation: the slot still has a card, so it is not refused
+        eids.lock().unwrap().by_slot.insert(2, (0, Said::Found(EID2.into())));
+        assert!(still_ours(h, &eids, 2, Some(EID2)));
+        // the card is gone
+        let gone = Fake { slots: vec![(1, 1)], data_slot: "2", ..u60g() };
+        assert!(!still_ours(&gone, &eids, 2, Some(EID2)));
+    }
+
+    #[test]
+    fn eid_reads_are_paced_per_slot() {
+        let fake = Arc::new(Fake { eid_out: ["", ""], ..u60g() });
+        let e = Esim::new(fake.clone());
+        let probes = || fake.state.lock().unwrap().log.iter().filter(|l| l.contains("qmi_uim_probe eid 1")).count();
+        let wait = |e: &Esim| {
+            for _ in 0..400 {
+                if e.eids.lock().unwrap().reading.is_empty() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        assert_eq!(e.eid_of_slot(1, 1), EidAnswer::Later);
+        wait(&e);
+        assert_eq!(e.eid_of_slot(1, 1), EidAnswer::Later);
+        wait(&e);
+        assert_eq!(probes(), 1, "not back to back");
+        // answers that say nothing: every EID_GAP, then every EID_SLOW
+        for _ in 0..EID_MISSES {
+            e.host.sleep(EID_GAP);
+            e.eid_of_slot(1, 1);
+            wait(&e);
+        }
+        let n = probes();
+        e.host.sleep(EID_GAP);
+        e.eid_of_slot(1, 1);
+        wait(&e);
+        assert_eq!(probes(), n, "slowed down");
+        e.host.sleep(EID_SLOW);
+        e.eid_of_slot(1, 1);
+        wait(&e);
+        assert_eq!(probes(), n + 1);
+    }
+
+    #[test]
+    fn a_named_card_must_be_the_one_here() {
+        // single-slot unit, card not identified yet: a named eid waits rather than guessing
+        let fake = Arc::new(Fake { slots: vec![(2, 1)], ..u60g() });
+        let e = Esim::new(fake.clone());
+        assert_eq!(e.pick(Some(EID2)).unwrap_err().0, 503);
+        identify(&e);
+        assert_eq!(e.pick(Some(EID2)).unwrap().slot, 2);
+        assert_eq!(e.pick(Some("89049000000000000000000000000001")).unwrap_err().0, 404);
+        assert_eq!(e.download(br#"{"code":"LPA:1$x$y","eid":"89049000000000000000000000000001"}"#).0, 404);
+    }
+
+    #[test]
+    fn the_data_slot_moving_while_identity_waits_stops_the_reboot() {
+        let f = Fake { data_slot: "2", data_slot_after_restart: "1", converges: false, no_data: true, bump_on_enable: true, ..u60g() };
+        let (j, fake, _) = switch_dual(f, Some(EID2));
+        assert_eq!(j["reason"], "inactive_slot", "{j}");
+        let s = fake.state.lock().unwrap();
+        assert!(s.log.iter().any(|l| l.contains("zte_topsw_mdm restart")));
+        assert!(!s.rebooted && s.noted_reboot.is_none(), "{:?}", s.log);
+    }
+
+    #[test]
+    fn the_start_receipt_round_waits_for_the_cards_and_goes_to_the_esim_card() {
+        let fake = Arc::new(u60g());
+        let e = Esim::new(fake.clone());
+        e.receipts_round();
+        assert!(!fake.state.lock().unwrap().log.iter().any(|l| l.starts_with("lpac notification")), "not before the cards are known");
+        assert!(e.receipts.lock().unwrap().next.is_some());
+        identify(&e);
+        e.receipts_round();
+        let s = fake.state.lock().unwrap();
+        assert!(s.log.iter().any(|l| l == "lpac notification list UIM_SLOT=2"), "{:?}", s.log);
     }
 }

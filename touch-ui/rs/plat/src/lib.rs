@@ -5,6 +5,28 @@
 //! the scanout buffer, and [`Panel::commit`] pushes a frame's changes with one DIRTYFB (drm_qpic
 //! costs ~38 ms per DIRTYFB whatever its size).
 
+/// A log line that cannot be written is dropped instead of panicking: std's `eprintln!` panics when
+/// the write fails, and the device build aborts on any panic, so a full /tmp (the UI's output is
+/// /tmp/luyaz-ui.log) would crash the UI at its next line and on every relaunch until the sentinel
+/// gave the panel to the vendor UI. Same as luyaz-core's `main.rs` (P-7); defined before every
+/// `mod`, so the whole crate uses it.
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 pub mod backlight;
 pub mod drm;
 mod evdev;

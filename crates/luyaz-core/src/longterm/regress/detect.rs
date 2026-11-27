@@ -46,6 +46,8 @@ pub struct Check {
     /// Per exit: None = not meant on (or cannot tell), Some(ok).
     pub chill: Option<bool>,
     pub ts: Option<bool>,
+    /// While CHILL forwarding is broken: what mihomo's own health check said (engines::chill_probe).
+    pub chill_why: Option<Said>,
     /// What the home screens' finding and the no-service ledger say now (cellular, exits).
     pub observed: Option<Said>,
     /// Heat care's level is critical (`crate::heat`): None = no temperature read at all.
@@ -275,14 +277,12 @@ impl Regress {
                     let held = p.bad.step(true, k.at.up);
                     if open.is_none() && held >= DOWN_HOLD_S && p.bad_n >= 2 {
                         let d = format!("{name} failing {}m", held / 60);
-                        self.open(
-                            "regress-egress",
-                            Some(name),
-                            &k.at,
-                            d,
-                            None,
-                            k.observed.clone(),
-                        );
+                        let observed = if name == "chill" {
+                            with_said(k.observed.clone(), k.chill_why.clone())
+                        } else {
+                            k.observed.clone()
+                        };
+                        self.open("regress-egress", Some(name), &k.at, d, None, observed);
                     }
                 }
                 Some(true) => {
@@ -556,4 +556,15 @@ pub fn qualifying(l: &Value) -> Vec<(String, f64)> {
         v.push((name.to_string(), uwh / 1000.0 * 3600.0 / obs as f64));
     }
     v
+}
+
+/// Two "also seen" notes as one; either may be missing.
+fn with_said(a: Option<Said>, b: Option<Said>) -> Option<Said> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(Said {
+            zh: format!("{}；{}", a.zh, b.zh),
+            en: format!("{}; {}", a.en, b.en),
+        }),
+        (a, b) => a.or(b),
+    }
 }

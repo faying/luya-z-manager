@@ -49,6 +49,12 @@
 //! in use) and `apn.set_pdp_type` are plain writes (no `op` in the reply), applied after 1 s.
 //! Bodies go into `apn_ops`. `POST /mock/apn` puts the made-up block back.
 //!
+//! Cards (/router/esim, /router/sim; dual-slot design §1 `cards`): `POST /mock/cards?set=`
+//! publishes a made-up `cards` block: `single` (the single-slot unit's one row), `dual1` (plain SIM
+//! in slot 1 for data, an eUICC in slot 2 on standby), `dual2` (eUICCs in both), `pending` (slot
+//! 2's card still being identified), `none` (dual-slot, both slots empty). The EID tails match the
+//! typed mock agent's cards (`fixtures/esim.ts`, scenarios `esim-dual1` / `esim-dual2`).
+//!
 //! Network (/router/mobile-network, /router/network-mode): a confirmed network.set_mode also puts
 //! the mode into the `signal` block's `net_select`; `cellular.set {enabled}` turns mobile data on/off
 //! (`interfaces.cellular.enable` / `connect_status`, body into `apn_ops`); `device.reboot` is counted
@@ -1128,6 +1134,7 @@ pub fn router(raw: &str, speed: f64) -> Router {
         .route("/mock/bands", post(set_bands))
         .route("/mock/cells", post(set_cells))
         .route("/mock/dual", post(set_dual))
+        .route("/mock/cards", post(set_cards))
         .route("/mock/apn", post(reset_apn))
         .route("/mock/net", post(reset_net))
         .route("/v2/api/alerts", get(screen_alerts))
@@ -1620,6 +1627,45 @@ async fn set_dual(State(m): State<Arc<Mock>>, body: axum::Json<Value>) -> Status
     if let Some(b) = cur {
         m.publish("sim", b["data"].clone(), b["observed_at"].as_u64().unwrap_or(0) + 1, false);
     }
+    StatusCode::NO_CONTENT
+}
+
+#[derive(serde::Deserialize)]
+struct SetCards {
+    #[serde(default)]
+    set: String,
+}
+
+/// A made-up `cards` block (`POST /mock/cards?set=`, see the module doc); None = unknown preset.
+pub fn cards_preset(set: &str) -> Option<Value> {
+    let row = |slot: u8, id: &str, role: &str, iccid: &str, eid: &str| {
+        let present = id != "none";
+        json!({"slot": slot, "present": present, "app": if present { "ready" } else { "none" },
+               "provisioned": present, "role": role, "id": id, "iccid_tail": iccid, "eid_tail": eid})
+    };
+    let uim = |slots: Vec<Value>| json!({"source": "uim", "slots": slots});
+    Some(match set {
+        "single" => json!({"source": "sim_info", "slots": [row(1, "eid", "data", "0001", "0041")]}),
+        "dual1" => uim(vec![row(1, "plain", "data", "0009", ""), row(2, "eid", "standby", "0011", "5678")]),
+        "dual2" => uim(vec![row(1, "eid", "data", "0001", "0041"), row(2, "eid", "standby", "0011", "5678")]),
+        "pending" => uim(vec![row(1, "plain", "data", "0009", ""), row(2, "pending", "standby", "0011", "")]),
+        "none" => uim(vec![row(1, "none", "off", "", ""), row(2, "none", "off", "", "")]),
+        _ => return None,
+    })
+}
+
+async fn set_cards(State(m): State<Arc<Mock>>, Query(q): Query<SetCards>) -> StatusCode {
+    let Some(v) = cards_preset(&q.set) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let at = m
+        .blocks
+        .lock()
+        .unwrap()
+        .get("sim")
+        .and_then(|b| b["observed_at"].as_u64())
+        .unwrap_or(0);
+    m.publish("cards", v, at + 1, false);
     StatusCode::NO_CONTENT
 }
 

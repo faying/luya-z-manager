@@ -638,8 +638,18 @@ pub fn sim_mcc_from(block: Option<Json>, direct: impl FnOnce() -> Option<Json>) 
     }
 }
 
-/// `zwrt_zte_mdm.api get_sim_info` as ubus returns it (`sim_states`, `sim_imsi`).
+/// `zwrt_zte_mdm.api get_sim_info` as ubus returns it (`sim_states`, `sim_imsi`). Its `sim_*`
+/// fields are always slot 1's: with data on slot 2 the data card is `sim2_states`/`sim2_imsi`
+/// (dual-slot T7, §6), and nothing while those are not reported (never slot 1's card).
 pub fn mcc_from_sim_info(info: &Json) -> Option<String> {
+    let slot2 = match info.get("current_sim_slot") {
+        Some(Json::String(s)) => s.trim() == "2",
+        Some(Json::Number(n)) => n.trim() == "2",
+        _ => false,
+    };
+    if slot2 {
+        return mcc_from(str_field(info, "sim2_states"), str_field(info, "sim2_imsi"));
+    }
     mcc_from(str_field(info, "sim_states"), str_field(info, "sim_imsi"))
 }
 

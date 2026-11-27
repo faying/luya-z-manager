@@ -1847,3 +1847,115 @@ async fn admitted_at_survives_lock_waits_and_unrelated_invalidations() {
     assert!(err.contains("radio_not_online"), "{err}");
     assert!(sent.try_recv().is_err(), "nothing reached the port");
 }
+
+// ---- 1117-A3：执行者外的只读调用有上限，请求方走了就不发；写不变 ----
+
+#[test]
+fn reads_are_recognised_conservatively() {
+    for (o, m) in [
+        ("zte_nwinfo_api", "nwinfo_get_netinfo"),
+        ("zwrt_zte_mdm.api", "get_sim_info"),
+        ("zwrt_router.api", "router_get_status_no_auth"),
+        ("network.interface.zte_wan", "status"),
+        ("luci-rpc", "getHostHints"),
+        ("system", "board"),
+        ("uci", "get"),
+    ] {
+        assert!(is_read(o, m), "{o} {m}");
+    }
+    for (o, m) in [
+        ("zte_nwinfo_api", "nwinfo_lock_nr_cell"),
+        ("zte_nwinfo_api", "nwinfo_reset_band_cell_setting"),
+        ("zwrt_data", "set_wwaniface"),
+        ("zwrt_wlan", "reload"),
+        ("uci", "set"),
+        ("uci", "commit"),
+        ("ctl", "set"),
+        ("zwrt_wms", "zwrt_wms_send_sms"),
+        ("zwrt_wms", "zwrt_wms_get_and_delete"),
+        ("x", "unknown_verb"),
+    ] {
+        assert!(!is_read(o, m), "{o} {m}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_abandoned_read_is_not_sent() {
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    mock.default_step("hung.get_x", Step::Timeout(Duration::from_secs(8)));
+    let mut waiting = Vec::new();
+    for _ in 0..5 {
+        let e = exec.clone();
+        waiting.push(tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(1), e.call("hung", "get_x", &json!({}))).await
+        }));
+    }
+    for w in waiting {
+        assert!(w.await.unwrap().is_err(), "each caller gave up after 1 s");
+    }
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(mock.times("hung.get_x").len(), 1, "only the one already in flight was sent");
+    assert_eq!(exec.stats().reads_abandoned.load(Ordering::Relaxed), 4);
+    // 之后照常：
+    mock.default_step("hung.get_x", Step::Reply(json!({"v":1}), Duration::ZERO));
+    assert_eq!(exec.call("hung", "get_x", &json!({})).await.unwrap(), json!({"v":1}));
+}
+
+#[tokio::test(start_paused = true)]
+async fn reads_beyond_the_queue_limit_are_refused_at_once() {
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    mock.default_step("hung.get_x", Step::Timeout(Duration::from_secs(8)));
+    let spawn_call = |e: Executor| {
+        tokio::spawn(async move {
+            let r = e.call("hung", "get_x", &json!({})).await;
+            (r, Instant::now())
+        })
+    };
+    // 第一个先被执行者拿走（在途 8 秒），后面的才排队。
+    let mut calls = vec![spawn_call(exec.clone())];
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let t0 = Instant::now();
+    for _ in 0..(READ_QUEUE + 7) {
+        calls.push(spawn_call(exec.clone()));
+    }
+    let mut refused = 0;
+    for c in calls {
+        let (r, at) = c.await.unwrap();
+        let e = r.unwrap_err();
+        if e.to_string().contains("reads already waiting") {
+            refused += 1;
+            assert_eq!(at, t0, "refused without waiting");
+        }
+    }
+    assert_eq!(refused, 7);
+    assert_eq!(exec.stats().reads_refused.load(Ordering::Relaxed), 7);
+    assert_eq!(mock.times("hung.get_x").len(), READ_QUEUE + 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn writes_are_neither_capped_nor_dropped() {
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    mock.default_step("hung.get_x", Step::Timeout(Duration::from_secs(8)));
+    let e = exec.clone();
+    let first = tokio::spawn(async move { e.call("hung", "get_x", &json!({})).await });
+    tokio::task::yield_now().await;
+    // 请求方 1 秒就走了的写，照样发。
+    let e = exec.clone();
+    let gave_up = tokio::time::timeout(Duration::from_secs(1), async move {
+        e.call("ctl", "set", &json!({"i":0})).await
+    })
+    .await;
+    assert!(gave_up.is_err());
+    // 写不计读的上限。
+    let mut writes = Vec::new();
+    for i in 1..=(READ_QUEUE + 8) {
+        let e = exec.clone();
+        writes.push(tokio::spawn(async move { e.call("ctl", "set", &json!({"i":i})).await }));
+    }
+    for w in writes {
+        assert!(w.await.unwrap().is_ok());
+    }
+    let _ = first.await;
+    assert_eq!(mock.times("ctl.set").len(), READ_QUEUE + 9);
+    assert_eq!(exec.stats().reads_refused.load(Ordering::Relaxed), 0);
+}

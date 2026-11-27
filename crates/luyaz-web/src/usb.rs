@@ -211,6 +211,28 @@ fn dash() -> String {
     "—".into()
 }
 
+/// A USB mode as people read it: `user` (none of the switchable ones: plain charging and the
+/// modem's own functions) in words, the rest as their names (11-14 the pages showed 「user」 and
+/// 「USER」).
+pub fn mode_word(l: Lang, m: &str) -> String {
+    match m.to_ascii_lowercase().as_str() {
+        "user" => l.pick("normal (none of the above)", "普通（不是上面几种）").to_owned(),
+        other => other.to_uppercase(),
+    }
+}
+
+/// The USB-C CC line as people read it (`no_cc` = nothing plugged into the port).
+fn cc_word(l: Lang, cc: &str) -> String {
+    match cc {
+        "no_cc" => l.pick("nothing connected", "没接东西").to_owned(),
+        "cc1" | "cc2" => match l {
+            Lang::En => format!("connected ({})", cc.to_uppercase()),
+            Lang::Zh => format!("已连接（{}）", cc.to_uppercase()),
+        },
+        other => other.to_owned(),
+    }
+}
+
 fn yes_no(
     l: Lang,
     v: Option<bool>,
@@ -331,7 +353,7 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
         Row {
             id: "usb-cc",
             label: "USB-C CC",
-            value: p.and_then(|p| p.cc.clone()).unwrap_or_else(dash),
+            value: p.and_then(|p| p.cc.as_deref().map(|c| cc_word(l, c))).unwrap_or_else(dash),
             sub: None,
             mono: true,
             data: true,
@@ -416,7 +438,7 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
         mode_note: policy_note(a, "usb.mode.set", l),
         mode_stale,
         fixed,
-        other: mode.filter(|_| known.is_none()),
+        other: mode.filter(|_| known.is_none()).map(|m| mode_word(l, &m)),
         pb,
         pb_dis: pb.is_none()
             || pb_stale
@@ -446,8 +468,10 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
                 "给 USB-C 口上的手机 18W 快充，不上网；拔掉就结束。「充电 + 上网」在触屏上选。",
             )
         },
+        // the same sentence as the mode's (both unverified, 11-14): said once, by the mode
         pb_note: policy_note(a, "usb.attach.fast_charge", l)
-            .filter(|_| policy_gate(a, "usb.attach.fast_charge", l).is_none()),
+            .filter(|_| policy_gate(a, "usb.attach.fast_charge", l).is_none())
+            .filter(|n| fixed || policy_note(a, "usb.mode.set", l) != Some(*n)),
         pb_busy: busy.pb,
         port,
         port_stale: a_stale,

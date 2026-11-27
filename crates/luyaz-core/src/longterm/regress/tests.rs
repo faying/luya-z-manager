@@ -115,6 +115,23 @@ fn a_reboot_row_escalates_at_2_4_8_and_ends_quiet() {
     assert!(!r.pending().iter().any(|p| p.id.ends_with("-close")));
 }
 
+/// A reboot row opened without a trusted clock, seen from a later boot: it can never be timed by
+/// its own clock, so it ends once the later boot has been up past the window (u60g 11-17).
+#[test]
+fn an_untimed_reboot_row_ends_after_a_later_boot_stays_up() {
+    let mut r = fresh();
+    let untimed = At { boot: "c11692db".into(), up: 64, wall: 0, ok: false };
+    r.boot(&json!({"code": 1132}), &untimed, "c11692db", None);
+    assert_eq!(r.file.open.len(), 1);
+    let later = |up: i64| At { boot: "e17381fc".into(), up, wall: W0 + up, ok: true };
+    sync::expire(&mut r, &later(3600));
+    assert_eq!(r.file.open.len(), 1, "not yet: the later boot is young");
+    sync::expire(&mut r, &later(6 * 3600 + 1));
+    assert!(r.file.open.is_empty());
+    assert_eq!(r.file.closed[0].end.as_deref(), Some("quiet"));
+    assert!(!r.pending().iter().any(|p| p.id.ends_with("-close")));
+}
+
 /// A reboot cuts interval incidents (the reboot is reported by itself).
 #[test]
 fn a_new_boot_cuts_open_interval_incidents() {
@@ -1133,4 +1150,40 @@ fn incident_details_refuse_bad_ids_and_read_archived_evidence() {
     let v = io::incident_in(&r.file, &d, &i.id, &q).unwrap();
     assert_eq!(v["archived"], false);
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// 11-14: what mihomo's own health check said goes into a CHILL exit incident's "also seen", after
+/// what the home screens say; a Tailscale one does not get it.
+#[test]
+fn a_chill_exit_incident_carries_mihomos_health_check() {
+    let mut r = fresh();
+    let mut k = chk(0);
+    k.chill = Some(false);
+    k.ts = Some(false);
+    k.observed = Some(Said {
+        zh: "首页".into(),
+        en: "home".into(),
+    });
+    k.chill_why = Some(Said {
+        zh: "mihomo 对 TW 最近一次健康检查失败".into(),
+        en: "mihomo's last health check of TW failed".into(),
+    });
+    for up in (0..=300).step_by(60) {
+        k.at = at(up);
+        r.check(&k);
+    }
+    let by = |sub: &str| {
+        r.file
+            .open
+            .iter()
+            .find(|i| i.sub.as_deref() == Some(sub))
+            .and_then(|i| i.observed.clone())
+            .unwrap()
+    };
+    assert_eq!(
+        by("chill").en,
+        "home; mihomo's last health check of TW failed"
+    );
+    assert_eq!(by("chill").zh, "首页；mihomo 对 TW 最近一次健康检查失败");
+    assert_eq!(by("tailscale").en, "home");
 }

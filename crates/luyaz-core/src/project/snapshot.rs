@@ -770,6 +770,17 @@ pub(crate) fn data_on_slot2(sim: &Value) -> bool {
     integer(sim, "current_sim_slot") == 2 && !string(sim, "sim2_iccid").is_empty()
 }
 
+/// The data card's ICCID from a raw `get_sim_info` (T5, R9/D11): `sim2_iccid` when data is
+/// on slot 2, empty when that is not reported yet (never slot 1's card), else `sim_iccid`.
+/// Single-slot units report slot 1 and read exactly the old field.
+pub(crate) fn data_iccid(sim: &Value) -> String {
+    if integer(sim, "current_sim_slot") == 2 {
+        string(sim, "sim2_iccid")
+    } else {
+        string(sim, "sim_iccid")
+    }
+}
+
 /// A get_sim_info field for the data card: `sim_imsi` / `pin_status` read as
 /// `sim2_imsi` / `sim2_pin_status` when data is on slot 2.
 pub(crate) fn card_field(sim: &Value, slot2: bool, key: &str) -> String {
@@ -1982,3 +1993,9 @@ mod traffic_number_tests {
         assert_eq!(t["rx_bytes"], 0, "not a number: 0, as a missing field");
     }
 }
+
+/// Main-device `/v2` `sim` golden (dual-slot-removable.md R6/D8 ①); a file of its own so the
+/// no-IO check above this layer does not see its fixture reads.
+#[cfg(test)]
+#[path = "snapshot_sim_golden.rs"]
+mod main_device_sim_golden;

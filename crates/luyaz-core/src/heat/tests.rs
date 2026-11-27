@@ -41,3 +41,37 @@ fn no_zones_is_no_reading() {
     assert_eq!(read_zones(&dir), (None, None));
     assert_eq!(read_zones(&dir.join("missing")), (None, None));
 }
+
+/// The notice goes through the real queue (ASCII only) and still reads in Chinese on the web:
+/// core 1.98.4 wrote Chinese here and the queue kept ` 45 C 54 C`.
+#[test]
+fn the_notice_survives_the_queue_and_reads_in_chinese() {
+    let dir = tmp("notice-queue");
+    let a = luyaz_api::alerts::Alerts::at(&dir);
+    let r = Reading {
+        batt: Some(45),
+        chip: None,
+        plugged: Some(true),
+    };
+    let plans = [(true, true), (true, false), (false, true), (false, false)];
+    for (i, p) in plans.iter().enumerate() {
+        let id = format!("34d373b7-{}", 9_899_371 + i);
+        a.add_once(&id, NOTICE_KIND, &notice_text(&r, *p), 1_794_000_000, 1)
+            .unwrap();
+    }
+    let got: Vec<String> = a
+        .events()
+        .iter()
+        .map(|ev| luyaz_api::alerts::detail_zh(&ev.kind, &ev.text).unwrap())
+        .collect();
+    let head = "电池 45 °C、芯片 ? °C";
+    assert_eq!(
+        got,
+        [
+            format!("{head}：暂停充电、CHILL 降到省电档，凉下来自动恢复"),
+            format!("{head}：暂停充电，凉下来自动恢复"),
+            format!("{head}：CHILL 降到省电档，凉下来自动恢复"),
+            format!("{head}：放到通风的地方"),
+        ]
+    );
+}

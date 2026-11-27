@@ -429,6 +429,9 @@ pub struct Shared {
     started: bool,
     pub records: BTreeMap<String, Record>,
     pub aliases: BTreeMap<String, String>,
+    /// P-8: aliases.json was written by a newer core (its `version` above ours). This one reads
+    /// none of it and never writes over it: back on the newer core, the owner's names are there.
+    aliases_newer: bool,
     oui: Option<classify::Oui>,
     loaded: bool,
     running: bool,
@@ -473,6 +476,13 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
+/// A file with a `version` above [`VERSION`]: a newer core wrote it (P-8, after a rollback).
+fn newer_than_ours(path: &Path) -> bool {
+    read_json::<serde_json::Value>(path)
+        .and_then(|v| v["version"].as_u64())
+        .is_some_and(|n| n > VERSION)
+}
+
 /// tmp + rename, mode 0600, the directory 0700.
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
@@ -512,6 +522,10 @@ impl Shared {
                     .collect()
             })
             .unwrap_or_default();
+        let aliases_newer = newer_than_ours(&dir.join("aliases.json"));
+        if aliases_newer {
+            eprintln!("lanid: aliases.json is from a newer core: not read, not written over");
+        }
         let mut s = Shared {
             dir: dir.to_owned(),
             persist,
@@ -521,6 +535,7 @@ impl Shared {
                 .filter_map(|(m, r)| Some((mac_str(&parse_mac(&m)?), r)))
                 .collect(),
             aliases,
+            aliases_newer,
             oui: classify::Oui::load(&dir.join("oui.tsv")),
             loaded: false,
             running: false,
@@ -677,6 +692,9 @@ impl Shared {
 
     /// Writes aliases.json, reads it back, then takes `next` as the aliases.
     fn write_aliases(&mut self, next: BTreeMap<String, String>) -> Result<(), String> {
+        if self.aliases_newer {
+            return Err("aliases.json is from a newer core: left as it is".into());
+        }
         let path = self.dir.join("aliases.json");
         let bytes = serde_json::to_vec(&AliasesFile {
             version: VERSION,

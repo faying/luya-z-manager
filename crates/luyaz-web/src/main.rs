@@ -17,6 +17,7 @@
 //! `luyaz-web serve` is the page server; `luyaz-web mock --replay <capture>` stands in for u60d.
 
 mod agent;
+mod netio;
 mod agent_act;
 mod agent_api;
 mod alerts_incidents;
@@ -81,6 +82,7 @@ mod sms_forward;
 mod ladder_page;
 mod speedtest;
 mod sse;
+mod status_block;
 mod topbar;
 mod battery_history;
 mod trends;
@@ -501,6 +503,7 @@ async fn accept_loop(
     mut stop: tokio::sync::watch::Receiver<bool>,
     max_conns: usize,
     header_timeout: Duration,
+    body_stall: Duration,
     gate: Arc<guard::IfaceGate>,
 ) {
     let addr = l.local_addr().map(|a| a.to_string()).unwrap_or_default();
@@ -536,6 +539,7 @@ async fn accept_loop(
             drop(sock);
             continue;
         };
+        netio::tune(&sock);
         let router = router.clone();
         let (slots, spare) = (slots.clone(), spare.clone());
         tokio::spawn(async move {
@@ -552,6 +556,7 @@ async fn accept_loop(
             };
             let svc = hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
                 req.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+                let req = netio::guard_body(req, body_stall);
                 let mut r = router.clone();
                 async move { tower_service::Service::call(&mut r, req).await }
             });
@@ -573,7 +578,7 @@ async fn serve_all(binds: Vec<String>, router: Router, every: Duration, gate: gu
     let (stop_tx, stop) = tokio::sync::watch::channel(false);
     let mut tasks = Vec::new();
     let serve = move |l: tokio::net::TcpListener, router: Router, stop: tokio::sync::watch::Receiver<bool>| {
-        accept_loop(l, router, stop, MAX_CONNS, HEADER_TIMEOUT, gate.clone())
+        accept_loop(l, router, stop, MAX_CONNS, HEADER_TIMEOUT, netio::BODY_STALL, gate.clone())
     };
     let mut bound = 0;
     for addr in binds.iter().map(|b| b.trim()).filter(|b| !b.is_empty()) {
@@ -714,7 +719,7 @@ mod tests {
             }),
         );
         let (tx, rx) = tokio::sync::watch::channel(false);
-        tokio::spawn(accept_loop(l, router, rx, 1, Duration::from_millis(200), Arc::new(guard::IfaceGate::new("lo"))));
+        tokio::spawn(accept_loop(l, router, rx, 1, Duration::from_millis(200), netio::BODY_STALL, Arc::new(guard::IfaceGate::new("lo"))));
 
         let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -740,7 +745,7 @@ mod tests {
         let addr = l.local_addr().unwrap();
         let router = Router::new().route("/", get(|| async { "ok" }));
         let (tx, rx) = tokio::sync::watch::channel(false);
-        tokio::spawn(accept_loop(l, router, rx, 64, Duration::from_millis(300), Arc::new(guard::IfaceGate::new("lo"))));
+        tokio::spawn(accept_loop(l, router, rx, 64, Duration::from_millis(300), netio::BODY_STALL, Arc::new(guard::IfaceGate::new("lo"))));
         let mut held = Vec::new();
         for _ in 0..guard::PER_PEER {
             held.push(tokio::net::TcpStream::connect(addr).await.unwrap());
@@ -761,6 +766,38 @@ mod tests {
         let mut rest = Vec::new();
         tokio::time::timeout(Duration::from_secs(2), ka.read_to_end(&mut rest)).await.expect("idle keep-alive closed").ok();
         assert!(started.elapsed() < Duration::from_millis(1500));
+        let _ = tx.send(true);
+    }
+
+    /// ext-1117 A1: a POST whose body stops after the headers no longer holds its connection (and
+    /// slot) for ever: the body read fails after the stall timer, the connection ends, the slot is
+    /// free for the next client. A body that arrives is served as before.
+    #[tokio::test]
+    async fn a_stalled_body_frees_its_slot() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let router = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .route("/up", post(|b: axum::body::Bytes| async move { b.len().to_string() }));
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(accept_loop(l, router, rx, 1, Duration::from_secs(5), Duration::from_millis(300), Arc::new(guard::IfaceGate::new("lo"))));
+
+        let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stalled.write_all(b"POST /up HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n0123456789").await.unwrap();
+        let started = std::time::Instant::now();
+        let mut got = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), stalled.read_to_end(&mut got)).await.expect("stalled upload ended").ok();
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        let got = String::from_utf8_lossy(&got);
+        assert!(got.is_empty() || !got.starts_with("HTTP/1.1 200"), "{got}");
+
+        // the only slot is free again; a whole body is served
+        let mut next = tokio::net::TcpStream::connect(addr).await.unwrap();
+        next.write_all(b"POST /up HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 3\r\n\r\nabc").await.unwrap();
+        let mut out = String::new();
+        tokio::time::timeout(Duration::from_secs(2), next.read_to_string(&mut out)).await.unwrap().unwrap();
+        assert!(out.starts_with("HTTP/1.1 200") && out.ends_with('3'), "{out}");
         let _ = tx.send(true);
     }
 

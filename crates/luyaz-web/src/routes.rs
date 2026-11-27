@@ -265,7 +265,7 @@ pub static ROUTES: &[Route] = &[
         "双卡",
         "SimCard",
         Network,
-        "dual sim 双卡 双卡切换 主卡 内置卡 shuangka",
+        "dual sim slot 1 slot 2 双卡 双卡切换 主卡 卡槽 shuangka",
         hidden
     ),
     r!(

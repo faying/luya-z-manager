@@ -6,6 +6,27 @@
 //! A real (non-shadow) run first takes the one-sentinel lock (`sys::INSTANCE_LOCK`, env
 //! `LUYAZ_SENTINEL_LOCK` for tests); held by another copy = exit 3 before anything is touched.
 
+/// A log line that cannot be written is dropped instead of panicking: std's `eprintln!` panics when
+/// the write fails, and the sentinel aborts on any panic, so a full /tmp (its stderr is
+/// /tmp/luyaz-sentinel.out) would leave the screen and the core's restarts with no one. Same as
+/// luyaz-core's `main.rs` (P-7); defined before anything else, so the whole crate uses it.
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 /// Read from the file by the core (luyaz-core versions.rs), never by running the program.
 #[used]
 static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"), ";");

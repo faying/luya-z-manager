@@ -39,6 +39,20 @@ const WATCH_SAME_BOOT_S: u64 = 3600;
 const WATCH_OTHER_BOOT_S: u64 = 1800;
 /// Procd gave up on it, or someone stopped it: rounds (60 s) before it counts as gone.
 const WATCH_ABSENT_ROUNDS: u32 = 3;
+/// A wall step up to this size is a correction (11-12: the wall moved back 7 s, source unknown; the
+/// clock stayed revoked for two days, holding every alert SMS). Larger steps stay latched until the
+/// old offset returns or the device reboots, except the first network time below.
+pub const RESTEP_MAX_S: u64 = 600;
+/// Rounds (60 s each) the stepped offset must hold, the step's own round included, before it is
+/// trusted again.
+pub const RESTEP_ROUNDS: u32 = 3;
+/// The first time the clock is set after boot can be hours off the boot wall (the firmware's time
+/// mode is NITZ and its SNTP state never reports done; 10-26 the wall moved +8 h at 122 s, why the
+/// boot wall was behind is not established). Seen in this window, once a boot, a step up to
+/// [`FIRST_SYNC_MAX_S`] either way (every time zone) is trusted after the same [`RESTEP_ROUNDS`];
+/// later hour-scale steps stay latched.
+pub const FIRST_SYNC_WINDOW_S: u64 = 900;
+pub const FIRST_SYNC_MAX_S: u64 = 26 * 3600;
 /// A way in down this long after a promote goes back; nobody is waiting, so far longer than the
 /// ship's own 60 s.
 const WATCH_CONN_S: u64 = 600;
@@ -400,8 +414,14 @@ pub struct ClockState {
     pub boot: String,
     /// Initial wall-minus-boot offset, only used to explain a pre-sync forward leap.
     pub first: Option<i64>,
-    /// Last accepted estimate. A later step cannot overwrite it, including across restarts.
+    /// Last accepted estimate. A later step cannot overwrite it, including across restarts;
+    /// only a small step that then holds still ([`RESTEP_MAX_S`], [`RESTEP_ROUNDS`]) moves it.
     pub anchor: Option<i64>,
+    /// After a small step: the new offset and how many rounds in a row it has held.
+    pub pending: Option<(i64, u32)>,
+    /// This boot's first network time set ([`FIRST_SYNC_WINDOW_S`]) was taken. A state written
+    /// before the field existed counts as taken.
+    pub first_sync_done: bool,
     pub last: Option<ClockEvidence>,
     pub persisted_at: Option<u64>,
 }
@@ -409,7 +429,9 @@ pub struct ClockState {
 impl ClockState {
     fn encode(&self) -> String {
         serde_json::json!({"boot": self.boot, "first": self.first, "anchor": self.anchor,
-            "last": self.last, "persisted_at": self.persisted_at})
+            "last": self.last, "persisted_at": self.persisted_at,
+            "pending": self.pending.map(|(o, n)| [o, i64::from(n)]),
+            "first_sync_done": self.first_sync_done})
         .to_string()
     }
 
@@ -421,6 +443,10 @@ impl ClockState {
             anchor: v["anchor"].as_i64(),
             last: serde_json::from_value(v["last"].clone()).ok(),
             persisted_at: v["persisted_at"].as_u64(),
+            pending: v["pending"][0]
+                .as_i64()
+                .zip(v["pending"][1].as_u64().and_then(|n| u32::try_from(n).ok())),
+            first_sync_done: v["first_sync_done"].as_bool().unwrap_or(true),
         }
     }
 }
@@ -826,6 +852,7 @@ impl Worker {
         }
         let first = *self.clock.first.get_or_insert(off);
         let last_wall = num(io.read(&self.paths.wall_last));
+        self.restep(io, off, at.seconds);
         let source = if self
             .clock
             .anchor
@@ -880,6 +907,47 @@ impl Worker {
         }
         io.write(&path, &evidence.encode());
         self.clock.last = Some(evidence);
+    }
+
+    /// A small step, or this boot's first network time set ([`FIRST_SYNC_WINDOW_S`]), that holds
+    /// still for [`RESTEP_ROUNDS`] rounds becomes the new anchor (the rounds until then still
+    /// report `revoked`, so readers see the step). Anything else clears the count.
+    fn restep(&mut self, io: &mut dyn WorkerIo, off: i64, boot_s: u64) {
+        let Some(anchor) = self.clock.anchor else {
+            self.clock.pending = None;
+            return;
+        };
+        let step = off.abs_diff(anchor);
+        let held = match self.clock.pending {
+            Some((p, n)) if off.abs_diff(p) <= WALL_STEP_TOLERANCE_S => n,
+            _ => 0,
+        };
+        let first_sync = step > RESTEP_MAX_S
+            && step <= FIRST_SYNC_MAX_S
+            && !self.clock.first_sync_done
+            // seen in the window; a hold that began there may finish after it
+            && (held > 0 || boot_s <= FIRST_SYNC_WINDOW_S);
+        if step <= WALL_STEP_TOLERANCE_S || (step > RESTEP_MAX_S && !first_sync) {
+            self.clock.pending = None;
+            return;
+        }
+        let n = held + 1;
+        if n < RESTEP_ROUNDS {
+            self.clock.pending = Some((off, n));
+            return;
+        }
+        io.log(&format!(
+            "clock: {}wall stepped {} s and held {n} rounds; trusted again",
+            if first_sync {
+                "first network time after boot: "
+            } else {
+                ""
+            },
+            off - anchor
+        ));
+        self.clock.first_sync_done |= first_sync;
+        self.clock.anchor = Some(off);
+        self.clock.pending = None;
     }
 
     // ── §4: is the core healthy ─────────────────────────────────────────────

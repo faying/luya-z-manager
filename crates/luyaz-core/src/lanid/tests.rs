@@ -8,6 +8,30 @@ use super::*;
 mod fixtures;
 use fixtures::*;
 
+/// P-8: the aliases file keeps its shape (crate::state_format).
+#[test]
+fn the_aliases_file_keeps_its_format() {
+    crate::state_format::check("aliases.json", crate::state_format::serde::<AliasesFile>);
+}
+
+/// P-8: after a rollback, an aliases file from a newer core is left alone: not read as empty and
+/// then written over (the owner's names would be gone when the newer core came back).
+#[test]
+fn an_aliases_file_from_a_newer_core_is_not_written_over() {
+    let d = tmp("newer-aliases");
+    let newer = r#"{"version":2,"names":{"02:00:5e:00:53:01":"laptop"}}"#;
+    std::fs::write(d.join("aliases.json"), newer).unwrap();
+    let mut s = on(&d);
+    assert!(s.aliases.is_empty());
+    assert!(s.set_alias(&private(2), "phone").is_err());
+    assert_eq!(std::fs::read_to_string(d.join("aliases.json")).unwrap(), newer);
+    // our own version is written as before
+    std::fs::write(d.join("aliases.json"), r#"{"version":1,"aliases":{}}"#).unwrap();
+    let mut s = on(&d);
+    assert!(s.set_alias(&private(2), "phone").is_ok());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lanid-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);

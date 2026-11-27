@@ -24,6 +24,8 @@ pub struct Track {
     misses: u32,
     /// last verdict and when (unix seconds)
     last: Option<(bool, u64)>,
+    /// When the verdict turned to broken: what mihomo's own health check said, (zh, en).
+    why: Option<(String, String)>,
 }
 
 impl Track {
@@ -33,6 +35,7 @@ impl Track {
             Probe::Up => {
                 self.misses = 0;
                 self.last = Some((true, now));
+                self.why = None;
             }
             Probe::Down => {
                 self.misses += 1;
@@ -59,6 +62,14 @@ pub fn wanted(meant_on: bool, idle_paused: bool, busy: bool, clients: Option<i64
 fn track() -> &'static Mutex<Track> {
     static T: std::sync::OnceLock<Mutex<Track>> = std::sync::OnceLock::new();
     T.get_or_init(Default::default)
+}
+
+/// While forwarding is broken: what mihomo's own health check said when it broke, (zh, en).
+pub fn why() -> Option<(String, String)> {
+    let t = track().lock().ok()?;
+    (t.now(luyaz_netwatch::now_unix()) == Some(false))
+        .then(|| t.why.clone())
+        .flatten()
 }
 
 /// For `network.health`: Some(false) = forwarding broken, Some(true) = got through lately.
@@ -89,7 +100,7 @@ pub fn spawn(hub: Arc<crate::block::Hub>) {
             if !go || !budget.reserve(BootTime::read().as_ref()) {
                 continue;
             }
-            let p = crate::ops::chill::probe().await;
+            let p = crate::ops::chill::probe_confirmed().await;
             let before = now();
             if let Ok(mut t) = track().lock() {
                 t.note(p, luyaz_netwatch::now_unix());
@@ -97,6 +108,12 @@ pub fn spawn(hub: Arc<crate::block::Hub>) {
             let after = now();
             if before != after {
                 eprintln!("[chill-probe] {p:?}: forwarding {after:?} (was {before:?})");
+                if after == Some(false) {
+                    let why = crate::ops::chill::exit_note().await;
+                    if let Ok(mut t) = track().lock() {
+                        t.why = why;
+                    }
+                }
             }
         }
     });
@@ -137,5 +154,15 @@ mod tests {
         assert!(!wanted(false, false, false, Some(2)));
         assert!(!wanted(true, true, false, Some(2)));
         assert!(!wanted(true, false, true, Some(2)));
+    }
+
+    #[test]
+    fn the_reason_goes_with_the_next_success() {
+        let mut t = Track::default();
+        t.note(Probe::Down, 0);
+        t.note(Probe::Down, 600);
+        t.why = Some(("zh".into(), "en".into()));
+        t.note(Probe::Up, 1200);
+        assert_eq!(t.why, None);
     }
 }

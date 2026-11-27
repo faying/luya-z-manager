@@ -27,13 +27,27 @@ fn raise(epoch: u64, code: u64, kind: &str, text: &str) {
     let Some(id) = event_id(&crate::longterm::boot::proc_boot_id(), epoch, code) else {
         return;
     };
+    raise_id(&id, kind, text);
+}
+
+/// An event not tied to the data card's epoch (the card table's, dual-slot D2/D3): its id is
+/// this boot's id and `key`, so a repeat with the same key in this boot is dropped.
+pub fn note(key: &str, kind: &str, text: &str) {
+    let boot = crate::longterm::boot::proc_boot_id();
+    let Some(b) = boot.get(..8).filter(|b| b.bytes().all(|c| c.is_ascii_hexdigit())) else {
+        return;
+    };
+    raise_id(&format!("{}-{key}", b.to_ascii_lowercase()), kind, text);
+}
+
+fn raise_id(id: &str, kind: &str, text: &str) {
     let dir = crate::state::host_path(luyaz_api::alerts::DIR);
     let a = luyaz_api::alerts::Alerts::at(Path::new(&dir));
     let up = std::fs::read_to_string(crate::state::host_path("/proc/uptime"))
         .ok()
         .and_then(|s| s.split('.').next()?.parse::<u64>().ok())
         .unwrap_or(0);
-    match a.add_once(&id, kind, text, luyaz_api::alerts::now(), up) {
+    match a.add_once(id, kind, text, luyaz_api::alerts::now(), up) {
         Ok((_, true)) => eprintln!("[sim_alerts] {kind}: {text}"),
         Ok(_) => {}
         Err(e) => eprintln!("[sim_alerts] {kind}: {e}"),
@@ -52,20 +66,21 @@ pub fn phase(epoch: u64, phase: &'static str) {
         }
         *l = phase;
     }
+    if let Some((code, kind, text)) = phase_alert(epoch, phase) {
+        raise(epoch, code, kind, &text);
+    }
+}
+
+/// The alert a phase raises: (event code, kind, text); `None` for the quiet phases.
+fn phase_alert(epoch: u64, phase: &str) -> Option<(u64, &'static str, String)> {
     match phase {
-        "changed" => raise(
-            epoch,
-            1,
-            CHANGED,
-            &format!("SIM identity changed (epoch {epoch})"),
-        ),
-        "stalled" => raise(
-            epoch,
+        "changed" => Some((1, CHANGED, format!("SIM identity changed (epoch {epoch})"))),
+        "stalled" => Some((
             2,
             STALLED,
-            &format!("SIM change stuck without data (epoch {epoch})"),
-        ),
-        _ => {}
+            format!("SIM change stuck without data (epoch {epoch})"),
+        )),
+        _ => None,
     }
 }
 
@@ -116,5 +131,41 @@ mod tests {
         ));
         assert_eq!(event_id("", 1, 1), None);
         assert_eq!(event_id("not-hex!-x", 1, 1), None);
+    }
+
+    /// Dual-slot regression contract (dual-slot-removable.md R6/D8 ④): a single-slot device
+    /// that has its card pulled and another put in raises `sim-changed` once, with this exact
+    /// text (the SMS/inbox wording is pinned in luyaz-alerts). The card table must not change it.
+    #[test]
+    fn a_single_slot_card_swap_raises_sim_changed_as_before() {
+        use crate::sim_identity::{Identity, SimIdentity};
+        let t0 = std::time::Instant::now();
+        let at = |s| t0 + std::time::Duration::from_secs(s);
+        let mut s = SimIdentity::default();
+        let a = Identity::new("89860100000000000011", "460010000000001");
+        let b = Identity::new("89860300000000000022", "460110000000002");
+        s.observe(a.clone(), true, at(0));
+        s.observe(Identity::new("", ""), false, at(10));
+        assert_eq!((s.phase().as_str(), s.epoch()), ("leaving", 1));
+        assert_eq!(phase_alert(s.epoch(), s.phase().as_str()), None);
+        s.observe(b, false, at(30));
+        assert_eq!((s.phase().as_str(), s.epoch()), ("changed", 1));
+        assert_eq!(
+            phase_alert(s.epoch(), s.phase().as_str()),
+            Some((
+                1,
+                "sim-changed",
+                "SIM identity changed (epoch 1)".to_string()
+            ))
+        );
+        assert_eq!(
+            phase_alert(2, "stalled"),
+            Some((
+                2,
+                "sim-stalled",
+                "SIM change stuck without data (epoch 2)".to_string()
+            ))
+        );
+        assert_eq!(phase_alert(1, "online"), None);
     }
 }

@@ -33,6 +33,26 @@
 //! The lock is the same in both processes: an in-process flag here (one per process) and the flock on
 //! [`LOCK_FILE`] that the sentinel and the core's `/control` (D3) take too.
 
+/// A log line that cannot be written is dropped instead of panicking (std's `eprintln!` panics,
+/// and the core's device build aborts on any panic: a full /tmp stopped it on 10-26). Same as
+/// luyaz-core's `main.rs` (P-7); defined before every `mod`, so the whole crate uses it.
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
@@ -278,6 +298,52 @@ fn poll_until(deadline: Duration, mut done: impl FnMut() -> bool) -> bool {
     }
 }
 
+/// The vendor's own verdict on the last Wi-Fi bring-up. `/lib/wifi/zteqcawifi.sh` waits 60 s for
+/// hostapd and then writes `power_on failed` here (B31: QCMAP refuses a 3-AP layout, and
+/// `zte_topsw_wlan` then flips the master switch back off). Reading it turns "nothing came up for
+/// 45 s" into an immediate, explained failure.
+const LOAD_STATUS: &str = "/tmp/zte_wlan_load_status";
+
+/// Modification time of the status file, taken before a write/reload so an old `failed` left by an
+/// earlier attempt is not mistaken for this one.
+fn load_status_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(LOAD_STATUS).and_then(|m| m.modified()).ok()
+}
+
+/// `true` when the status file says `failed` and was written after `before`. Pure: the tests drive it.
+fn load_failed_since(
+    before: Option<std::time::SystemTime>,
+    now: Option<(std::time::SystemTime, &str)>,
+) -> bool {
+    let Some((mtime, text)) = now else { return false };
+    text.to_ascii_lowercase().contains("failed") && before.is_none_or(|b| mtime > b)
+}
+
+/// Read the file now and apply `load_failed_since`. A read error is "not failed" (never a reason to abort).
+fn power_on_failed_since(before: Option<std::time::SystemTime>) -> bool {
+    let (Some(mtime), Ok(text)) = (load_status_mtime(), std::fs::read_to_string(LOAD_STATUS)) else {
+        return false;
+    };
+    load_failed_since(before, Some((mtime, &text)))
+}
+
+/// `poll_until` that also stops at once when `abort` turns true. `(done, aborted)`.
+fn poll_until_abort(deadline: Duration, mut done: impl FnMut() -> bool, mut abort: impl FnMut() -> bool) -> (bool, bool) {
+    let start = Instant::now();
+    loop {
+        if done() {
+            return (true, false);
+        }
+        if abort() {
+            return (false, true);
+        }
+        if start.elapsed() >= deadline {
+            return (false, false);
+        }
+        std::thread::sleep(POLL_EVERY);
+    }
+}
+
 /// Is anything broadcasting right now? Cheap, read-only, no side effects.
 ///
 /// Exists so callers can ask "does this need repairing?" before reaching for
@@ -331,6 +397,7 @@ pub fn apply(h: &dyn Host, ap_2g: bool, ap_5g: bool) -> Result<Value, String> {
 pub fn apply_locked(h: &dyn Host, lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Result<Value, String> {
     // The stock UI's "Wi-Fi off" is its own master switch, not these flags:
     // under it, enabling the APs does nothing. Turning on means that one too.
+    let status_before = load_status_mtime();
     let vendor_on = vendor_on_if_off(h, lk, ap_2g || ap_5g);
     // Writes and reloads even when uci already says so (a retry repairs that
     // way). Synchronous, unlike wifi_set's backgrounded fire-and-forget. A
@@ -341,18 +408,23 @@ pub fn apply_locked(h: &dyn Host, lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Re
     };
 
     let want_any_on = ap_2g || ap_5g;
-    let verified = if want_any_on {
-        poll_until(ON_DEADLINE, || {
-            hostapd_count() > 0 && (!ap_2g || hostapd_enabled(IFACE_2G)) && (!ap_5g || hostapd_enabled(IFACE_5G))
-        })
+    let (verified, power_on_failed) = if want_any_on {
+        poll_until_abort(
+            ON_DEADLINE,
+            || hostapd_count() > 0 && (!ap_2g || hostapd_enabled(IFACE_2G)) && (!ap_5g || hostapd_enabled(IFACE_5G)),
+            || power_on_failed_since(status_before),
+        )
     } else {
-        poll_until(OFF_DEADLINE, || hostapd_count() == 0)
+        (poll_until(OFF_DEADLINE, || hostapd_count() == 0), false)
     };
 
     let mut data = observe(h);
     if let Some(obj) = data.as_object_mut() {
         obj.insert("verified".into(), json!(verified));
         obj.insert("target".into(), json!({"ap_2g": ap_2g, "ap_5g": ap_5g}));
+        if power_on_failed {
+            obj.insert("power_on_failed".into(), json!(true));
+        }
         if let Err(e) = &reload {
             obj.insert("reload_error".into(), json!(e));
         }
@@ -370,6 +442,10 @@ pub fn apply_locked(h: &dyn Host, lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Re
 
     if verified {
         Ok(data)
+    } else if power_on_failed {
+        Err(format!(
+            "firmware reported Wi-Fi power_on failed ({LOAD_STATUS}); target ap_2g={ap_2g} ap_5g={ap_5g}, observed {data}"
+        ))
     } else {
         Err(format!(
             "AP state not observable within deadline; target ap_2g={ap_2g} ap_5g={ap_5g}, observed {data}"
@@ -473,17 +549,28 @@ pub fn reload(h: &dyn Host, _lk: &WifiLock) -> Result<Value, String> {
 /// Reload and wait until the radios match what uci now says. Never fails: the
 /// returned object carries `verified` and any `reload_error`, like `apply`'s.
 pub fn reload_and_verify(h: &dyn Host, lk: &WifiLock) -> Value {
+    let status_before = load_status_mtime();
     let reload = reload(h, lk);
+    let mut power_on_failed = false;
     let verified = match current_expectation(h) {
-        Expect::On { ap_2g, ap_5g } => Some(poll_until(ON_DEADLINE, || {
-            hostapd_count() > 0 && (!ap_2g || hostapd_serves(h, IFACE_2G, SSID_2G)) && (!ap_5g || hostapd_serves(h, IFACE_5G, SSID_5G))
-        })),
+        Expect::On { ap_2g, ap_5g } => {
+            let (ok, failed) = poll_until_abort(
+                ON_DEADLINE,
+                || hostapd_count() > 0 && (!ap_2g || hostapd_serves(h, IFACE_2G, SSID_2G)) && (!ap_5g || hostapd_serves(h, IFACE_5G, SSID_5G)),
+                || power_on_failed_since(status_before),
+            );
+            power_on_failed = failed;
+            Some(ok)
+        }
         Expect::Off => Some(poll_until(OFF_DEADLINE, || hostapd_count() == 0)),
         Expect::Unknown => None,
     };
     let mut data = observe(h);
     if let Some(obj) = data.as_object_mut() {
         obj.insert("verified".into(), json!(verified));
+        if power_on_failed {
+            obj.insert("power_on_failed".into(), json!(true));
+        }
         if let Err(e) = &reload {
             obj.insert("reload_error".into(), json!(e));
         }

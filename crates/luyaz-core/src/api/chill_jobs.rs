@@ -172,17 +172,40 @@ pub async fn disable(State(c): State<Compat>) -> Response {
 }
 
 /// PUT /api/services/chill/profile `{"profile": "eco"|"standard"|"perf"}`
-pub async fn profile(State(c): State<Compat>, body: Bytes) -> Response {
+pub async fn profile(State(c): State<Compat>, req: Request) -> Response {
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
+    let (parts, body) = req.into_parts();
+    // while the caller's connection is open: its process is still there to be named
+    let who = super::chill_who::caller(&c.root, &parts.headers, peer);
+    let body = axum::body::to_bytes(body, 64 * 1024)
+        .await
+        .unwrap_or_default();
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let asked = parsed["profile"].as_str().unwrap_or("?").to_owned();
+    let record = |result: &str| {
+        super::chill_who::record(&c.root, c.clock.now(), "profile", &asked, result, &who)
+    };
     let want = match ch::profile_wanted(&parsed) {
         Ok(p) => p.to_string(),
-        Err(r) => return reply(r.0, r.1),
+        Err(r) => {
+            record(&format!("HTTP {}", r.0));
+            return reply(r.0, r.1);
+        }
     };
     match start_job(&c, "profile", format!("profile {want}"), |_, out| {
         ch::tail(out, 2)
     }) {
-        Some(id) => started(id),
-        None => busy(),
+        Some(id) => {
+            record("started");
+            started(id)
+        }
+        None => {
+            record("busy");
+            busy()
+        }
     }
 }
 

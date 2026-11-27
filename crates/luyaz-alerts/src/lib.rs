@@ -8,6 +8,26 @@
 //! [`Alerts::summary`] takes the clock offset as an argument; the caller reads it from uci
 //! (u60d through its own ubus).
 
+/// A log line that cannot be written is dropped instead of panicking (std's `eprintln!` panics,
+/// and the core's device build aborts on any panic: a full /tmp stopped it on 10-26). Same as
+/// luyaz-core's `main.rs` (P-7); defined before every `mod`, so the whole crate uses it.
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -16,6 +36,8 @@ use serde_json::{Value, json};
 
 pub mod clock;
 pub mod deadline;
+pub mod detail;
+pub use detail::detail_zh;
 pub mod sms;
 pub mod utc;
 
@@ -619,7 +641,13 @@ pub fn kind_label(kind: &str) -> String {
         ("wifi-takeover", "Wi-Fi 看门狗重新打开了 Wi-Fi"),
         ("wifi-restore-failed", "Wi-Fi 看门狗没能打开 Wi-Fi"),
         ("sms-failed", "告警短信发送失败"),
+        ("sms-held", "设备时间跳过，告警短信暂缓发送"),
         ("sms-test", "测试短信"),
+        ("agent-silent", "数据服务没有心跳，Wi-Fi 保持打开"),
+        ("agent-change", "Agent 改了一项设置"),
+        ("tailscale-gave-up", "Tailscale 反复退出，暂停自动重启"),
+        ("sms-forward-stuck", "有短信没能转发，已放弃"),
+        ("sms-forward-queue", "短信转发队列损坏，已恢复"),
         // luyaz-sentinel (u60-sentinel.md Phase 5)
         (
             "screen-two-uis",
@@ -656,8 +684,14 @@ pub fn kind_label(kind: &str) -> String {
         ("sim-stalled", "换卡后 3 分钟还没恢复数据"),
         ("esim-failed", "eSIM 切换没成功"),
         ("esim-rebooted", "eSIM 切换后已自动重启设备"),
+        // luyaz-core card_watch.rs (dual-slot D2/D3): inbox only
+        ("sim-standby-changed", "另一个卡槽的卡变了（插入、拔出、换卡或换 profile）"),
+        ("voice-card-followed", "电话卡换了卡槽，电话设置已跟过去"),
+        ("voice-card-missing", "设定的电话卡不在了，请重新设定"),
         // R18-P2-01 stock anomalies (read-only)
         ("wifi-post-stuck", "原厂 Wi-Fi 后台脚本卡住，在空转"),
+        // P-9: a change went ahead without its rollback record on /data
+        ("ops-unsaved", "设置照改了，但存不了退回记录：重启后不会自动退回"),
         ("no-service-long", "无服务超过 5 分钟，原厂没有恢复动作"),
         // the regress layer (10-24: tell me when it gets worse)
         ("regress-reboot", "设备意外重启（没有计划重启标记）"),
@@ -669,6 +703,10 @@ pub fn kind_label(kind: &str) -> String {
         ("heat-protect", "温度偏高，暂停充电 / CHILL 降档"),
         ("wifi-5g-down", "5G Wi-Fi 停了 5 分钟以上"),
         ("wifi-5g-fallback", "5G Wi-Fi 被停掉，已换到 36 信道"),
+        (
+            "chill-direct-kept",
+            "CHILL 恢复后仍是「全部直连」（之前被切成直连）",
+        ),
         ("ship-auto-rollback", "新版反复出事，已自动换回旧版并隔离"),
         ("ship-conn-rollback", "新版上机后连不上，已自动换回旧版"),
         (
@@ -713,7 +751,13 @@ pub fn kind_label_en(kind: &str) -> String {
             "Wi-Fi watchdog could not turn Wi-Fi on",
         ),
         ("sms-failed", "Alert SMS could not be sent"),
+        ("sms-held", "Alert SMS held: the device clock jumped"),
         ("sms-test", "Test SMS"),
+        ("agent-silent", "Data service heartbeat stopped; Wi-Fi kept on"),
+        ("agent-change", "The agent changed a setting"),
+        ("tailscale-gave-up", "Tailscale keeps exiting; automatic restarts paused"),
+        ("sms-forward-stuck", "An SMS could not be forwarded; given up"),
+        ("sms-forward-queue", "SMS forward queue was damaged; recovered"),
         // luyaz-sentinel (u60-sentinel.md Phase 5)
         (
             "screen-two-uis",
@@ -760,8 +804,21 @@ pub fn kind_label_en(kind: &str) -> String {
             "Rebooted automatically to finish an eSIM switch",
         ),
         (
+            "sim-standby-changed",
+            "The other slot's card changed (in, out, another card or profile)",
+        ),
+        (
+            "voice-card-followed",
+            "The phone SIM moved slots; the phone setting followed it",
+        ),
+        ("voice-card-missing", "The chosen phone SIM is gone; set it again"),
+        (
             "wifi-post-stuck",
             "Stock Wi-Fi setup script is stuck, spinning",
+        ),
+        (
+            "ops-unsaved",
+            "A change went ahead, but its rollback record could not be saved: no rollback after a restart",
         ),
         (
             "no-service-long",
@@ -789,6 +846,10 @@ pub fn kind_label_en(kind: &str) -> String {
             "5 GHz Wi-Fi stopped; moved to channel 36",
         ),
         (
+            "chill-direct-kept",
+            "CHILL came back on still All direct (it was switched to direct earlier)",
+        ),
+        (
             "ship-auto-rollback",
             "New build kept failing: old version restored, build quarantined",
         ),
@@ -810,6 +871,30 @@ pub fn kind_label_en(kind: &str) -> String {
     T.iter()
         .find(|t| t.0 == kind)
         .map_or_else(|| format!("Other alert ({kind})"), |t| t.1.to_string())
+}
+
+/// `GET /api/alerts?lang=zh` (the touch screen in Chinese, 11-15): each event's `text` becomes
+/// its Chinese body where `detail_zh` words it ("" = the label says it all) and `label_en` goes.
+/// The screen reads into 32 KB, so this trades bytes instead of adding a field; without `lang`
+/// the reply stays byte for byte what older screens read.
+pub fn for_zh_screen(summary: &mut Value) {
+    let Some(evs) = summary.get_mut("events").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for e in evs {
+        let Some(o) = e.as_object_mut() else { continue };
+        o.remove("label_en");
+        let zh = match (
+            o.get("kind").and_then(Value::as_str),
+            o.get("text").and_then(Value::as_str),
+        ) {
+            (Some(k), Some(t)) => detail_zh(k, t),
+            _ => None,
+        };
+        if let Some(zh) = zh {
+            o.insert("text".into(), zh.into());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -878,6 +963,9 @@ mod tests {
             "触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）"
         );
         assert_eq!(kind_label("sms-test"), "测试短信");
+        // dual-slot-removable.md R6/D8 ④: a single-slot card swap reads as before
+        assert_eq!(kind_label("sim-changed"), "SIM 卡换了（卡号/IMSI 变了）");
+        assert_eq!(kind_label_en("sim-changed"), "SIM card changed (ICCID/IMSI)");
         assert_eq!(kind_label("something-new"), "其他告警（something-new）");
         assert_eq!(kind_label(""), "其他告警（）");
     }
@@ -898,13 +986,18 @@ mod tests {
             "wifi-takeover",
             "wifi-restore-failed",
             "sms-failed",
+            "sms-held",
             "sms-test",
             "sim-changed",
             "sim-stalled",
             "esim-failed",
             "esim-rebooted",
+            "sim-standby-changed",
+            "voice-card-followed",
+            "voice-card-missing",
             "wifi-post-stuck",
             "no-service-long",
+            "ops-unsaved",
             "regress-reboot",
             "regress-mem",
             "regress-mem-abs",
@@ -979,6 +1072,16 @@ mod tests {
             body.len()
         );
         assert!(body.len() < 24 * 1024, "{} bytes", body.len());
+        // the Chinese screen (?lang=zh): Chinese bodies, no label_en; never bigger
+        let mut zh = a.summary(1_758_700_000, Some(1), 28800);
+        for_zh_screen(&mut zh);
+        let zh = json!({"ok": true, "data": zh}).to_string();
+        assert!(
+            zh.len() < body.len(),
+            "{} vs {} bytes",
+            zh.len(),
+            body.len()
+        );
         let _ = fs::remove_dir_all(&a.dir);
     }
 
@@ -1170,6 +1273,40 @@ mod tests {
     }
 
     const SNAPSHOT: &str = r#"{"clock_set":true,"events":[{"kind":"wifi-takeover","label":"Wi-Fi 看门狗重新打开了 Wi-Fi","label_en":"Wi-Fi watchdog turned Wi-Fi back on","seq":2,"text":"B","time":null,"unread":true,"uptime":7},{"kind":"web-crash","label":"管理网页意外退出，已自动重启","label_en":"Admin pages (luyaz-web) exited unexpectedly","seq":1,"text":"A","time":1758600000,"unread":false,"uptime":42}],"read":1,"sms":{"abroad_allowed":false,"abroad_now":false,"configured":false,"number":null,"processed":0,"recent":[{"kind":"web-crash","label":"管理网页意外退出，已自动重启","label_en":"Admin pages (luyaz-web) exited unexpectedly","result":"sent","seq":1,"time":1758600001}],"sent_24h":1},"unread":1,"uptime_now":9,"utc_offset":28800}"#;
+
+    #[test]
+    fn the_chinese_screen_gets_chinese_bodies_and_fewer_bytes() {
+        let a = scratch("zh-screen");
+        fs::write(
+            a.path("queue"),
+            "1\t1758600000\t42\theat-protect\t[34d373b7-9899371]  45 C 54 C\n\
+             2\t1758600001\t43\thome-exit-down\t 15 \n\
+             3\t1758600002\t44\tweb-crash\tA\n",
+        )
+        .unwrap();
+        let mut s = a.summary(1_758_600_500, Some(9), 28800);
+        let plain = s.to_string();
+        for_zh_screen(&mut s);
+        let body = |seq: u64| {
+            let e = s["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["seq"] == seq)
+                .unwrap();
+            assert!(e.get("label_en").is_none() && e["label"].is_string());
+            e["text"].clone()
+        };
+        assert_eq!(body(1), "电池 45 °C、芯片 54 °C");
+        assert_eq!(
+            body(2),
+            "",
+            "a scrap the label already says: nothing to add"
+        );
+        assert_eq!(body(3), "A", "no wording: the raw text");
+        assert!(s.to_string().len() < plain.len());
+        let _ = fs::remove_dir_all(&a.dir);
+    }
 
     #[test]
     fn cursor_pages_in_order_with_next() {

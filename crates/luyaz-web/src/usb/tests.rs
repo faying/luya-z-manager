@@ -93,7 +93,7 @@ fn values_come_from_the_blocks_and_the_agent() {
     let v = hub.read(|st| view(st, &agent(None), &Busy::default(), Lang::Zh));
     // mode from qos (not the agent's "rndis"); "user" is none of the three
     assert_eq!(v.state, "没插 USB 线");
-    assert_eq!(v.other.as_deref(), Some("user"));
+    assert_eq!(v.other.as_deref(), Some("普通（不是上面几种）"));
     assert!(v.modes.iter().all(|m| !m.2), "no radio selected");
     assert!(
         !v.mode_dis && !v.fixed,
@@ -105,7 +105,7 @@ fn values_come_from_the_blocks_and_the_agent() {
     let h = html(&v);
     for s in [
         "已断开",
-        "cc1",
+        "已连接（CC1）",
         "没有",
         "充电器已接入",
         "允许充电",

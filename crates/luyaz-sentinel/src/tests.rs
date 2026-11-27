@@ -2223,6 +2223,7 @@ fn write_synced_leaves_the_directory_mode_alone() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// At 1000 s, past FIRST_SYNC_WINDOW_S: an hours step mid-run is not the first network time.
 #[test]
 fn clock_steps_are_latched_across_sentinel_restart_until_original_offset_returns() {
     use luyaz_alerts::clock::{ClockEvidence, EvidenceStatus, SyncState};
@@ -2953,3 +2954,160 @@ fn watch_conn_holds_the_proof_while_down() {
     assert!(!d.files.contains_key(&format!("{WD}/t1")));
 }
 
+// 11-12: the wall moved back 7 s, the clock stayed revoked for two days and every alert
+// SMS was held. A small step that holds is trusted again; a split second back is not a new step.
+#[test]
+fn small_wall_step_is_trusted_again_after_it_holds() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    w.round(&mut d);
+    assert_eq!(clock_ok(&d), "1 year");
+    // -8 s: the step's own round and the next are revoked
+    d.up += 60;
+    d.wall += 60 - 8;
+    w.round(&mut d);
+    assert_eq!(clock_ok(&d), "0 revoked");
+    d.up += 60;
+    d.wall += 60;
+    w.round(&mut d);
+    assert_eq!(clock_ok(&d), "0 revoked");
+    // a sentinel restart in between keeps the count
+    let mut restarted = wk();
+    restarted.load(&mut d);
+    d.up += 60;
+    d.wall += 60;
+    restarted.round(&mut d);
+    assert_eq!(clock_ok(&d), "1 continuity");
+    assert!(
+        d.logs
+            .iter()
+            .any(|l| l.contains("stepped -8 s and held 3 rounds"))
+    );
+    // later rounds stay trusted at the new offset
+    d.up += 60;
+    d.wall += 61;
+    restarted.round(&mut d);
+    assert_eq!(clock_ok(&d), "1 continuity");
+}
+
+#[test]
+fn a_step_that_keeps_moving_or_is_hours_stays_revoked() {
+    // keeps moving: each round a new 30 s step never holds
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    w.round(&mut d);
+    for _ in 0..6 {
+        d.up += 60;
+        d.wall += 60 + 30;
+        w.round(&mut d);
+        assert_eq!(clock_ok(&d), "0 revoked");
+    }
+    // just over the limit: latched however long it holds
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    w.round(&mut d);
+    d.up += 60;
+    d.wall += 60 + RESTEP_MAX_S as i64 + 1;
+    for _ in 0..10 {
+        w.round(&mut d);
+        assert_eq!(clock_ok(&d), "0 revoked");
+        d.up += 60;
+        d.wall += 60;
+    }
+}
+
+/// One worker round, `secs` later on both clocks, the wall moved `step` more.
+fn tick(w: &mut Worker, d: &mut Dev, secs: u64, step: i64) {
+    d.up += secs;
+    d.wall += secs as i64 + step;
+    w.round(d);
+}
+
+// 10-26 replayed: estimated from the boot wall at 48 s, the clock was set +8 h at 122 s; the SMS
+// were held until the next reboot.
+#[test]
+fn the_first_network_time_after_boot_is_trusted_once_it_holds() {
+    for step in [28_800, -18_000] {
+        let (mut w, mut d) = (wk(), Dev::new());
+        d.up = 48;
+        w.round(&mut d);
+        assert_eq!(clock_ok(&d).chars().next(), Some('1'));
+        tick(&mut w, &mut d, 74, step);
+        assert_eq!(clock_ok(&d), "0 revoked", "the step's own round");
+        tick(&mut w, &mut d, 60, 0);
+        assert_eq!(clock_ok(&d), "0 revoked");
+        tick(&mut w, &mut d, 60, 0);
+        assert_eq!(clock_ok(&d), "1 continuity", "{step}");
+        assert!(
+            d.logs
+                .iter()
+                .any(|l| l.contains("first network time after boot: wall stepped"))
+        );
+        // once a boot: a second hours step, still early, stays latched
+        for _ in 0..5 {
+            let step = if d.up < 400 { 3600 } else { 0 };
+            tick(&mut w, &mut d, 60, step);
+            assert_eq!(clock_ok(&d), "0 revoked");
+        }
+    }
+}
+
+#[test]
+fn a_second_step_during_the_hold_starts_the_count_again() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 48;
+    w.round(&mut d);
+    tick(&mut w, &mut d, 74, 28_800);
+    tick(&mut w, &mut d, 60, 0);
+    tick(&mut w, &mut d, 60, 3600); // moved again before it held
+    assert_eq!(clock_ok(&d), "0 revoked");
+    tick(&mut w, &mut d, 60, 0);
+    assert_eq!(clock_ok(&d), "0 revoked");
+    tick(&mut w, &mut d, 60, 0);
+    assert_eq!(clock_ok(&d), "1 continuity");
+}
+
+#[test]
+fn an_hours_step_after_the_window_or_from_an_older_state_stays_latched() {
+    // first seen after 15 minutes
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = FIRST_SYNC_WINDOW_S - 60;
+    w.round(&mut d);
+    tick(&mut w, &mut d, 120, 28_800);
+    for _ in 0..5 {
+        assert_eq!(clock_ok(&d), "0 revoked");
+        tick(&mut w, &mut d, 60, 0);
+    }
+    // a hold that began in the window may finish after it
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = FIRST_SYNC_WINDOW_S - 120;
+    w.round(&mut d);
+    tick(&mut w, &mut d, 60, 28_800);
+    tick(&mut w, &mut d, 60, 0);
+    tick(&mut w, &mut d, 60, 0);
+    assert_eq!(clock_ok(&d), "1 continuity");
+    // more than a day: latched
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 48;
+    w.round(&mut d);
+    tick(&mut w, &mut d, 60, FIRST_SYNC_MAX_S as i64 + 1);
+    for _ in 0..4 {
+        tick(&mut w, &mut d, 60, 0);
+        assert_eq!(clock_ok(&d), "0 revoked");
+    }
+    // a state written by 1.5.2 (no first_sync_done) counts as already set
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 48;
+    w.round(&mut d);
+    let path = format!("{}/clock", w.paths.state);
+    let mut v: serde_json::Value = serde_json::from_str(&d.files[&path]).unwrap();
+    v.as_object_mut().unwrap().remove("first_sync_done");
+    d.files.insert(path, v.to_string());
+    let mut restarted = wk();
+    restarted.load(&mut d);
+    tick(&mut restarted, &mut d, 60, 28_800);
+    for _ in 0..4 {
+        tick(&mut restarted, &mut d, 60, 0);
+        assert_eq!(clock_ok(&d), "0 revoked");
+    }
+}

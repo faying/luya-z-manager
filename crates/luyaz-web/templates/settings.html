@@ -2,8 +2,8 @@
 {% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
-<p class="nd-body mb-4 max-w-[720px] text-nd-t2">{{ shell.t("Interface and session apply to this browser only; the Tailscale allow list below is kept on the device.", "界面和登录状态只对这个浏览器生效；下面的 Tailscale 轮询白名单存在设备上。") }}</p>
-<div class="grid max-w-[720px] gap-6">
+<p class="nd-body mb-4 pg-lead text-nd-t2">{{ shell.t("Interface and session apply to this browser only; the Tailscale allow list below is kept on the device.", "界面和登录状态只对这个浏览器生效；下面的 Tailscale 轮询白名单存在设备上。") }}</p>
+<div class="pg-col">
 <section aria-labelledby="st-ui-t"><h2 id="st-ui-t" class="nd-group-title">{{ shell.t("Interface", "界面") }}</h2>
 <div class="nd-group">
 <div class="nd-row flex-wrap gap-y-2" data-signals="{_th: 'auto'}" data-init="$_th = (localStorage.getItem('u60.theme') === 'light' || localStorage.getItem('u60.theme') === 'dark') ? localStorage.getItem('u60.theme') : 'auto'"><span class="nd-row__text"><span class="nd-row__label" id="st-th-l">{{ shell.t("Appearance", "外观") }}</span></span>

@@ -17,7 +17,7 @@ pub const SNAPSHOT_FILE: &str = "/tmp/health.json";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Check {
-    pub level: String, // ok | warn | bad
+    pub level: String, // ok | skip (not judged) | warn | bad
     pub id: String,
     pub label: String,
     pub detail: String,
@@ -87,7 +87,7 @@ pub fn parse(tsv: &str) -> Vec<Check> {
     tsv.lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.splitn(4, '\t').collect();
-            if f.len() != 4 || !matches!(f[0], "ok" | "warn" | "bad") {
+            if f.len() != 4 || !matches!(f[0], "ok" | "skip" | "warn" | "bad") {
                 return None;
             }
             Some(Check {
@@ -122,7 +122,7 @@ pub fn parse_tsv2(tsv: &str) -> Vec<Check> {
         .filter_map(|l| {
             let l = l.trim_end_matches('\r');
             let f: Vec<&str> = l.split('\t').collect();
-            if f.len() < 6 || !matches!(f[0], "ok" | "warn" | "bad") {
+            if f.len() < 6 || !matches!(f[0], "ok" | "skip" | "warn" | "bad") {
                 return None;
             }
             let n = f.len();

@@ -249,7 +249,7 @@ pub async fn normalize_lists(replies: &[Value]) -> Vec<crate::contract::SmsItem>
             Some(hex) => utf16be_hex(&hex),
             None => raw_number.to_string(),
         };
-        let text = utf16be_hex(opened_text.as_deref().unwrap_or(raw_text));
+        let text = luyaz_sms_forward::readable_sms(utf16be_hex(opened_text.as_deref().unwrap_or(raw_text)));
         let unread = row.get("tag").and_then(loose_i64) == Some(1);
         result.push(crate::contract::SmsItem {
             id,

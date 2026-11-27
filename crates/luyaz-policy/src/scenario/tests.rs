@@ -1443,3 +1443,18 @@ fn a_blip_right_after_entering_is_held() {
         "held, counted"
     );
 }
+
+/// dual-slot T7 (§6): the direct read follows the data card, never slot 1's with data on slot 2
+#[test]
+fn the_direct_read_follows_the_data_slot() {
+    let both = |cur: serde_json::Value| {
+        j(json!({"sim_states": "sim ready", "sim_imsi": "460011234567890",
+            "sim2_states": "sim ready", "sim2_imsi": "454071234567890", "current_sim_slot": cur}))
+    };
+    assert_eq!(mcc_from_sim_info(&both(json!("1"))).as_deref(), Some("460"));
+    assert_eq!(mcc_from_sim_info(&both(json!("2"))).as_deref(), Some("454"));
+    assert_eq!(mcc_from_sim_info(&both(json!(2))).as_deref(), Some("454"));
+    let unreported = j(json!({"sim_states": "sim ready", "sim_imsi": "460011234567890",
+        "current_sim_slot": "2"}));
+    assert_eq!(mcc_from_sim_info(&unreported), None);
+}

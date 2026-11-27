@@ -8,7 +8,9 @@
 .al-list { list-style: none; margin: 0; padding: 0; }
 .al-item { align-items: flex-start; }
 .al-time { flex: none; font-size: 14px; color: var(--nd-t3); text-align: end; }
-.al-unread { color: var(--nd-warnT); }
+/* unread: an ink dot and a heavier title; ▲ ● ■ stay the state's (owner 11-14) */
+.al-unread { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--nd-t1); margin-inline-end: 8px; vertical-align: middle; }
+.nd-row:has(.al-unread) .nd-row__label, .nd-row:has(.al-unread) .nd-mark span:not(.nd-mark__sym) { font-weight: 600; }
 .al-read { color: var(--nd-t1); font-weight: 400; }
 .al-wrap { display: block; overflow-wrap: anywhere; }
 .al-form { display: grid; gap: 8px; align-items: stretch; }

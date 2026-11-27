@@ -212,7 +212,7 @@ check_device() {
   model=$(printf '%s' "$iv" | sed -n 's/.*\(MU[0-9][0-9][0-9][0-9]\)V.*/\1/p')
   case "$iv" in
     *_ZTE_MU*) region=${iv%%_*} ;;                                                     # CN_ZTE_MU5250V…
-    *) region=$(printf '%s' "$iv" | sed -n 's/^[A-Z]*_\([A-Z]*\)MU[0-9].*/\1/p') ;;  # BD_CNMU5250V… → CN
+    *) region=$(printf '%s' "$iv" | sed -n 's/^[A-Z]*_\([A-Z]*\)_\{0,1\}MU[0-9].*/\1/p') ;;  # BD_CNMU5250V… → CN；FLY_CN_MU5250V… → CN（实测 B11 出现过这种写法）
   esac
   build=$(printf '%s' "$iv" | sed -n 's/.*V[0-9.]*\(B[0-9][0-9]*\)$/\1/p')
   [ -n "$model" ] && [ -n "$build" ] || fail "$(tx "认不出固件版本「${iv:-空}」，不装（不是 U60 Pro，或固件太新/太旧）" "Unknown firmware version \"${iv:-empty}\". Not installing (not a U60 Pro, or firmware too new/old)")"

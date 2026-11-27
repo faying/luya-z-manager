@@ -426,3 +426,119 @@ fn stop_reply_says_what_the_core_answered() {
     let none = json!({"ok": false, "error": "no switch to stop"});
     assert!(stop_reply(Ok((409, &none)), Lang::En).contains("no retry to stop"));
 }
+
+// ---- dual-slot units: one block per eUICC (dual-slot design §6) ----
+
+fn card2() -> Card {
+    Card {
+        n: 2,
+        role: "standby".into(),
+        notifs: Some(vec![Notif { seq: 3, op: "enable".into(), addr: "smdp.example".into(), iccid: "8988600000000000001".into() }]),
+        ..card()
+    }
+}
+
+#[test]
+fn a_dual_slot_block_carries_its_slot_everywhere() {
+    let v = view(&card2(), false, Lang::Zh);
+    assert_eq!(v.heading.as_deref(), Some("卡槽 2 · 待机"));
+    let html = Leaves { v: &v }.render().unwrap();
+    for id in ["es-hd-s2", "es-status-s2", "es-list-s2", "es-dlgo-s2", "es-notif-s2", "es-chip-s2", "es-p-s2-0", "es-n-s2-1"] {
+        assert!(html.contains(&format!("id=\"{id}\"")), "{id}");
+    }
+    let i = html.find("switch/ask?k=").unwrap();
+    assert!(html.contains("switch/ask?k=A0000005591010FFFFFFFF8900001200&#38;s=2"), "{}", &html[i..i + 60]);
+    assert!(html.contains("$_esEdit === '2-A0000005591010FFFFFFFF8900001100'"));
+    assert!(html.contains("download/ask?s=2") && html.contains("/^_esCo(de|nf)2$/") && html.contains("$_esCode2.trim()"));
+    assert!(html.contains("notif/ask?s=2"));
+    assert!(html.contains("<h3 id=\"es-chip-t-s2\""), "group titles under the card heading are h3");
+    assert!(!html.contains("eid=") && !html.contains("slot="), "the page's URLs carry `s=`, the core's names are added server-side");
+    // the single-slot unit's leaves are as they were
+    let one = Leaves { v: &view(&card(), false, Lang::Zh) }.render().unwrap();
+    assert!(!one.contains("es-hd") && !one.contains("&s=") && one.contains("id=\"es-p0\"") && one.contains("<h2 id=\"es-chip-t\""));
+}
+
+#[test]
+fn a_held_card_says_why_without_an_error() {
+    for (h, tone) in [(Hold::Identifying, "neutral"), (Hold::Unknown, "warn"), (Hold::Moved, "warn")] {
+        let c = Card { n: 1, role: "data".into(), hold: Some(h), ..card() };
+        let v = view(&c, false, Lang::Zh);
+        assert_eq!(v.tone, tone, "{h:?}");
+        assert!(v.locked && v.rows.is_none() && v.chip.is_empty() && v.notifs.is_empty() && !v.retry, "{h:?}");
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains(h.text(Lang::Zh)) && !html.contains("es-row"), "{h:?}");
+    }
+    let c = Card { n: 1, hold: Some(Hold::Identifying), ..Card::default() };
+    assert_eq!(view(&c, false, Lang::Zh).state, "正在识别卡…");
+}
+
+#[test]
+fn the_other_cards_job_reads_as_shared() {
+    let mut b = card2();
+    b.take_list(Ok(Listed::Busy));
+    let v = view(&b, false, Lang::Zh);
+    assert!(v.reason.unwrap().contains("可能是另一张卡"));
+}
+
+#[test]
+fn requests_name_the_card_only_on_a_dual_slot_unit() {
+    let single = Aim::default();
+    assert_eq!(single.q(), "");
+    assert_eq!(single.body(json!({"iccid": "1"})), json!({"iccid": "1"}));
+    let two = Aim { n: 2 };
+    assert_eq!(two.q(), "?slot=2");
+    assert_eq!(two.body(json!({})), json!({"slot": 2}));
+    assert_eq!(two.body(json!({"code": "x"})), json!({"code": "x", "slot": 2}));
+    // what the core's answers mean for a dual-slot card
+    assert_eq!(hold_of(&Fail::Refused(503, String::new(), String::new())), Some(Hold::Identifying));
+    assert_eq!(hold_of(&Fail::Refused(404, String::new(), String::new())), Some(Hold::Identifying));
+    assert_eq!(hold_of(&Fail::Refused(502, String::new(), String::new())), None);
+    assert_eq!(hold_of(&Fail::Unreachable), None);
+}
+
+#[test]
+fn each_block_has_its_own_form_and_retry_ids() {
+    let v = json!({"_esNick": "n", "_esCode": "A", "_esConf": "B", "_esCode2": "C", "_esConf2": "D"});
+    let f = form_of(&v, 0);
+    assert_eq!((f.nick.as_str(), f.code.as_str(), f.conf.as_str()), ("n", "A", "B"));
+    let f = form_of(&v, 2);
+    assert_eq!((f.code.as_str(), f.conf.as_str()), ("C", "D"));
+    assert_eq!(retry_in(0, RETRY_EMPTY.into()), RETRY_EMPTY);
+    assert_eq!(retry_in(2, RETRY_EMPTY.into()), "<div id=\"es-retry-s2\"></div>");
+    let r = Retry { tries: 2, next_unix: 0, until_unix: 0 };
+    let h = retry_in(2, retry_html(Some(&r), false, Lang::Zh));
+    assert!(h.contains("id=\"es-retry-s2\"") && h.contains("/router/esim/stop?s=2"), "{h}");
+    let a = after_in("A0", 2);
+    assert!(a.contains("id=\"es-after-s2\"") && a.contains("after?k=A0&s=2'"), "{a}");
+    assert_eq!(after_in("A0", 0), after_html("A0"));
+}
+
+#[test]
+fn the_page_knows_which_blocks_it_was_built_with() {
+    assert_eq!(signals_init(&[0]), "{_esEdit: '', _esNick: '', _esCode: '', _esConf: ''}");
+    assert_eq!(signals_init(&[1, 2]), "{_esEdit: '', _esNick: '', _esCode1: '', _esConf1: '', _esCode2: '', _esConf2: ''}");
+    for ns in [vec![0], vec![2], vec![1, 2], vec![]] {
+        assert_eq!(built_of(&built_arg(&ns)), ns);
+    }
+    assert_eq!(built_of(""), vec![0], "an old page's stream");
+    assert_eq!(built_arg(&[0]), "", "the single-slot unit's stream URL as before");
+    let lay = Layout::Dual { seats: vec![], table: true };
+    assert!(cards_html(&lay, &[], false, Lang::Zh).contains("都没有 eSIM 卡"));
+    let moved = cards_html(&lay, &[2], false, Lang::Zh);
+    assert!(moved.contains("重新载入") && !moved.contains("data-init"), "asks, never reloads under the user's input");
+    // built from a cold hub as one card: reloads by itself
+    assert!(cards_html(&lay, &[0], true, Lang::Zh).contains("data-init=\"window.location.reload()\""));
+    assert_eq!(cards_html(&Layout::Single, &[0], true, Lang::Zh), "<div id=\"es-cards\" hidden></div>");
+    assert_eq!(cards_html(&Layout::Single, &[0], false, Lang::Zh), "<div id=\"es-cards\" hidden></div>");
+}
+
+#[test]
+fn a_standby_slot_switch_does_not_cut_data() {
+    let r = Req { name: "狮城".into(), aim: Aim { n: 2 }, standby: true, ..Req::default() };
+    let c = confirm(Act::Switch, &r, Some("英国卡"), 0, Lang::Zh);
+    assert_eq!(c.tier, write::Tier::Dialog);
+    assert!(!c.cuts_uplink && c.downtime.is_none());
+    assert!(c.what.contains("移动数据不会中断") && c.recovery.unwrap().contains("切回「英国卡」"));
+    let d = confirm(Act::Switch, &Req { standby: false, ..r }, Some("英国卡"), 0, Lang::Zh);
+    assert!(d.cuts_uplink && d.downtime.is_some(), "the data slot's switch is as before");
+}

@@ -123,6 +123,8 @@ pub fn phase1_blocks() -> Vec<BlockSpec> {
         BlockSpec::derived("sms", Box::new(OnChange)),
         // SIM 身份和状态（旧 `/state` 的 `sim` 对象），变了才发（2026-10-03）。
         BlockSpec::derived("sim", Box::new(OnChange)),
+        // 卡表（dual-slot-removable.md §1）：每个物理卡槽一行，变了才发
+        BlockSpec::derived("cards", Box::new(OnChange)),
         // E4 T13（V2-34）：写操作的界面数据，由事务引擎交（每轮一次 + 每次状态变化）。
         BlockSpec::derived("op", Box::new(OnChange)),
         BlockSpec::derived("advice", Box::new(OnChange)),

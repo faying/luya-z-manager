@@ -160,6 +160,146 @@ async fn get_json(path: &str) -> Result<Value, String> {
 /// 经 7894 取一次 generate_204（5 秒）。控制 API 不答 = 不知道；入口本身 TCP 连不上 = 不知道；
 /// 入口连得上之后的任何失败（隧道建不起来、超时、不是 204）= 确定不通。
 pub async fn probe() -> Probe {
+    probe_at(ch::PROBE_URL, 5).await
+}
+
+/// The exit check's verdict (`engines::chill_probe`): a miss is tried twice more, 3 s apart, at
+/// [`ch::PROBE_URL_ALT`] then [`ch::PROBE_URL`], 8 s each, and counts only if all three miss.
+/// 11-13: twice a single 5 s miss, ten minutes apart, opened an incident while the owner's traffic
+/// through CHILL went on. Only a miss costs the extra requests.
+pub async fn probe_confirmed() -> Probe {
+    let mut p = probe_at(ch::PROBE_URL, 8).await;
+    for url in [ch::PROBE_URL_ALT, ch::PROBE_URL] {
+        if p != Probe::Down {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        p = probe_at(url, 8).await;
+    }
+    p
+}
+
+/// What mihomo's own health check last said of the node the main group ends at, for an exit
+/// incident's evidence: `(zh, en)`; None = the API did not say. One GET of `/proxies`, only when
+/// the exit check turns to broken.
+pub async fn exit_note() -> Option<(String, String)> {
+    exit_note_from(
+        &get_json("/proxies").await.ok()?,
+        luyaz_netwatch::now_unix() as i64,
+    )
+}
+
+/// Older than this, mihomo's last check says nothing about now (its checks are lazy: none while
+/// nothing goes through the group; 11-14 the last one before a break was 4 hours old).
+const NOTE_FRESH_S: i64 = 600;
+
+/// [`exit_note`] from mihomo's `/proxies` answer at `now` (unix s, mihomo's clock): follow `now`
+/// from the main group (at most 6 groups deep), then the last `history` entry of the deepest one
+/// that has any (delay 0 = the check failed) and how old it is. A subscription's node is not in
+/// `/proxies` (only in the 300 KB `/providers/proxies`); its URLTest group above it carries the
+/// same checks.
+pub fn exit_note_from(all: &Value, now: i64) -> Option<(String, String)> {
+    let p = &all["proxies"];
+    let mut chain = vec![ch::MAIN_GROUP];
+    while let Some(n) = p[*chain.last()?]["now"].as_str().filter(|n| !n.is_empty()) {
+        if chain.len() > 6 || chain.contains(&n) {
+            return None;
+        }
+        chain.push(n);
+    }
+    if chain.len() < 2 {
+        return None;
+    }
+    let via = chain[1..].join(" → ");
+    let last = chain.iter().rev().find_map(|c| {
+        let h = p[*c]["history"].as_array()?.last()?;
+        Some((h["delay"].as_u64()?, h["time"].as_str().and_then(unix_of)))
+    });
+    let Some((delay, at)) = last else {
+        return Some((
+            format!("经 {via}，mihomo 还没健康检查过"),
+            format!("via {via}, no health check by mihomo yet"),
+        ));
+    };
+    let (zh, en) = if delay == 0 {
+        ("失败".to_string(), "failed".to_string())
+    } else {
+        (format!("{delay} ms"), format!("{delay} ms"))
+    };
+    Some(match at.map(|t| (now - t).max(0)) {
+        Some(age) if age > NOTE_FRESH_S => {
+            let (az, ae) = ago(age);
+            (
+                format!("mihomo 对 {via} 最近一次健康检查是 {az}（{zh}），之后没再查过"),
+                format!("mihomo last checked {via} {ae} ({en}), not since"),
+            )
+        }
+        Some(age) => {
+            let (az, ae) = ago(age);
+            (
+                format!("mihomo 对 {via} 最近一次健康检查：{zh}（{az}）"),
+                format!("mihomo's last health check of {via}: {en} ({ae})"),
+            )
+        }
+        None => (
+            format!("mihomo 对 {via} 最近一次健康检查：{zh}（时间不明）"),
+            format!("mihomo's last health check of {via}: {en} (time unknown)"),
+        ),
+    })
+}
+
+/// "N 分钟前" / "N min ago", hours from 2 h.
+fn ago(s: i64) -> (String, String) {
+    if s >= 7200 {
+        (
+            format!("{} 小时前", s / 3600),
+            format!("{} h ago", s / 3600),
+        )
+    } else {
+        (format!("{} 分钟前", s / 60), format!("{} min ago", s / 60))
+    }
+}
+
+/// Unix seconds of an RFC 3339 time as mihomo writes it (`…Z` or `±hh:mm`, fraction allowed).
+fn unix_of(t: &str) -> Option<i64> {
+    let n = |a: usize, z: usize| t.get(a..z)?.parse::<i64>().ok();
+    let b = t.as_bytes();
+    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || !matches!(b[10], b'T' | b't') {
+        return None;
+    }
+    let (y, mo, d, h, mi, se) = (
+        n(0, 4)?,
+        n(5, 7)?,
+        n(8, 10)?,
+        n(11, 13)?,
+        n(14, 16)?,
+        n(17, 19)?,
+    );
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
+        return None;
+    }
+    let mut rest = t.get(19..)?;
+    if let Some(r) = rest.strip_prefix('.') {
+        rest = r.trim_start_matches(|c: char| c.is_ascii_digit());
+    }
+    let off = match rest {
+        "Z" | "z" => 0,
+        r if r.len() == 6 && matches!(&r[..1], "+" | "-") && &r[3..4] == ":" => {
+            let v = r[1..3].parse::<i64>().ok()? * 3600 + r[4..6].parse::<i64>().ok()? * 60;
+            if r.starts_with('-') { -v } else { v }
+        }
+        _ => return None,
+    };
+    // days from civil (H. Hinnant)
+    let y2 = if mo <= 2 { y - 1 } else { y };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era * 146_097 + doe - 719_468) * 86_400 + h * 3600 + mi * 60 + se - off)
+}
+
+async fn probe_at(url: &str, secs: u64) -> Probe {
     if get_json("/version").await.is_err() {
         return Probe::Unknown;
     }
@@ -176,12 +316,12 @@ pub async fn probe() -> Probe {
     };
     let Ok(cl) = reqwest::Client::builder()
         .proxy(proxy)
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(secs))
         .build()
     else {
         return Probe::Unknown;
     };
-    match cl.get(ch::PROBE_URL).send().await {
+    match cl.get(url).send().await {
         Ok(r) if r.status().as_u16() == 204 => Probe::Up,
         _ => Probe::Down,
     }
@@ -372,5 +512,58 @@ mod tests {
         assert!(is_job(b"sh\0-c\0/data/chill/chill.sh profile perf\0"));
         assert!(is_job(b"/bin/sh\0/data/chill/chill.sh\0reload\0"));
         assert!(!is_job(b"/usr/bin/mihomo\0-d\0/data/chill\0"));
+    }
+
+    #[test]
+    fn exit_note_follows_the_main_group_to_its_node() {
+        use super::{exit_note_from, unix_of};
+        use serde_json::json;
+        let now = unix_of("2026-11-14T18:20:00Z").unwrap();
+        assert_eq!(unix_of("2026-11-14T18:13:40.847732098Z"), Some(now - 380));
+        assert_eq!(unix_of("2026-11-14T18:20:00+08:00"), Some(now - 8 * 3600));
+        assert_eq!(unix_of("nope"), None);
+        let all = json!({"proxies": {
+            "🚀 节点选择": {"now": "TW"},
+            "TW": {"now": "tw-1", "history": [{"delay": 90, "time": "2026-11-14T18:10:00Z"}]},
+            "tw-1": {"history": [{"delay": 120}, {"delay": 0, "time": "2026-11-14T18:17:00Z"}]}}});
+        assert_eq!(
+            exit_note_from(&all, now).unwrap().1,
+            "mihomo's last health check of TW → tw-1: failed (3 min ago)"
+        );
+        // 11-14: the node is a provider's, its group's last check four hours before the break
+        let stale = json!({"proxies": {"🚀 节点选择": {"now": "TW"},
+            "TW": {"now": "tw-9", "history": [{"delay": 51, "time": "2026-11-14T14:16:31Z"}]}}});
+        assert_eq!(
+            exit_note_from(&stale, now).unwrap(),
+            (
+                "mihomo 对 TW → tw-9 最近一次健康检查是 4 小时前（51 ms），之后没再查过"
+                    .to_string(),
+                "mihomo last checked TW → tw-9 4 h ago (51 ms), not since".to_string()
+            )
+        );
+        let fresh = json!({"proxies": {"🚀 节点选择": {"now": "jp-1"},
+            "jp-1": {"history": [{"delay": 80, "time": "2026-11-14T18:19:00Z"}]}}});
+        assert_eq!(
+            exit_note_from(&fresh, now).unwrap().0,
+            "mihomo 对 jp-1 最近一次健康检查：80 ms（1 分钟前）"
+        );
+        let untimed = json!({"proxies": {"🚀 节点选择": {"now": "jp-1"},
+            "jp-1": {"history": [{"delay": 80}]}}});
+        assert!(
+            exit_note_from(&untimed, now)
+                .unwrap()
+                .1
+                .ends_with("(time unknown)")
+        );
+        let none = json!({"proxies": {"🚀 节点选择": {"now": "jp-1"}, "jp-1": {}}});
+        assert_eq!(
+            exit_note_from(&none, now).unwrap().1,
+            "via jp-1, no health check by mihomo yet"
+        );
+        // nothing chosen, a loop, no answer: nothing to say
+        assert!(exit_note_from(&json!({"proxies": {"🚀 节点选择": {"now": ""}}}), now).is_none());
+        let looped = json!({"proxies": {"🚀 节点选择": {"now": "a"}, "a": {"now": "🚀 节点选择"}}});
+        assert!(exit_note_from(&looped, now).is_none());
+        assert!(exit_note_from(&json!({}), now).is_none());
     }
 }

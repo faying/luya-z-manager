@@ -235,8 +235,13 @@ pub fn expire(r: &mut Regress, now: &At) {
         let last = i.last.as_ref().unwrap_or(&i.from);
         let gone = match last.until(now) {
             Some(s) => s > window,
-            // another boot and no clock to tell by: a crash row ends; a reboot row waits for one
-            None => !last.ok && i.kind != "regress-reboot",
+            // another boot and no clock to tell by: a crash row ends. A reboot row ends once this
+            // later boot has itself stayed up past the window: that is the window without a reboot
+            // (a further unexpected reboot would have counted on this row instead). Waiting for a
+            // clock never ended a row whose own time was untrusted (u60g 11-17: one stayed open
+            // from the boot across its repair).
+            None if i.kind == "regress-reboot" => now.up > window,
+            None => !last.ok,
         };
         if gone {
             let what = if window > 3600 { "6 h" } else { "1 h" };

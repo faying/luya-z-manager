@@ -22,6 +22,15 @@
 // retries: `attempts` +1 every 4 s, `message` "card busy — retrying (try N in
 // 4 s)", until POST /api/esim/cancel (reason "cancelled") or 60 s ("card_busy").
 //
+// Dual-slot units (scenarios "esim-dual1" / "esim-dual2", luyaz-esim `pick`): a second eUICC
+// ("card B", slot 2) next to the persona's card ("card A"). esim-dual1: slot 1 holds a plain SIM,
+// slot 2 card B; esim-dual2: slot 1 card A, slot 2 card B. A request names its card by `slot`
+// (`?slot=` / body) or `eid`; without either the only eSIM card answers (dual1) or the core
+// refuses with 400 (dual2); a slot without an eSIM card or an unknown EID is 404. Dual-slot
+// answers carry `slot` and `eid`. One job slot for both cards, as in luyaz-esim. Stricter than
+// the core on purpose: on a dual-slot unit a write naming no card is refused (400), so a page that
+// forgets to name the card fails its check.
+//
 // Persona: an eSTK.me-style card in the SIM slot; the enabled profile is a
 // Taiwan travel eSIM (roams on Chunghwa); a China home-number profile and a
 // Japan travel profile are disabled. Two notifications from the last switch
@@ -57,6 +66,13 @@ const JOB_MS: Record<EsimJob["kind"], number> = {
 };
 
 // ── Card state ──────────────────────────────────────────────────────────────
+
+interface Card {
+  slot: number;
+  chip: EsimStatus;
+  profiles: EsimProfile[];
+  notifications: EsimNotification[];
+}
 
 const chip: EsimStatus = {
   installed: true,
@@ -120,6 +136,98 @@ const notifications: EsimNotification[] = [
   { seqNumber: 12, profileManagementOperation: "disable", notificationAddress: SMDP[ICCID_CN], iccid: ICCID_CN },
   { seqNumber: 13, profileManagementOperation: "enable", notificationAddress: SMDP[ICCID_TW], iccid: ICCID_TW },
 ] satisfies EsimNotification[];
+
+const cardA: Card = { slot: 1, chip, profiles, notifications };
+
+// Card B (dual-slot scenarios only): made-up EID and ICCIDs.
+const ICCID_B1 = "8944000000000000011";
+const ICCID_B2 = "8965000000000000012";
+SMDP[ICCID_B1] = "smdp.bluesky.example";
+SMDP[ICCID_B2] = "smdp.lionroam.example";
+const cardB: Card = {
+  slot: 2,
+  chip: {
+    installed: true,
+    eid: "89049000000000000000000000005678",
+    default_smdp: null,
+    root_smds: "lpa.ds.gsma.com",
+    sgp22_version: "2.3.0",
+    firmware_version: "4.0.1",
+    free_nvm: 201728,
+  } satisfies EsimStatus,
+  profiles: [
+    {
+      iccid: ICCID_B1,
+      isdpAid: "A0000005591010FFFFFFFF8900001100",
+      profileState: "enabled",
+      profileNickname: "英国卡",
+      serviceProviderName: "Bluesky Mobile",
+      profileName: "UK Unlimited",
+      iconType: "none",
+      icon: null,
+      profileClass: "operational",
+    },
+    {
+      iccid: ICCID_B2,
+      isdpAid: "A0000005591010FFFFFFFF8900001000",
+      profileState: "disabled",
+      profileNickname: null,
+      serviceProviderName: "Lion Roam",
+      profileName: "Singapore 3GB",
+      iconType: "none",
+      icon: null,
+      profileClass: "operational",
+    },
+  ] satisfies EsimProfile[],
+  notifications: [],
+};
+
+type Picked = { card: Card; dual: boolean } | Reply;
+
+/** luyaz-esim `pick`: the card a request names (`slot`, or `eid`), or the only eSIM card. */
+function pick(ctx: Ctx, eid: string | null, slot: number | null = null): Picked {
+  const want = eid?.trim().toUpperCase() || null;
+  const dual1 = ctx.has("esim-dual1");
+  const dual2 = ctx.has("esim-dual2");
+  if (!dual1 && !dual2) {
+    if (slot !== null && slot !== 1) return fail("no eSIM card in that slot", 404);
+    if (want && want !== cardA.chip.eid) return fail("no eSIM card with that EID here", 404);
+    return { card: cardA, dual: false };
+  }
+  const cards = dual2 ? [cardA, cardB] : [cardB];
+  if (slot !== null) {
+    const c = cards.find((x) => x.slot === slot);
+    return c ? { card: c, dual: true } : fail("no eSIM card in that slot", 404);
+  }
+  if (want) {
+    const c = cards.find((x) => x.chip.eid === want);
+    return c ? { card: c, dual: true } : fail("no eSIM card with that EID here", 404);
+  }
+  if (cards.length > 1) return fail("two eSIM cards: say which one (eid)", 400);
+  return { card: cards[0], dual: true };
+}
+
+const isPicked = (p: Picked): p is { card: Card; dual: boolean } => "card" in p;
+
+/** `?slot=N` of a GET (null: none). */
+function slotQ(ctx: Ctx): number | null {
+  const s = ctx.query.get("slot");
+  return s && /^[12]$/.test(s) ? Number(s) : null;
+}
+
+/** A write's card; on a dual-slot unit the mock wants it named (see the header). */
+function pickWrite(ctx: Ctx): Picked {
+  const eid = bodyStr(ctx.body, "eid");
+  const raw = bodyField(ctx.body, "slot");
+  const slot = raw === 1 || raw === 2 ? raw : null;
+  if ((ctx.has("esim-dual1") || ctx.has("esim-dual2")) && !eid && slot === null) return fail("slot required (mock: name the card)", 400);
+  return pick(ctx, eid, slot);
+}
+
+/** luyaz-esim `with_card`. */
+function withCard<T extends object>(data: T, p: { card: Card; dual: boolean }): T {
+  return p.dual ? { ...data, slot: p.card.slot, eid: p.card.chip.eid } : data;
+}
 
 // ── Job slot ────────────────────────────────────────────────────────────────
 
@@ -215,8 +323,8 @@ const validIccid = (s: string) => /^\d{18,20}$/.test(s);
 // eslint-disable-next-line no-control-regex
 const hasControl = (s: string) => /[\u0000-\u001f\u007f-\u009f]/.test(s);
 
-function pushNotification(op: string, iccid: string): void {
-  notifications.push({
+function pushNotification(c: Card, op: string, iccid: string): void {
+  c.notifications.push({
     seqNumber: nextSeq++,
     profileManagementOperation: op,
     notificationAddress: SMDP[iccid] ?? "smdp.unknown.example",
@@ -229,7 +337,9 @@ function pushNotification(op: string, iccid: string): void {
 /** GET /api/esim/status — luyaz-esim `status` (lpac chip info). */
 function status(ctx: Ctx): Reply {
   tick(ctx);
-  return { data: clone(chip), delayMs: 600 };
+  const p = pick(ctx, ctx.query.get("eid"), slotQ(ctx));
+  if (!isPicked(p)) return p;
+  return { data: withCard(clone(p.card.chip), p), delayMs: 600 };
 }
 
 /** GET /api/esim/profiles — luyaz-esim `profiles` (lpac profile list). */
@@ -239,8 +349,10 @@ function profilesGet(ctx: Ctx): Reply {
     const busy: EsimProfiles = { installed: true, busy: true, profiles: null };
     return ok(busy);
   }
-  const data: EsimProfiles = { installed: true, busy: false, profiles: clone(profiles) };
-  return { data, delayMs: 500 };
+  const p = pick(ctx, ctx.query.get("eid"), slotQ(ctx));
+  if (!isPicked(p)) return p;
+  const data: EsimProfiles = { installed: true, busy: false, profiles: clone(p.card.profiles) };
+  return { data: withCard(data, p), delayMs: 500 };
 }
 
 /** GET /api/esim/notifications — luyaz-esim `notifications` (lpac notification list). */
@@ -250,7 +362,9 @@ function notificationsGet(ctx: Ctx): Reply {
     const none: EsimNotifications = null;
     return ok(none);
   }
-  const data: EsimNotifications = clone(notifications);
+  const p = pick(ctx, ctx.query.get("eid"), slotQ(ctx));
+  if (!isPicked(p)) return p;
+  const data: EsimNotifications = clone(p.card.notifications);
   return { data, delayMs: 400 };
 }
 
@@ -269,6 +383,9 @@ function nickname(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
   const iccid = bodyStr(ctx.body, "iccid");
   if (!iccid || !validIccid(iccid)) return fail("invalid iccid", 400);
+  const pk = pickWrite(ctx);
+  if (!isPicked(pk)) return pk;
+  const profiles = pk.card.profiles;
   const raw = ctx.body.nickname;
   const nick = typeof raw === "string" ? raw.trim() : "";
   if (Buffer.byteLength(nick, "utf8") > MAX_NICKNAME_LEN || ctx.has("esim-nick-refused")) return fail("nickname too long", 400);
@@ -284,6 +401,10 @@ function switchProfile(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
   const iccid = bodyStr(ctx.body, "iccid");
   if (!iccid || !validIccid(iccid)) return fail("invalid iccid", 400);
+  const pk = pickWrite(ctx);
+  if (!isPicked(pk)) return pk;
+  const card = pk.card;
+  const profiles = card.profiles;
   const now = Math.floor(ctx.now / 1000);
   if (lastSwitchAttempt !== 0 && now - lastSwitchAttempt < SWITCH_COOLDOWN_SECS) {
     const wait = SWITCH_COOLDOWN_SECS - (now - lastSwitchAttempt);
@@ -316,10 +437,10 @@ function switchProfile(ctx: Ctx): Reply {
     const old = profiles.find((p) => p.profileState === "enabled");
     if (old) {
       old.profileState = "disabled";
-      pushNotification("disable", old.iccid);
+      pushNotification(card, "disable", old.iccid);
     }
     target.profileState = "enabled";
-    pushNotification("enable", target.iccid);
+    pushNotification(card, "enable", target.iccid);
     return { ok: true, message: "switched — no reboot needed" };
   });
   if (id === null) return fail(BUSY, 409);
@@ -355,6 +476,9 @@ function download(ctx: Ctx): Reply {
   const confRaw = ctx.body.confirmation_code;
   const conf = typeof confRaw === "string" ? confRaw.trim() : "";
   if (conf.length > MAX_CODE_LEN || hasControl(conf)) return fail("invalid confirmation code", 400);
+  const pk = pickWrite(ctx);
+  if (!isPicked(pk)) return pk;
+  const { chip, profiles, notifications } = pk.card;
   const online = netUp(ctx);
   const id = startJob(ctx, "download", "", () => {
     // lpac activation code: LPA:1$<smdp>$<matchingId>[$...]
@@ -393,6 +517,10 @@ function deleteProfile(ctx: Ctx): Reply {
   const iccid = bodyStr(ctx.body, "iccid");
   if (!iccid || !validIccid(iccid)) return fail("invalid iccid", 400);
   if (running()) return fail(BUSY, 409);
+  const pk = pickWrite(ctx);
+  if (!isPicked(pk)) return pk;
+  const card = pk.card;
+  const { chip, profiles, notifications } = card;
   const p = profiles.find((x) => x.iccid === iccid);
   if (!p) return fail("profile not found", 404);
   if (p.profileState === "enabled") return fail("this profile is in use: switch to another one, then delete it", 400);
@@ -404,7 +532,7 @@ function deleteProfile(ctx: Ctx): Reply {
     chip.free_nvm = (chip.free_nvm ?? 0) + 38912;
     // Best-effort notification delivery: offline, the delete notification stays pending.
     if (online) notifications.length = 0;
-    else pushNotification("delete", iccid);
+    else pushNotification(card, "delete", iccid);
     return { ok: true, message: "profile deleted" };
   });
   if (id === null) return fail(BUSY, 409);
@@ -414,6 +542,9 @@ function deleteProfile(ctx: Ctx): Reply {
 /** POST /api/esim/notifications/process — luyaz-esim `notifications_process`. Body ignored. */
 function notificationsProcess(ctx: Ctx): Reply {
   tick(ctx);
+  const pk = pickWrite(ctx);
+  if (!isPicked(pk)) return pk;
+  const { notifications } = pk.card;
   const online = netUp(ctx);
   const id = startJob(ctx, "notifications", "", () => {
     if (notifications.length > 0 && !online) {

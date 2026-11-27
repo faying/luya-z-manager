@@ -5,8 +5,8 @@
 {% match view %}
 {% when View::Ready(d) %}
 <h1 class="nd-title mb-2 mt-2" data-data>{{ d.title }}</h1>
-<p class="nd-aux mb-4 max-w-[720px]">{{ shell.t("Settings of an installed plugin. The plugin describes them; changes are sent to it through the core and read back.", "已安装插件的设置。内容由插件描述；改动经核心服务送给插件，再读回确认。") }}</p>
-<div class="grid max-w-[720px] gap-6">
+<p class="nd-aux mb-4 pg-lead">{{ shell.t("Settings of an installed plugin. The plugin describes them; changes are sent to it through the core and read back.", "已安装插件的设置。内容由插件描述；改动经核心服务送给插件，再读回确认。") }}</p>
+<div class="pg-col">
 {% if !d.online %}<p class="t-note t-note--warn px-1" role="status">{{ shell.t("The plugin is not running: read only.", "插件没在运行：只能看，不能改。") }}{% if let Some(t) = d.confirmed %} {{ shell.t("Last confirmed ", "最后确认于 ") }}<span class="nd-mono" data-data>{{ t }}</span>{% endif %}</p>{% endif %}
 {% if let Some((tone, text)) = note %}<p class="t-note t-note--{{ tone }} px-1" role="status">{{ text }}</p>{% endif %}
 {% if let Some(t) = self.sub_title(d) %}<a class="nd-btn nd-btn--ghost nd-btn--sm justify-self-start" href="{{ crate::plugin_settings::PATH }}">{{ shell.icon("ArrowLeft", 16)|safe }}<span>{{ d.title }}</span></a>{% endif %}
@@ -33,15 +33,15 @@
 </div>
 {% when View::Offline %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.t("Plugin settings", "插件设置") }}</h1>
-<div class="nd-group max-w-[720px]"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("The plugin is not running", "插件没在运行") }}</span><span class="nd-row__sub block">{{ shell.t("Nothing confirmed since the core started; this page fills in once the plugin is back.", "核心服务启动后还没确认过；插件回来后这页会显示设置。") }}</span></span></div></div>
+<div class="nd-group pg-lead"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("The plugin is not running", "插件没在运行") }}</span><span class="nd-row__sub block">{{ shell.t("Nothing confirmed since the core started; this page fills in once the plugin is back.", "核心服务启动后还没确认过；插件回来后这页会显示设置。") }}</span></span></div></div>
 {% when View::Invalid %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.t("Plugin settings", "插件设置") }}</h1>
-<div class="nd-group max-w-[720px]"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("The plugin's settings description is invalid", "插件描述无效") }}</span><span class="nd-row__sub block">{{ shell.t("It was not shown. The core's log has the reason.", "没有显示。原因写在核心服务的日志里。") }}</span></span></div></div>
+<div class="nd-group pg-lead"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("The plugin's settings description is invalid", "插件描述无效") }}</span><span class="nd-row__sub block">{{ shell.t("It was not shown. The core's log has the reason.", "没有显示。原因写在核心服务的日志里。") }}</span></span></div></div>
 {% when View::Unread %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.t("Plugin settings", "插件设置") }}</h1>
-<div class="nd-group max-w-[720px]"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Can't read the plugin settings from the core", "读不到核心服务的插件设置") }}</span></span></div></div>
+<div class="nd-group pg-lead"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Can't read the plugin settings from the core", "读不到核心服务的插件设置") }}</span></span></div></div>
 {% when View::None %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.t("Plugin settings", "插件设置") }}</h1>
-<div class="nd-group max-w-[720px]"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("No plugin with settings is installed", "没有可设置的插件") }}</span></span></div></div>
+<div class="nd-group pg-lead"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("No plugin with settings is installed", "没有可设置的插件") }}</span></span></div></div>
 {% endmatch %}
 {% endblock %}

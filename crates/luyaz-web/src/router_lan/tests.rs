@@ -51,14 +51,8 @@ fn reads_the_dhcp_block_and_computes_the_end() {
     assert_eq!(c.lease(), Some(43200));
     let v = h.read(|st| view(st, Lang::Zh));
     assert_eq!((v.tone, v.state.as_str()), ("ok", "DHCP 已开启"));
-    assert_eq!(
-        v.reason.as_deref(),
-        Some("分配 192.168.0.100 – 192.168.0.149")
-    );
-    assert_eq!(
-        v.meta.as_deref(),
-        Some("U60 在 192.168.0.1 / 255.255.255.0")
-    );
+    assert_eq!(v.reason.as_deref(), Some("最多给 50 台设备自动分配地址"));
+    assert_eq!(v.meta, None, "the address is the first row, not repeated above");
     let s = Leaves { v: &v }.render().unwrap();
     assert!(s.contains("12 小时") && s.contains("192.168.0.149") && s.contains("<!--leaf-->"));
 

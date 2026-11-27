@@ -19,6 +19,262 @@ of other components.
 
 A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## Unreleased
+
+- esim bundle: `qmi_uim_probe` gains `close <chan> [slot]`, `iccid [slot]` (card session 6/7; read-only check on u60g 11-16: session 7 is slot 2) and per-slot USIM for `apps`/`provision`; its usage line names `close <chan> [slot]`, and core closes by slot only when it sees that (an older probe would close on slot 1, so it does not). The kit reads the EID in both slots, and no longer uses `flock -w` (the device's busybox has no `-w`, so that read always came back empty).
+
+## core 1.106.5 — 2026-11-25
+
+- when Wi-Fi is switched on or reloaded, the check now also reads the firmware's own verdict in `/tmp/zte_wlan_load_status`: if it says `failed` and was written after our change, the wait stops at once and the error names it (`power_on_failed`), instead of waiting the full 45 s and reporting only "not observable". A `failed` left by an earlier attempt is ignored. Read-only; nothing new is written. Found by comparing with a fork's B31 notes; the file and its `power_on success` content were read on the device 11-25.
+
+## core 1.106.4 — 2026-11-24
+
+- heat care's warm level (pause charging while plugged in) starts at 47 °C and ends at 43 °C, up from 44/40. On PD fast charge with the hotspot on, the battery reached 44 °C within the hour and charging kept stopping and starting (u60g 11-19: stopped 3 times in 1.5 h, about 25 minutes of charging); the stock driver already cuts the current at 45 °C. Hot and critical are unchanged.
+
+## core 1.106.3 — 2026-11-17
+
+- an unexpected-reboot incident opened without a trusted clock now ends `quiet` once a later boot has stayed up 6 h; before, it could never be timed and stayed open for good (u60g: one from the boot across its repair, code 1132).
+
+## lweb 1.61.1 — 2026-11-17
+
+- a request body that sends nothing for 15 s ends the request and frees its connection slot (before, only the headers were timed, so a phone leaving Wi-Fi mid-upload held a slot until a restart); accepted sockets get TCP keepalive and a 60 s user timeout like the core's. The `ip` runs that tell where a viewer comes from are killed after 1 s; they ran on the server's only thread without a limit, so a hung `ip` stopped every page (ext-1117 A1, A2).
+
+## core 1.106.2 — 2026-11-17
+
+- read-only ubus calls from outside the executor (web pages and the touch screen) are capped at 32 waiting, and a read whose caller has already gone (its own timeout, a closed page) is not sent. When a stock service hangs, each read waited the full 8 s, more kept coming and the 30 s watchdog never fired (the executor was still making progress), so every on-demand read slowed to minutes. Writes are unchanged: always queued, always finished (ext-1117 A3).
+
+## touch 1.34.0 — 2026-11-17
+
+- on 「SIM 与 eSIM」, 当前卡槽, a slot that is off says "tap to read again"; a tap asks the core to read that slot again (a card put in while the unit was on shows without a restart). The tag says 读取中… while it runs and the core's answer shows on that line for a few seconds; a slot carrying data or on standby says why it was not touched.
+
+## core 1.106.1 — 2026-11-17
+
+- the slot re-read reads the probe's outcome from stderr, where it says it (1.106.0 answered `reset_failed` after a reset that worked).
+
+## lweb 1.61.0 — 2026-11-17
+
+- SIM page, Slots: a「Read slot N again」button under a slot that is off, with what the core said.
+
+## core 1.106.0 — 2026-11-17
+
+- a slot that is off can be read again (`POST /api/esim/reread {"slot"}`, a UIM power cycle of that slot only): the modem does not see a card put in by itself, so a card change there no longer needs a restart. Refused for the data slot, a standby slot (dual mode loses that card until a restart, T9 O-3), within 20 s of the last, and while an eSIM job runs.
+- the card table reads on the modem's card status indications (T9 O-6: a slot's power cycle arrives as absent, detected, ready within 2 s), and once more 10 s later so a pulled card is told in seconds; polling (60 s, 5 min with the screen off) stays as the fallback.
+
+## core 1.105.0 / lweb 1.60.0 — 2026-11-17
+
+- MMS notice (M1): the firmware cannot fetch MMS and stores a received one as an SMS whose body is just `multimedia_information` (sender `99`, the WAP Push). That body now reads as "[彩信 MMS] 收到一条彩信。U60 收不了彩信…" (an MMS arrived, its content and real sender are gone) in the SMS journal, SMS forwarding, core's SMS list and the lweb SMS page. Nothing else about the message changes.
+
+## core 1.104.1 / lweb 1.59.1 / touch 1.33.1 — 2026-11-17
+
+- A switch on a card that does not carry data (a standby or off slot) now says it takes effect after a restart, instead of "the next time the card is read" (T9 O-4: in dual SIM mode the standby eSIM card drops out about 100 s after the switch and slot 2 never sees it come back by itself; the firmware read no new IMSI before that either). core: the shared word for such a job is "This card takes effect after a restart" (`say_id` `after_restart`), not "Back online"; the job message says so too. lweb: the confirm dialog and the page note say "after a restart" (and that in dual SIM mode the card may not be read until then). touch: "Switched on the card; it takes effect after a restart".
+
+## core 1.104.0 / lweb 1.59.0 / touch 1.33.0 — 2026-11-17
+
+- Pages per card (dual-slot T8, §6). core: every eSIM request may name its card by slot instead of EID (POST body `"slot": N`, GET `?slot=N`), resolved to that slot's identified eSIM card (503 while identifying, 404 when that slot holds no eSIM card; an `eid` wins): the UIs only see an EID's tail in the `cards` block, and no full EID is added to `/v2`.
+- lweb: the eSIM page has one block per eSIM card on a dual-slot unit ("Slot N · in use / standby / off"), each with its own status, profiles, add form and notifications, every request naming its slot; plain cards and empty slots are not shown; a card still being identified says so; a standby-slot switch says data is not interrupted. The SIM page lists each slot (role, card type, tails); slot 2's PIN is status only (no per-slot stock PIN interface, O-5). The dual-SIM page says "Slot 1 / Slot 2". Single-slot units: the pages and requests are as before. The mock serves one- and two-card tables; new e2e `router-esim-dual`.
+- touch: subscribes to `cards`; on a dual-slot unit the SIM & eSIM page shows a "current slots" block (slot, operator, eSIM profile / physical card / identifying, role on the right) and one profile list per eSIM card, read and switched by slot; "in use" goes by the slot's role, not by comparing ICCIDs; ICCID comparisons drop the BCD pad (R5); wording "Slot 1 / Slot 2". Single-slot units render byte-identical to before (865 stills compared).
+
+## core 1.103.0 / sentinel 1.5.4 / lweb 1.58.13 — 2026-11-16
+
+- A card that does not carry data changed (dual-slot T7, D2): each slot's last settled reading (no card, or an identified card with its ICCID) is kept in `cards.json` (now v2; an older file only seeds, no events). When a slot that does not carry data reads another card, a profile switch on its eUICC, a card in or a card out, `sim-standby-changed` goes to the inbox, never texted ("slot 2: profile now ...5555", "(switched on the eSIM page)" within 15 min of our own switch). A card still waiting for its identity is not read; a card read absent once is "out" only on the next poll too (a modem restart can read it absent for a beat). The first reading after a start is compared with the file, so a swap while off is told. The data card's change is still `sim-changed`, texted as before.
+- The phone setting follows its card (D3): `voice-card` holds the card's id next to `voice-slot` (written when the owner sets the slot, or seeded from the voice slot's card). On a dual-slot unit, when that card shows up in the other slot the voice slot moves there (`voice-card-followed`, inbox); when it is in neither slot nothing moves and the inbox says so once a boot after two rounds (`voice-card-missing`). Not while a call is up, an eSIM job runs or a card is still unidentified, and never into a slot the firmware has not provisioned (calls would not follow). The phone card's number is no longer borrowed from the data card when the phone card has none.
+- The scenario engine's direct SIM read (when core's `sim` block is stale) reads the data card: `sim2_*` with data on slot 2, nothing while unreported (it read slot 1's card).
+- sentinel and lweb: the three new kinds are inbox-only and have labels; sentinel sends alert SMS too, so it goes on before core.
+
+## core 1.102.0 — 2026-11-16
+
+- The data card's identity on a dual-slot unit (dual-slot T5, R9/D11). The firmware's `sim_*` fields are slot 1's unless `sim2_iccid` is set, so with data on slot 2 and `sim2_iccid` empty for a beat, core read slot 1's card as the data card: a false card change (`sim-changed`, CHILL reload). The SIM identity tracking still follows the firmware's reading (it moves first; the card table lags up to 5 min), but when that reading is slot 1's card while the table has another card in slot 2 it keeps the card already tracked (or reads no identity); a reading the table disagrees with asks it for one read now. Single-slot units read exactly as before. The ops transaction's SIM identity, the ops current-state ICCID and the agent's APN roaming check read the data card's ICCID (`sim2_iccid` with data on slot 2, empty while it is not reported, never slot 1's): before, with data on slot 2 they read slot 1's card, so a proposal's SIM check always refused and the roaming list was checked against the wrong card.
+
+## core 1.101.1 — 2026-11-16
+
+- the receipt re-send's first round after a start, with no card named, waits until the cards are identified and uses the eSIM card (it always ran on slot 1: with u60g's eUICC in slot 2 that round got SimFileNotFound two minutes after every start, "notifications still pending").
+
+## core 1.101.0 — 2026-11-16
+
+- eSIM per card (dual-slot T4, `docs/designs/dual-slot-removable.md` §2; R1, R2, R7, R10). An eUICC may sit in either slot: lpac gets `UIM_SLOT` (slot 1 runs exactly as before), and `qmi_uim_probe`'s channel open/close and `simreset` name the slot. The card table's identity is wired: `Esim::eid_of_slot` reads `qmi_uim_probe eid <slot>`, caches by (slot, insertion generation) and never waits (busy: next round); a plain card needs QMI error 80 twice at least 60 s apart, and an 80 within 5 min of a switch does not count (an eUICC changing profile answers 80 too). Requests may name `eid` (GETs: `?eid=`); without one the single-slot unit uses its card as before, and a dual-slot unit picks only once both cards are identified and exactly one is an eSIM card (503 while identifying, 400 with two eSIM cards). Dual-slot answers carry `slot` and `eid`; single-slot answers are unchanged. A switch goes by the target slot's role: only when it is the data slot does it `simreset <slot>`, restart zte_topsw_mdm, wait for that slot's own identity fields (slot 2: `sim2_*`) and reboot on a timeout; slot 2 counts as the data slot only on a positive read (provisioned and data on it), otherwise the switch stays on the card (`inactive_slot`). Before every step with side effects the role is read again: no longer the data slot, the card pulled, or the slot's identified EID not the target, and the switch ends on the card with no reset or reboot (not by generation: the profile switch itself changes the ICCID and so the generation; within 5 min of our own switch the new generation keeps the same EID). EID reads are at least 30 s apart per slot, and every 10 min after 5 answers that say nothing. A named `eid` must match: an unidentified card on the single-slot unit gets 503, no guessing. A standby-slot switch leaves core's data-card identity alone (`SwitchEvent::Leaving` carries `slot`, `data_slot`); after any switch the card table reads both slots at once. The profile list cache and the receipt re-send are per card; write records carry the EID and slot, a restart settles one only on that card, and with the card absent it waits without holding the job slot (up to 10 min) while new writes get 409 instead of replacing the record. doctor: a "SIM cards" row only when a card has gone unrecognised for 20 min (a plain card needs two reads a minute apart, and with the screen off the table polls every 5 min). `sim.dual` stays blocked by the transaction gate during an eSIM switch.
+
+## core 1.100.0 — 2026-11-16
+
+- the card table (dual-slot T3, `docs/designs/dual-slot-removable.md` §1; R5, R11, R12, R13). One row per physical slot: a card in or not, its USIM state (`detected` on a slot the firmware has not provisioned), provisioned, role (data / voice / standby / off) and card identity (eid / plain / pending / unknown / none). A dual-slot unit (`support_dual_sim` = 1) reads QMI UIM `GET_CARD_STATUS` (read only) every 60 s, 5 min with the screen off; both slots' ICCIDs come from TLV 0x17 of the reply (checked read only on u60g and the main device 11-16: slot 1 matches `sim_iccid`, the unprovisioned slot 2 is read too). The single-slot unit has one row built from this round's `get_sim_info`, with no QMI read added. A card appearing (absent → present) or its ICCID turning into another one bumps the slot's generation and the identity is read again; an empty or failed read is not another card. The identity waits for the eSIM side to read the EID (T4); until then every card is `pending` and never called unrecognised. New `/v2` block `cards` (last 4 of ICCID/EID only); the `sim` block is unchanged. `/data/luyaz/core/cards.json` keeps identified cards only and is written when it changes. Every ICCID normalization in core (trim, drop the trailing F, upper case) now goes through `cards::iccid_norm`; an all-digit ICCID reads as before. `<core> qmi-signal uim` prints both slots (tails), read only. Not done: the UIM status indication (O-6 needs a hot-plug with the owner there; polling only) and doctor's "unrecognised" line (it can only show once T4 wires the EID; done with T4).
+
+## core 1.99.0 / lweb 1.58.12 — 2026-11-16
+
+- tests (dual-slot T6, `docs/designs/dual-slot-removable.md` R6/D8): the main device's `/v2` `sim` block is pinned byte for byte against what the device printed (core 1.98.9; real `get_sim_info` and uci, identifiers replaced), and must not be re-blessed to pass; a single-slot eSIM device never aims a command at slot 2; a single-slot card swap still raises `sim-changed` with the same words. No behaviour change: the identity stamp and the `sim-changed` text moved into small functions the tests call.
+- lweb: an incident closed because the card it was about was swapped reads 「换卡了，不再跟踪」/ "card changed, no longer watched" instead of "Recovered".
+
+## lweb 1.58.11 — 2026-11-15
+
+- the load-test page's styles are their own `ladder.css` (in the shared pages.css they rode on every list page and put /router/bandlock's first load at 40.3 KiB, over the 40 KiB budget); e2e checks follow the 11-14/11-15 wording (MB, USB mode and CC words, no unread in the SMS capacity line, no "latest 50" footer under 50 rows, LAN and DNS status).
+
+## touch 1.32.3 — 2026-11-15
+
+- alert details in Chinese show the Chinese body (asks `/api/alerts?lang=zh`; needs core 1.98.9, an older core keeps the English text).
+
+## lweb 1.58.10 — 2026-11-15
+
+- page-by-page leftovers (11-15): the load-test page shows its verdict once (the status block; the row under "Will this place hold up?" keeps it only on paper); the LAN status block says how many devices can get an address instead of repeating the rows below; DNS on auto reads "Using the carrier's DNS" (not the switch's own label), and the "Now:" hint shows only on manual; Wi-Fi bandwidth on a Wi-Fi 6/7 radio (HE/EHT) offers that family's widths, so picking 40 MHz no longer drops an EHT40 radio to HT40.
+
+## core 1.98.9 — 2026-11-15
+
+- `GET /api/alerts?lang=zh`: each event's `text` is its Chinese body where luyaz-alerts words it (`detail_zh`, the same wording as the web) and `label_en` is dropped, so the reply gets smaller, not bigger (the screen reads it into 32 KB). Without `lang` the reply is byte for byte what it was.
+
+## lweb 1.58.9 — 2026-11-14
+
+- 1.58.8's status blocks left a double gap under them on single-column pages (the grid gap plus their own margin); the margin now applies only outside a pg-col grid.
+
+## lweb 1.58.8 — 2026-11-14
+
+- four pages get the shared page-top status block (owner 11-14, DESIGN.md §5): cell lock (locked or not, which cell; amber when the modem is elsewhere), data usage (today and this month on the device's calendar), network mode (the mode, the last change as a link), load-test runs (the shown run's verdict with its tone, time and cell).
+
+## lweb 1.58.7 — 2026-11-14
+
+- the CPU page and the config tool say MB instead of MiB, like the rest of the site (same numbers, still ÷1024).
+
+## lweb 1.58.6 — 2026-11-14
+
+- charts (owner 11-14: complete but quiet): lines on /trends and the CPU page break at a gap instead of a straight run across it; 0–100 scales say %, the SINR scale says dB and has its own room; a two-line chart's readout carries each line's mark as the legend; the CPU page's chart has 0/50/100% and "5 min ago / now".
+
+## core 1.98.8 — 2026-11-14
+
+- the CHILL status carries `reach`: the egress probe's last word (`ok` null = not measured lately) and why. On 11-14 the CHILL page stayed a green "Running" through a 17-minute outage.
+
+## lweb 1.58.5 — 2026-11-14
+
+Loose ends from the page-by-page check (11-14 ⑧):
+- CHILL: a failed egress probe turns the status amber, "Running, but nothing gets out through it", with the reason (needs core 1.98.8). DIRECT reads Direct (直连), provider kinds read in words, uptime reads "2 d 3 h".
+- alerts: a recovery reads 「已恢复：…」 under the open's label.
+- Tailscale: "1 · 1 direct · 0 relay" reads "1: 1 direct, 0 relayed"; the exit-node heading and the top-bar note no longer read as 「正经」.
+- SIM: PIN lock On/Off, the same words as the status block.
+- Wi-Fi: bandwidth EHT160 reads 160 MHz.
+- processes: state "other" reads 其他.
+- config tool: "Up to 4 MB." (MB across the site).
+
+## core 1.98.7 — 2026-11-14
+
+- change log: a stock call says which one it was ("原厂设置 · 打开自动休眠", "原厂设置 · 发短信", else the method name) instead of only "Vendor setting"; SMS deletes read "短信 · 删除".
+- SMS stock calls now keep their object and method in the record (number and text are still never kept); before, nothing was kept, not even which call it was.
+
+## core 1.98.6 — 2026-11-14
+
+- health check wording (11-14 page-by-page check): the process rows are named "… process" so they no longer share a name with the :9460 / :9090 rows; boot sync reads in Chinese; device identification says 组件出错 instead of "trap"; ages read in the unit a person would say (45 小时前, 2 天前 instead of 2758 分钟前) for home exit; temperature no longer repeats 正常; the estimated clock says it is counted on from boot and not yet checked against network time.
+- standby that cannot judge this time (not calibrated, old baseline, network in use, too few idle rows) is no longer "ok": new level `skip` (○ on the command line, 未判断 on the web), counted as neither problem nor warning. Requires: lweb ≥ 1.58.4 (older pages show `skip` as a problem).
+
+## lweb 1.58.4 — 2026-11-14
+
+- the health page knows core 1.98.6's `skip` level: grey ○ "Not judged".
+- crash-log ends read in the page language (「退出原因不明」, 「被 SIGABRT 结束」).
+
+## lweb 1.58.3 — 2026-11-14
+
+- alert details tightened after a look on the device: they no longer repeat the label (temperature: just the readings and what was done; held SMS: how long, until the clock is trusted; failed SMS: no nested brackets).
+
+## core 1.98.5 — 2026-11-14
+
+- alert details read in Chinese on Chinese screens: the queue keeps ASCII, so producers keep writing English; luyaz-alerts' new `detail_zh` words the known shapes when they are read. Unknown shapes (names, MACs, paths) show as stored; a detail that only repeats its label is hidden.
+- fix: heat-protect, tailnet-poller, home-exit-down and home-exit-check-failed wrote Chinese details, which the queue dropped down to scraps like ` 45 C 54 C` and `192.168.50.88  Tailscale  :9090 10  124 / 0.30.6 W`. They write English now; old scraps are rebuilt when they can be (temperatures, address, port, minutes) and hidden when not. tailnet-poller puts the numbers first and the address before the name, so the 120-character cut only takes the end of a long name.
+- five kinds had no label and showed as "Other alert (…)": agent-silent, agent-change, tailscale-gave-up, sms-forward-stuck, sms-forward-queue.
+
+## lweb 1.58.2 — 2026-11-14
+
+- alert details on the alerts page, the top bar and incident details follow the page language (`detail_zh` from luyaz-alerts, run in the web, so an older core is translated too). "chill failing 5m" reads 「CHILL 不通已 5 分钟」.
+- an incident's "Its alerts" showed the kind code (`regress-egress`) as the title; it shows the label now.
+
+## lweb 1.58.1 — 2026-11-14
+
+- Alerts: an unread row is an ink dot before the title and a heavier title (owner 11-14); ▲ ● ■ only say the state. Rows read 「▲ ▲ 出口不通 · 还开着」 before. DESIGN.md §5.
+
+## lweb 1.58.0 — 2026-11-14
+
+- Home's big text is the worst thing now (owner 11-14; on 11-14 at 18:07 「信号良好」 stood over a red 「经 CHILL 访问外网失败」): the core's network finding headline (e.g. 「代理转发不通」, coral), else 「过热」 at 80 °C, else 「电量低（8%）」 at 10 % or less off the charger (amber). The signal's verdict and details move to the line under it; the finding's sentence and link stay below. Nothing worse: as before. DESIGN.md §5.
+
+## lweb 1.57.3 — 2026-11-14
+
+Page-by-page check of all 49 pages on the device (phone and desktop, light):
+- **AI 代理权限 (/tools/agent) opened as a 404**: it was in the route table and the page list but not among the paths this server owns. A test now checks every listed page is served.
+- The top bar of a sub page was 6 px wider than a 390 px phone, so every page except home slid sideways: below 420 px the bar drops its gaps (buttons stay 44 × 44).
+- Settings, Config and plugin settings are 720 px wide again (their width class no longer existed).
+- Home's carrier line wraps on a phone instead of running off the edge; the load-test record no longer says 「LTE LTE BAND 5」.
+- Sentences no longer use 「·」 (QCI 「还没读：…」, VPN 「…穿过 NAT。这里只能看。」); CHILL's Chinese sentences use full-width commas.
+- No rows of a lone 「—」: STC on a firmware without it shows only the status block; the speed test shows no empty readouts before its first run; the firewall level says 「设备没报告」; Device control drops the dash beside a switch the device doesn't report.
+- Words instead of raw values: SIM 「已就绪」 / modem 「已启动」, USB 「普通（不是上面几种）」 and the CC line 「没接东西」 / 「已连接（CC1）」 (the ADB page the same), Tailscale 「运行中」, CHILL 「规则模式」. Alert rows no longer show the core's `[event id]` prefix.
+- Said once: SMS unread (status title only), no empty job list under 「没有计划任务」, Processes, USB's unverified note, guest Wi-Fi's password row when open, the telemetry domains (a count in Quick block), VPN's per-row reason, Device control's battery row; 「只显示最近 50 条」 only when the change log is full.
+
+## core 1.98.4 — 2026-11-14
+
+- core: the CHILL exit incident's mihomo note says how old the check is. mihomo checks lazily (none while nothing goes through the group): on 11-14 the incident at 18:07 said "51 ms" from a check at 14:16, before the break. Older than 10 minutes it now reads "mihomo last checked 🇹🇼 台湾 → … 4 h ago (51 ms), not since"; fresher, "…: 93 ms (2 min ago)".
+
+## core 1.98.3 — 2026-11-14
+
+- core: the CHILL exit incident's mihomo note (1.98.2) takes the health check from the deepest group that has one: a subscription's node is not in mihomo's `/proxies` (only in the 300 KB `/providers/proxies`), so on the device 1.98.2 would have said "no health check yet" where the region's URLTest group had ten.
+
+## core 1.98.2 — 2026-11-14
+
+- core: the CHILL exit check (one `generate_204` through mihomo every 10 minutes while somebody uses CHILL) tries a miss twice more, 3 s apart, at `www.google.com` then `www.gstatic.com` again, 8 s each (was one try of 5 s), and only a miss of all three counts. On 11-13 two single misses ten minutes apart opened a CHILL exit incident twice while the owner's traffic through CHILL went on (mihomo logged 6 failed connections, none to Google). Only a miss costs the extra requests.
+- core: when the check turns to broken it asks mihomo once (`/proxies`) what its own health check last said of the node the main group ends at; a CHILL exit incident's 「同时观察到」 carries it (e.g. "mihomo's last health check of TW → tw-1 failed").
+
+## sentinel 1.5.3 — 2026-11-14
+
+- sentinel: the first time the network sets the clock after a boot (NITZ; ZTE's own SNTP state never reports done) is trusted once it holds 3 rounds, even hours off the boot wall, either way, up to 26 h: seen in the first 15 minutes, once a boot. On 10-26 the boot wall was 8 h behind (why is not established), the wall moved +8 h at 122 s, and the clock stayed `revoked` (alert SMS held) until the next reboot. Hour-scale steps later in a boot, or after this one, stay latched as before; a state written by 1.5.2 counts as already set.
+
+## core 1.98.1 — 2026-11-14
+
+- core: after a hold that a reboot ended, an alert queued in the new boot before the first SMS round was logged `stale-held` and not texted (an unplanned-reboot alert, for one). `sms-held` now also keeps the newest seq queued while held, and only those alerts can be judged old.
+
+## core 1.98.0 / sentinel 1.5.2 / lweb 1.57.2 — 2026-11-14
+
+- sentinel: a wall-clock step of more than 5 s and up to 10 minutes (a correction) is trusted again once the new offset has held for 3 rounds (about 2–3 minutes; a sentinel restart keeps the count). Until then the clock reads `revoked` as before. Larger steps (a time zone, the boot wall hours off) stay latched until the old offset returns or the device reboots. On 11-12 a step of a few seconds latched the clock for two days, and every alert SMS was held.
+- core: alert SMS held because the clock is not trusted say so once, after 10 minutes, as an inbox alert `sms-held`, which forwarding shows. It is never texted. Once the clock is back, an alert queued more than 30 minutes earlier (or in an earlier boot), or a regress opening whose close is already in the queue, is logged `stale-held` and not texted. Without a hold, old alerts still go out late as before (cellular down).
+- lweb: the 「告警」 page names the `stale-held` result.
+
+## core 1.97.6 — 2026-11-13
+
+- new crate `luyaz-persist`: one way to write and read a state file. Two tiers for `/data` (ext4 `data=ordered`, checked on the device): `Cheap` (temp file + rename) and `Durable` (also fsync of the file and its directory); `write_private` creates the file 0600. `load` keeps apart missing, read, corrupt (moved to `.corrupt-<t>` first, the newest 3 kept), newer (left alone) and an I/O error (the file may be good: not written over; a move-aside that fails counts as one). Every write step was made to fail with ENOSPC, EROFS and EACCES (a fake filesystem) and the same three were hit for real in containers (`crates/luyaz-persist/fault.sh`): the old file is untouched until the rename and no temp file is left.
+- core: the traffic history (`days.jsonl`, Durable), the SIM-key salt (Durable, 0600), the eSIM in-flight record (Durable) and the scenario files (read side) use it; their rules from 1.97.0 stay, their tests are unchanged. Two small differences: a too-short `sim-salt` is moved aside before a new one is made, and a corrupt scenario file that cannot be moved says "left as it is".
+- `docs/designs/fault-injection.md` has the tier table: what is Durable, what is Cheap, and which files keep their own `.prev` writer.
+
+## core 1.97.5 — 2026-11-13
+
+- core: a change made from the screen or the web whose rollback record cannot be saved on `/data` (full, read-only) still goes ahead, as before, but now says so once: a log line and an inbox entry `ops-unsaved` (not texted), since that change will not be rolled back after a restart. Agent changes already refused to start without their record.
+- core: doctor has a 「/tmp 空间」/ "/tmp space" row when `/tmp` runs low (warn under 64 MB, bad under 16 MB); every program's log is there and a full `/tmp` stopped the core on 10-26. Nothing is shown while there is room.
+- docs: `docs/designs/data-budget.md` lists what writes to `/data`, each writer's cap and its size today.
+
+## core 1.97.4 — 2026-11-13
+
+- the files the core keeps across a ship are locked to `ship/core/format`. A rollback puts the old core back over files the new one wrote (an automatic rollback leaves the settings in `state-files` as they are; `state-keep` files are never swapped), and the format number, which makes ship refuse a build of another format, was never raised because nothing showed when it had to be. Now 13 such files (scenarios, APN picks, scheduler, charge limit, SMS forwarding config, queue and state, client aliases, poller allow list, regress limits, agent limit, roaming list, SMS journal) have a made-up example under `crates/luyaz-core/ship/core/format-1/`; a test reads each with today's type and writes it back, and fails with the paths that changed when the result differs. The message says what to do: regenerate the examples if an older core reads the change correctly, or raise the format and write the migration. Checked by renaming one field and adding another: both turn it red.
+- lanid: an `aliases.json` written by a newer core (its `version` above 1) is no longer read as empty and then written over at the next rename; it is left as it is and renaming says why. That was the one versioned file where a rollback lost the owner's data.
+
+
+## core 1.97.3 — 2026-11-12
+
+- core: rustls 0.23.45 → 0.23.46 (GHSA-w44r, GHSA-c8m5 and two low ones from 2026-10-27; it is used only as a client, with no ECH and no brotli, and nothing prints a session with `Debug`, so the exposure was low).
+
+## touch 1.32.2 — 2026-11-12
+
+- the touch UI no longer crashes when its log cannot be written, the same failure as core 1.97.2 and sentinel 1.5.1: std's `eprintln!` panics when the write fails and the device build aborts on any panic. Its output is `/tmp/luyaz-ui.log`, so with /tmp full it crashed at its next line and on every relaunch until the sentinel gave the panel to the vendor UI. Now a line that cannot be written is dropped (`luyaz-ui` and `luyaz-plat`). The 1.32.1 device build with stdout and stderr on `/dev/full` aborts (134); this one exits as it should (no panel in a container: 1). Smoke and all 8 model directories (291 scenes) unchanged.
+
+## sentinel 1.5.1 — 2026-11-12
+
+- the sentinel no longer stops when its log cannot be written, the same failure as core 1.97.2: std's `eprintln!` panics when the write fails, and the sentinel aborts on any panic. Its stderr is `/tmp/luyaz-sentinel.out` and every screen-log line also goes there, so with /tmp full the first screen event would have ended it, leaving the screen and the core's restarts with no one. Now a line that cannot be written is dropped (the panic hook's line too). New `tests/full_log.rs` (the program and the screen log with stderr on `/dev/full`) fails on 1.5.0 and passes now; the arm64 device build exits 2 on a bad argument with stderr full, where it would have aborted.
+
+## core 1.97.2 — 2026-11-12
+
+- the core no longer stops when its log cannot be written. std's `eprintln!` panics on a failed write and the device build aborts on any panic, so a full /tmp (where `/tmp/luyaz-core.log` lives) ended the core at its next log line, and every restart at its first: the 10-26 crash loop (four exits 5 s apart, then procd gave up; down 50 min) was this, on /tmp, not /data as noted then. The core and the libraries it runs (`luyaz-api`, `-alerts`, `-esim`, `-netwatch`, `-home-exit`, `-manual-first`, `-sms-forward`, `-scenario`, `-wifi`) now drop a line that cannot be written. In a container with a 4 MB /tmp filled up, the device build kept serving 90 s after its log filled and started three times on the full /tmp; before, it died within 2 s. A panic's own message still reaches the log. What filled /tmp on 10-26 is not known; the sentinel's `regress-disk` watches /tmp since then.
+- tests: `second_copy` ran the core with an argument it does not take, so its expected exit came from the argument error; it now runs it as the device does.
+
+
+## core 1.97.0 — 2026-11-12
+
+- core: closing a day in the traffic history (`usage/days.jsonl`, 400 days) no longer takes a failed read for an empty file: before, one read error rewrote it with that day only. Missing → started; not UTF-8 → moved to `days.jsonl.corrupt-<t>`; any other error → nothing written, the day is retried next round.
+- core: the SIM-key salt (`sim-salt`) is only made when the file is missing or too short, and written whole (tmp, fsync, rename). Another read error leaves it alone and salts this run only; a rewrite would rename every SIM in the SMS journal.
+- core: doctor has an 「短信记录」/SMS journal row when the journal recovered from `.prev`, rebuilt, or dropped unacknowledged SMS in the last 7 days. Those incidents were only on stderr.
+- core (eSIM): the in-flight write record (`esim-pending.json`) is written with fsync of the file and its directory before lpac touches the card, and a download or delete is refused when it cannot be kept. A record that does not read is moved aside and the next start says to check the profile list; before, it counted as "nothing in flight".
+- core (scenarios): a `scenarios.json`, `state.json` or `restore.json` that does not parse is moved to `.corrupt-<unix>` and the scenario log says so. At start a bad config used to become the defaults silently, and the next save would have put them over the owner's file.
+
+## core 1.96.0, chill 1.1.0 — 2026-11-11
+
+- core: every CHILL exit and profile write (`PUT /api/services/chill/exit`, `/api/services/chill/profile`) records who asked: the source header (web, mcp, scenario, scheduler), the browser address luyaz-web forwards, the User-Agent, and for a loopback caller the process holding the other end (port → `/proc/net/tcp` inode → `/proc/<pid>/fd` → `comm`). Before, a loopback call without a header was taken for the screen, so a shell `curl` looked the same. Lines go to CHILL's timeline (`/data/chill/events.log`) and `/data/luyaz/core/chill-writes.log` (last 200). A mode change seen on mihomo that did not come through the core (the dashboard behind luyaz-web, the controller itself) is recorded the same way. 11-10 the main device was switched to 性能 + 全部直连 and back the next morning, and nothing recorded by whom.
+- chill: a mode change seen on mihomo goes into the timeline (`mode_seen -> direct`). When CHILL comes back on and restores 全部直连, the inbox says so once per direct period (`chill-direct-kept`, not texted): since 11-10 every idle pause and resume put the whole house back on direct without a word.
+
 
 ## core 1.94.0 — 2026-11-08
 

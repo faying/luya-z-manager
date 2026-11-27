@@ -161,6 +161,8 @@ fn rows(d: &Data, l: Lang) -> Vec<(String, String, &'static str, String)> {
         .map(|c| {
             let tone = match c.level.as_str() {
                 "ok" => "ok",
+                // core 1.98.6: a check that could not judge this time (standby not calibrated…)
+                "skip" => "neutral",
                 "warn" => "warn",
                 _ => "bad",
             };
@@ -193,6 +195,7 @@ fn mark(tone: &str, text: &str) -> String {
     let sym = match tone {
         "bad" => "■",
         "warn" => "▲",
+        "neutral" => "○",
         _ => "●",
     };
     format!(
@@ -345,6 +348,7 @@ impl Poll {
                 for (_, label, tone, detail) in rows(d, l) {
                     let word = match tone {
                         "ok" => l.pick("OK", "正常"),
+                        "neutral" => l.pick("Not judged", "未判断"),
                         "warn" => l.pick("Needs a look", "需要注意"),
                         _ => l.pick("Problem", "异常"),
                     };
@@ -396,7 +400,7 @@ fn crash_row(c: &Crash, l: Lang) -> String {
         if c.status.is_empty() {
             String::new()
         } else {
-            format!(" · {}", esc(&c.status))
+            format!(" · {}", esc(&luyaz_api::alerts::detail::exit_why(&c.status, l == Lang::Zh)))
         }
     );
     // Names that are not plain file names are listed but not opened (the agent would refuse them).
@@ -779,6 +783,23 @@ mod tests {
             z.contains("1 项需要注意。") && z.contains(" 检查"),
             "{z}"
         );
+    }
+
+    /// core 1.98.6: a check that could not judge reads 未判断 with a hollow mark, not 正常; a
+    /// crash's end reads in Chinese.
+    #[test]
+    fn a_skipped_check_is_not_called_ok_and_crash_ends_read_in_chinese() {
+        let mut v = sample();
+        v["checks"].as_array_mut().unwrap().push(json!({"level": "skip", "id": "standby", "label": "待机", "detail": "未校准", "label_en": "Standby", "detail_en": "Not calibrated"}));
+        let p = poll(Lang::Zh, Some(parse(&v)), None);
+        let c = leaf(&p, "hl-checks");
+        let row = &c[c.find("待机").unwrap()..];
+        let row = &row[..row.find("</div>").unwrap()];
+        assert!(row.contains("nd-mark--neutral") && row.contains("○") && row.contains("未判断"), "{row}");
+        let cr = leaf(&p, "hl-crashes");
+        assert!(cr.contains("被 SIGSEGV 结束"), "{cr}");
+        let en = leaf(&poll(Lang::En, Some(parse(&v)), None), "hl-crashes");
+        assert!(en.contains("killed by SIGSEGV"), "{en}");
     }
 
     #[test]

@@ -234,6 +234,8 @@ fn state_word(s: &str, l: Lang) -> String {
         "disk" => l.pick("disk wait", "等磁盘").into(),
         "zombie" => l.pick("zombie", "僵尸").into(),
         "stopped" => l.pick("stopped", "已停止").into(),
+        // the core's word for the kernel's idle / other states
+        "other" => l.pick("other", "其他").into(),
         "" => "—".into(),
         o => o.into(),
     }
@@ -367,8 +369,9 @@ pub fn view(got: &Got, sort: Sort, l: Lang) -> View {
     let bloat_note = match top {
         Some(_) if bloat_rows.is_empty() => Some(if bloat_n > 0 {
             match l {
-                Lang::En => format!("{bloat_n} listed process(es) are running but not among the 50 busiest shown here. Use the button above to end them."),
-                Lang::Zh => format!("名单里有 {bloat_n} 个进程在运行，但不在这里显示的最忙 50 个里。用上面的按钮结束它们。"),
+                // the status block already counts them and offers the button (11-14)
+                Lang::En => format!("They are not among the 50 busiest listed below ({bloat_n})."),
+                Lang::Zh => format!("这 {bloat_n} 个不在下面最忙的 50 个里。"),
             }
         } else {
             l.pick("Nothing to kill right now.", "现在没有可结束的进程。").to_owned()

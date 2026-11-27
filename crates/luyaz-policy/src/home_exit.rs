@@ -352,7 +352,7 @@ impl Machine {
                     );
                     io.alert(
                         "home-exit-down",
-                        "家里出口 15 分钟没回应，「其余都走家里」已关",
+                        "home exit silent 15 min; Rest via home turned off",
                     );
                 }
             }

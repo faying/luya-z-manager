@@ -104,8 +104,8 @@ pub fn view(mode: Option<&str>, a: &Agent, l: Lang) -> View {
             "neutral",
             l.pick("ADB is off", "ADB 未开启").into(),
             Some(match l {
-                Lang::En => format!("USB mode: {}", m.to_uppercase()),
-                Lang::Zh => format!("USB 模式：{}", m.to_uppercase()),
+                Lang::En => format!("USB mode: {}", crate::usb::mode_word(l, &m)),
+                Lang::Zh => format!("USB 模式：{}", crate::usb::mode_word(l, &m)),
             }),
         ),
         (_, _, None) => (

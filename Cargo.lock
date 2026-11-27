@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-core"
-version = "1.95.0"
+version = "1.106.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1259,6 +1259,7 @@ dependencies = [
  "luyaz-home-exit",
  "luyaz-manual-first",
  "luyaz-netwatch",
+ "luyaz-persist",
  "luyaz-policy",
  "luyaz-scenario",
  "luyaz-sms-forward",
@@ -1288,6 +1289,7 @@ name = "luyaz-esim"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "luyaz-persist",
  "serde",
  "serde_json",
 ]
@@ -1332,6 +1334,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "luyaz-persist"
+version = "0.1.0"
+
+[[package]]
 name = "luyaz-policy"
 version = "0.1.0"
 dependencies = [
@@ -1345,6 +1351,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "luyaz-api",
+ "luyaz-persist",
  "luyaz-policy",
  "luyaz-wifi",
  "serde",
@@ -1353,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-sentinel"
-version = "1.5.0"
+version = "1.5.4"
 dependencies = [
  "libc",
  "luyaz-alerts",
@@ -1387,7 +1394,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-ui"
-version = "1.32.1"
+version = "1.34.0"
 dependencies = [
  "libc",
  "lvgl-sys",
@@ -1398,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-web"
-version = "1.57.1"
+version = "1.61.1"
 dependencies = [
  "askama",
  "axum",
@@ -1984,9 +1991,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",

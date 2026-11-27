@@ -293,6 +293,15 @@ impl Poll {
             reason.map_or(String::new(), |r| format!("<div class=\"nd-status__reason\"><span>{}</span></div>", esc(&r))),
         ));
 
+        // not on this firmware: the status block says so; the switch, parameters and reset are
+        // left out (11-14 they repeated it and showed 「—」 where values go), their leaves kept
+        // as empty hidden shells so a later patch still has somewhere to land
+        if unsup {
+            for id in ["stc-switch", "stc-params", "stc-resetbtn"] {
+                out.push_str(&format!("<div id=\"{id}\" hidden></div>\n<!--leaf-->\n"));
+            }
+            return split_leaves(&out);
+        }
         // the switch
         let locked = unsup || down || stale || self.status.is_none();
         let label = l.pick("STC (whitelist cell lock)", "STC（白名单锁小区）");
@@ -414,6 +423,8 @@ struct Page {
     tg_op: String,
     pa_op: String,
     rs_op: String,
+    /// Not on this firmware when the page was built: the three sections are left out.
+    unsup: bool,
 }
 
 impl Page {
@@ -476,6 +487,7 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
         tg_op: area(Which::Toggle, ctx.lang, ctx.remote, "", &idle),
         pa_op: area(Which::Params, ctx.lang, ctx.remote, "", &idle),
         rs_op: area(Which::Reset, ctx.lang, ctx.remote, "", &idle),
+        unsup: p.unsupported(),
     }
     .render()
     .unwrap();

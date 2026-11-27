@@ -113,7 +113,7 @@ async function procOwn(p) {
 
 async function dnsOwn(p) {
   await scenario("normal");
-  ok(/自动/.test(await txt(p, "#dns-status .nd-status__state")), `status: ${await txt(p, "#dns-status .nd-status__state")}`);
+  ok(/在用运营商的 DNS/.test(await txt(p, "#dns-status .nd-status__state")), `status: ${await txt(p, "#dns-status .nd-status__state")}`);
   ok(/168\.95\.1\.1/.test(await txt(p, "#dns-status")) , "operator DNS in the status");
   ok(await p.locator(".dns-fields").isHidden(), "fields hidden in auto");
   await p.getByRole("radio", { name: "手动" }).click();
@@ -162,7 +162,7 @@ async function dnsOwn(p) {
   await p.locator("#dns-w-confirm").waitFor();
   await p.locator("#dns-w-confirm button:has-text('确认：应用')").click();
   ok(await until(p, "#dns-w-op", /已改回运营商分配的 DNS/), `back to auto: ${await txt(p, "#dns-w-op")}`);
-  ok(await until(p, "#dns-status", /自动/), "status follows: auto");
+  ok(await until(p, "#dns-status", /在用运营商的 DNS/), "status follows: auto");
   void dev;
 }
 

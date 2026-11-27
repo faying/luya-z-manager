@@ -1,0 +1,2 @@
+[{"peer": "192.168.0.10", "port": 8080, "label": "example", "until": 1794500000},
+ {"peer": "192.168.0.11", "port": 443, "label": "", "until": null}]

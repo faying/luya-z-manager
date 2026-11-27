@@ -1,0 +1,12 @@
+{
+  "jobs": [
+    {"key": "k1", "rule_id": 1, "sms_id": 7, "sender": "+15550100", "content": "example", "date": "26,11,13,08,00,00,+32",
+     "state": "pending", "attempts": 1, "next_at": 1794500000, "created_at": 1794499000, "online_secs": 60, "last_error": "timeout"},
+    {"key": "k2", "rule_id": 2, "sms_id": 8, "sender": "+15550101", "content": "example", "date": "26,11,13,08,01,00,+32",
+     "state": "sent", "attempts": 1, "next_at": 0, "created_at": 1794499100, "online_secs": 0},
+    {"key": "k3", "rule_id": 2, "sms_id": 9, "sender": "+15550102", "content": "example", "date": "26,11,13,08,02,00,+32",
+     "state": "failed", "attempts": 5, "next_at": 0, "created_at": 1794499200, "online_secs": 900, "last_error": "http 404"}
+  ],
+  "seen": [{"key": "k0", "at": 1794498000}],
+  "seeded": true
+}

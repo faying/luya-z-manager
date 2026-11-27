@@ -89,6 +89,7 @@ core_snapshot_t {
             ],
         },
     ),
+    cards: None,
     regress: None,
     display: None,
     carrier: "中国电信",

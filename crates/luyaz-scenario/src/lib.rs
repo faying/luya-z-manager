@@ -35,6 +35,26 @@
 //!    the engine thread would take the whole data service with it. Poisoned locks
 //!    are taken anyway ([`lk`]); no `unwrap` on anything that can fail.
 
+/// A log line that cannot be written is dropped instead of panicking (std's `eprintln!` panics,
+/// and the core's device build aborts on any panic: a full /tmp stopped it on 10-26). Same as
+/// luyaz-core's `main.rs` (P-7); defined before every `mod`, so the whole crate uses it.
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::writeln!(::std::io::stderr(), $($t)*);
+    }};
+}
+
+/// [`eprintln!`] without the newline.
+#[allow(unused_macros)]
+macro_rules! eprint {
+    ($($t:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::write!(::std::io::stderr(), $($t)*);
+    }};
+}
+
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
@@ -267,9 +287,28 @@ pub fn uptime_secs(text: &str) -> Option<u64> {
 
 /// Missing or unparsable file → the type's default.
 fn read_json<T: DeserializeOwned + Default>(path: &str) -> T {
-    match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-        Err(_) => T::default(),
+    read_json_noted(path).0
+}
+
+/// Like [`read_json`], and says what went wrong. A file that does not parse is moved to
+/// `<path>.corrupt-<unix>` first, so the next write cannot put defaults over the owner's
+/// scenarios unseen (11-12: startup used to take the default silently). A read error other
+/// than "missing" leaves the file where it is.
+fn read_json_noted<T: DeserializeOwned + Default>(path: &str) -> (T, Option<String>) {
+    use luyaz_persist::{Load, Parsed};
+    let parse = |b: &[u8]| match serde_json::from_slice::<T>(b) {
+        Ok(v) => Parsed::Ok(v),
+        Err(e) => Parsed::Corrupt(e.to_string()),
+    };
+    match luyaz_persist::load(std::path::Path::new(path), parse) {
+        Load::Ok(v) => (v, None),
+        Load::Missing => (T::default(), None),
+        Load::Corrupt { why, moved_to } => {
+            (T::default(), Some(format!("{path} does not read ({why}): moved to {}", moved_to.display())))
+        }
+        Load::Newer(e) => (T::default(), Some(format!("{path}: {e}; left as it is"))),
+        // could not read it, or a bad one could not be moved aside: left as it is
+        Load::Io(e) => (T::default(), Some(format!("{path}: {e}; left as it is"))),
     }
 }
 /// Write `path.tmp`, then rename it over `path`: a crash mid-write leaves the old file whole.
@@ -389,8 +428,10 @@ impl Engine {
     /// the switch rolls back to away.
     pub fn new(io: Arc<dyn Io>) -> Engine {
         let cfg_seen = stamp(&io.path(CONFIG_FILE));
-        let cfg: Config = read_json(&io.path(CONFIG_FILE));
-        let state: RunState = read_json(&io.path(STATE_FILE));
+        let (cfg, cfg_bad): (Config, _) = read_json_noted(&io.path(CONFIG_FILE));
+        let (state, state_bad): (RunState, _) = read_json_noted(&io.path(STATE_FILE));
+        // a moved config is a new file state: `reload_config` must not take it as unchanged
+        let cfg_seen = if cfg_bad.is_some() { stamp(&io.path(CONFIG_FILE)) } else { cfg_seen };
         let e = Engine {
             io,
             cfg: Mutex::new(cfg),
@@ -402,6 +443,9 @@ impl Engine {
             beat: Mutex::new(None),
             cfg_seen: Mutex::new(cfg_seen),
         };
+        for bad in [cfg_bad, state_bad].into_iter().flatten() {
+            e.log(&format!("at start: {bad}; using the defaults"));
+        }
         if let Err(err) = sc::validate(&lk(&e.cfg)) {
             e.log(&format!("configuration does not validate any more: {err}"));
         }
@@ -433,7 +477,11 @@ impl Engine {
     }
 
     fn pending(&self) -> Vec<PendingRestore> {
-        read_json(&self.p(RESTORE_FILE))
+        let (v, bad) = read_json_noted(&self.p(RESTORE_FILE));
+        if let Some(bad) = bad {
+            self.log(&format!("pending restores: {bad}; the settings they held are not put back"));
+        }
+        v
     }
 
     /// Stamp one record and hand the ring to the host (the agent writes the file).

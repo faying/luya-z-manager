@@ -276,6 +276,78 @@
       "title": "Battery",
       "type": "object"
     },
+    "cards": {
+      "$defs": {
+        "CardSlot": {
+          "properties": {
+            "app": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "eid_tail": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "iccid_tail": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "id": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "present": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "provisioned": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "role": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "slot": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "slot",
+            "present",
+            "app",
+            "provisioned",
+            "role",
+            "id",
+            "iccid_tail",
+            "eid_tail"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/CardSlot"
+          },
+          "type": "array",
+          "x-u60-level": "nested"
+        },
+        "source": {
+          "type": "string",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "source",
+        "slots"
+      ],
+      "title": "Cards",
+      "type": "object"
+    },
     "charger": {
       "$defs": {
         "DirectSupply": {

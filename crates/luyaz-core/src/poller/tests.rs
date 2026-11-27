@@ -474,3 +474,49 @@ fn a_missing_or_broken_state_file_is_a_fresh_start() {
         assert!(m.events().is_empty(), "{t}");
     }
 }
+
+/// The alert goes through the real queue (ASCII only, 120 characters, id and all) and still reads
+/// in Chinese on the web: core 1.98.4 wrote Chinese here and the queue kept only scraps.
+#[test]
+fn the_alert_text_survives_the_queue_and_reads_in_chinese() {
+    let dir = std::env::temp_dir().join(format!("poller-alert-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = luyaz_api::alerts::Alerts::at(&dir);
+    let mut e = Event {
+        id: "34d373b7-179467873700".into(),
+        peer: "100.101.102.103".into(),
+        peer_name: Some("a-rather-long-mac-mini-hostname-that-goes-on-and-on".into()),
+        via_gateway: false,
+        port: 9090,
+        since: 0,
+        last: 0,
+        minutes: 10,
+        pkts_per_min: 124,
+        state: "active",
+        ended_at: None,
+        acked: false,
+        allowed: false,
+        counts: vec![],
+        empty: 0,
+    };
+    let want = [
+        "100.101.102.103（a-rather-long-mac-mini-ho…） 经 Tailscale 持续访问 :9090，已 10 分钟（约 124 包/分钟），息屏约多耗 0.3–0.6 W",
+        "192.168.50.88（经网关转发） 经 Tailscale 持续访问 :9090，已 10 分钟（约 124 包/分钟），息屏约多耗 0.3–0.6 W",
+    ];
+    a.add_once(&e.id, ALERT_KIND, &alert_text(&e), 1_794_000_000, 1)
+        .unwrap();
+    e.id = "34d373b7-179467873701".into();
+    e.peer = "192.168.50.88".into();
+    e.peer_name = None;
+    e.via_gateway = true;
+    a.add_once(&e.id, ALERT_KIND, &alert_text(&e), 1_794_000_000, 1)
+        .unwrap();
+    let got: Vec<String> = a
+        .events()
+        .iter()
+        .map(|ev| luyaz_api::alerts::detail_zh(&ev.kind, &ev.text).unwrap())
+        .collect();
+    assert_eq!(got, want);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -154,6 +154,10 @@ fn change_of(action: &str, params: &Value) -> Words {
         | "wifi.power_save" => params
             .get("enabled")
             .and_then(|v| on("打开", "关掉", "on", "off", v)),
+        // the title said only 原厂设置 (11-14): which stock call it was
+        "vendor.call" => vendor_change(params),
+        "sms.delete" | "sms.db_delete" => Some(("删除".to_owned(), "delete".to_owned())),
+        "sms.send_raw" => Some(("发送".to_owned(), "send".to_owned())),
         "usb.attach_mode" => params.get("mode").and_then(Value::as_str).and_then(|m| {
             let (zh, en) = match m {
                 "share" => ("充电 + 上网", "charge + internet"),
@@ -179,6 +183,28 @@ fn change_of(action: &str, params: &Value) -> Words {
         _ => None,
     };
     w.unwrap_or_default()
+}
+
+/// A stock call in words: the known ones by what they do, the rest by their method name. SMS
+/// calls keep only the method (the record drops their arguments).
+fn vendor_change(params: &Value) -> Option<Words> {
+    let method = params.get("method").and_then(Value::as_str)?;
+    let args = params.get("args").unwrap_or(&Value::Null);
+    let w = |zh: &str, en: &str| Some((zh.to_owned(), en.to_owned()));
+    match method {
+        "enableAutoSleep" => match args.get("switch").and_then(onoff) {
+            Some(true) => w("打开自动休眠", "auto sleep on"),
+            Some(false) => w("关掉自动休眠", "auto sleep off"),
+            None => w("自动休眠", "auto sleep"),
+        },
+        "zte_libwms_send_sms" => w("发短信", "send SMS"),
+        "reboot" => w("重启", "restart"),
+        "sim_change_pin" => w("改 SIM PIN", "change SIM PIN"),
+        "router_set_dmz" => w("DMZ", "DMZ"),
+        "set_device_info" => w("设备信息", "device info"),
+        m if m.contains("sms") => Some((format!("短信：{m}"), format!("SMS: {m}"))),
+        m => Some((m.to_owned(), m.to_owned())),
+    }
 }
 
 /// 不走事务的行的结果。

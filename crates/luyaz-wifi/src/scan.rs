@@ -140,7 +140,6 @@ pub fn parse_scan(text: &str) -> Vec<Network> {
             signal = None;
         } else if let Some(rest) = trimmed.strip_prefix("signal:") {
             signal = rest
-                .trim()
                 .split_whitespace()
                 .next()
                 .and_then(|n| n.parse().ok());

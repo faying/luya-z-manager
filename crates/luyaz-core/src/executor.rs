@@ -60,6 +60,10 @@ pub const ENV_COOLDOWN_MS: &str = "LUYAZ_UBUS_COOLDOWN_MS";
 /// 只按超时数，不按用掉的时间：慢但在回答的轮照旧全读。ubusd 整个不回时一轮从 13 个对象挨个超时
 /// （socket 约 26 秒、cli 约 104 秒）缩到 6 个；基带重启时只有基带那几个对象（mdm、nwinfo、data、wms）超时，到不了 6 个。
 pub const LEGACY_TIMEOUT_LIMIT: usize = 6;
+/// 执行者外发来、还在排队的**只读**调用最多这么多个（1117-A3）。平时排队的读是个位数（安全点之间最多隔一次
+/// 块读，≤2 秒）；某个原厂对象挂住时每个读都要等满 8 秒，请求又一直进来，这个上限挡住无限堆积。
+/// 满了的读不发、立即回超时（调用方照「没回答」处理，有 TTL 的沿用旧值）。写不受影响。
+pub const READ_QUEUE: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -131,6 +135,8 @@ pub trait RoundDriver: Send + Sync {
 
 struct Job {
     control: bool,
+    /// 执行者外发来的只读 ubus 调用（[`is_read`]）：计入 `READ_QUEUE`。
+    read: bool,
     fut: BoxFuture<'static, ()>,
 }
 
@@ -139,6 +145,10 @@ struct Queue {
     jobs: VecDeque<Job>,
     /// 排队中的控制任务数（正在执行的不算）。
     controls: usize,
+    /// 排队中的只读调用数（正在执行的不算，1117-A3）。
+    reads: usize,
+    /// 这一阵读队列满过、已经记过一行（排空后复位）。
+    reads_full_logged: bool,
 }
 
 #[derive(Default)]
@@ -210,6 +220,10 @@ impl Liveness {
 pub struct Stats {
     pub rounds: AtomicU64,
     pub calls: AtomicU64,
+    /// 读队列满了、没排进去的读（1117-A3）。
+    pub reads_refused: AtomicU64,
+    /// 轮到时请求方已经走了、没发的读（1117-A3）。
+    pub reads_abandoned: AtomicU64,
 }
 
 struct Shared {
@@ -578,6 +592,12 @@ impl Shared {
                 if job.as_ref().is_some_and(|j| j.control) {
                     q.controls -= 1;
                 }
+                if job.as_ref().is_some_and(|j| j.read) {
+                    q.reads -= 1;
+                    if q.reads == 0 {
+                        q.reads_full_logged = false;
+                    }
+                }
                 job
             };
             let Some(job) = job else { break };
@@ -684,6 +704,19 @@ impl Shared {
                     return Err(Busy);
                 }
                 q.controls += 1;
+            }
+            if job.read {
+                if q.reads >= READ_QUEUE {
+                    self.stats.reads_refused.fetch_add(1, Ordering::Relaxed);
+                    if !q.reads_full_logged {
+                        q.reads_full_logged = true;
+                        eprintln!(
+                            "executor: {READ_QUEUE} reads already waiting; refusing new reads until the queue drains"
+                        );
+                    }
+                    return Err(Busy);
+                }
+                q.reads += 1;
             }
             q.jobs.push_back(job);
         }
@@ -869,6 +902,7 @@ impl Executor {
         let (tx, rx) = oneshot::channel();
         self.shared.push(Job {
             control,
+            read: false,
             fut: Box::pin(async move {
                 // 请求方断开了也做完（/control 一直是做完才回复）。
                 let _ = tx.send(fut.await);
@@ -896,11 +930,42 @@ impl Executor {
                 .await;
         }
         let (o, m, a) = (object.to_owned(), method.to_owned(), args.clone());
-        self.task(async move {
-            let ctx = CTX.with(Ctx::clone);
-            ctx.shared.call_here(false, false, &o, &m, &a).await
-        })
-        .await
+        if !is_read(object, method) {
+            // 写（和认不出的）照旧：一定排进去、请求方断开了也做完。
+            return self
+                .task(async move {
+                    let ctx = CTX.with(Ctx::clone);
+                    ctx.shared.call_here(false, false, &o, &m, &a).await
+                })
+                .await;
+        }
+        // 只读（1117-A3）：有上限；轮到时请求方已经走了（它自己的超时、HTTP 断开）就不发。
+        // 某个原厂对象挂住时，这样排在后面的读不会一个个等满 8 秒、越积越多。
+        let (tx, rx) = oneshot::channel();
+        let shared = self.shared.clone();
+        let job = Job {
+            control: false,
+            read: true,
+            fut: Box::pin(async move {
+                if tx.is_closed() {
+                    shared.stats.reads_abandoned.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                let ctx = CTX.with(Ctx::clone);
+                let r = ctx.shared.call_here(false, false, &o, &m, &a).await;
+                let _ = tx.send(r);
+            }),
+        };
+        if self.shared.push(job).is_err() {
+            return Err(UbusError::Timeout {
+                object: object.to_owned(),
+                detail: format!(
+                    "ubus {object}: not sent, {READ_QUEUE} reads already waiting on the executor"
+                ),
+            });
+        }
+        rx.await
+            .unwrap_or_else(|_| Err(UbusError::Io("ubus executor dropped a read".into())))
     }
 
     /// 内部任务（不计上限）。
@@ -927,6 +992,26 @@ impl Executor {
     pub fn mark_immediate(&self, names: Option<&[&str]>) {
         self.shared.hub.mark_immediate(names);
     }
+}
+
+/// 只读的 ubus 调用（1117-A3 只给这些设上限、请求方走了就不发）。宁可漏认：认不出的一律当写，行为不变。
+/// 不发一个读永远是安全的（包括「读一次就清」的那类：不发就不清）。
+pub(crate) fn is_read(object: &str, method: &str) -> bool {
+    if object == "uci" {
+        return method == "get" || method == "show";
+    }
+    let m = method.to_ascii_lowercase();
+    const WRITE_WORDS: &[&str] = &[
+        "set", "lock", "clear", "del", "apply", "send", "start", "stop", "reload", "restart",
+        "write", "add", "remove", "switch", "enable", "disable", "commit", "kill", "reboot",
+        "connect", "update", "save", "confirm", "cancel", "scan",
+    ];
+    if WRITE_WORDS.iter().any(|w| m.contains(w)) {
+        return false;
+    }
+    m.starts_with("get")
+        || m.contains("_get")
+        || matches!(m.as_str(), "list" | "status" | "board" | "info" | "dump" | "show")
 }
 
 #[cfg(test)]

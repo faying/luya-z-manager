@@ -98,12 +98,17 @@ fn ucs2(raw: &str) -> Option<String> {
     Some(String::from_utf16_lossy(&units))
 }
 
-/// The body: UCS-2 hex as the firmware stores it (the old `decodeSms`), else as it is.
+/// The body: UCS-2 hex as the firmware stores it (the old `decodeSms`), else as it is. The
+/// firmware's MMS placeholder (same rule as `luyaz_sms_forward::readable_sms`) reads as a notice.
 pub fn decode_text(raw: &str) -> String {
-    match ucs2(raw) {
+    let t = match ucs2(raw) {
         Some(t) => t.trim_end_matches('\0').to_owned(),
         None => raw.to_owned(),
+    };
+    if t.trim() == "multimedia_information" {
+        return "[彩信 MMS] 收到一条彩信。U60 收不了彩信，内容和真正的发件人都没有留下；请对方改发短信或用其他方式发。".to_owned();
     }
+    t
 }
 
 /// The number: list_after gives it plain ("10086", "+8613…", a sender name) or, when it came out
@@ -414,7 +419,7 @@ pub struct View {
     pub tone: &'static str,
     pub state: String,
     pub reason: Option<String>,
-    pub capacity: [(&'static str, String); 4],
+    pub capacity: [(&'static str, String); 3],
     /// 「列表停在 hh:mm」 when the list stopped updating.
     pub stopped: Option<String>,
     pub retry: bool,
@@ -498,13 +503,7 @@ pub fn view(st: &St, got: &Got, cap: Option<&Value>, l: Lang, list: bool) -> Vie
         (l.pick("SIM Used", "SIM 已用"), frac(sim)),
         (l.pick("Device Used", "设备已用"), frac(dev)),
         (l.pick("Total Used", "总已用"), frac(total)),
-        (
-            l.pick("Unread", "未读"),
-            match (msgs, unread) {
-                (Some(_), Some(n)) => n.to_string(),
-                _ => "—".into(),
-            },
-        ),
+        // unread is the status block's title (「35 条未读」); not again here (11-14)
     ];
     let full = [("SIM", sim), (l.pick("Device", "设备"), dev)]
         .into_iter()

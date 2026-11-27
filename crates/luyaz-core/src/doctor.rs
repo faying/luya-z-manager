@@ -71,6 +71,7 @@ pub struct Cfg {
     regress_off: String,
     crash: String,
     data_dir: String,
+    tmp_dir: String,
     device_id: String,
     initd: String,
     rc: String,
@@ -157,6 +158,7 @@ impl Cfg {
             regress_off: s("DOC_REGRESS_SMS_OFF", luyaz_api::alerts::REGRESS_SMS_OFF),
             crash: s("DOC_CRASH", "/data/crashlog"),
             data_dir: s("DOC_DATA", "/data"),
+            tmp_dir: s("DOC_TMP", "/tmp"),
             device_id: s("DOC_DEVICE_ID", "/data/luyaz/web-device-id"),
             initd: s("DOC_INITD", "/etc/init.d"),
             rc: s("DOC_RC", "/etc/rc.local"),
@@ -347,9 +349,12 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     let unread = unread_alerts(c);
     rows.push(alerts(unread));
     rows.push(sms(c));
+    rows.extend(sms_journal());
     rows.extend(heat(c));
+    rows.extend(cards(c));
     rows.push(crashes(c, unread));
     rows.push(disk(c));
+    rows.extend(tmp_disk(c));
     rows.extend(netrec(c));
     rows.extend(device_id(c));
     let (lv, d) = standby::check(c, false);
@@ -616,7 +621,7 @@ fn lanid(c: &Cfg) -> Option<Row> {
     .map(|(_, l)| l)
     .collect();
     let counts = format!(
-        "{} 批 {} 包，trap {}，丢 {}，封锁 {}，记录 {}",
+        "{} 批 {} 包，组件出错 {}，丢 {}，封锁 {}，记录 {}",
         n("batches"),
         n("frames"),
         n("traps"),
@@ -694,7 +699,7 @@ fn boot_sync(c: &Cfg) -> Row {
             "ok",
             "boot-sync",
             "开机同步",
-            "sync success".into(),
+            "原厂服务都已登记，开机已放行".into(),
             "Boot sync",
             "All stock services registered (sync success)".into(),
         )
@@ -890,7 +895,7 @@ fn clock(c: &Cfg) -> Row {
             )
         } else {
             (
-                format!("时间为估算（{dt} 设备当地时间），尚未验证同步"),
+                format!("时间按开机后续算（{dt} 设备当地时间），还没和网络时间核对"),
                 format!("Estimated ({dt} device local time); sync unverified"),
             )
         };
@@ -993,13 +998,14 @@ fn services(c: &Cfg) -> Vec<Row> {
     }
     for s in svcs {
         let (id, label, label_en): (&'static str, &'static str, &'static str) = match s {
-            "luyaz-core" => ("svc-luyaz-core", "数据服务", "Data service"),
+            // 「进程」: the :9460 / :9090 rows below are the same programs answering
+            "luyaz-core" => ("svc-luyaz-core", "数据服务进程", "Data service process"),
             "luyaz-sentinel" => (
                 "svc-luyaz-sentinel",
-                "哨兵（屏幕和看门狗）",
-                "Sentinel (screen and watchdog)",
+                "哨兵进程（屏幕和看门狗）",
+                "Sentinel process (screen and watchdog)",
             ),
-            _ => ("svc-luyaz-web", "管理网页（:9090）", "Admin pages (:9090)"),
+            _ => ("svc-luyaz-web", "管理网页进程", "Admin pages process"),
         };
         rows.push(if !executable(&format!("{}/{s}", c.initd)) {
             row(
@@ -1016,9 +1022,9 @@ fn services(c: &Cfg) -> Vec<Row> {
                     "ok",
                     id,
                     label,
-                    "procd 监督中".into(),
+                    "在运行，由 procd 监督（退出会自动拉起）".into(),
                     label_en,
-                    "Supervised by procd".into(),
+                    "Running, supervised by procd (restarted if it exits)".into(),
                 )
             } else {
                 row(
@@ -1252,6 +1258,34 @@ fn alerts(unread: usize) -> Row {
     }
 }
 
+/// The SMS journal's own incidents (a damaged file read from `.prev`, a rebuild, unacknowledged
+/// SMS dropped over the cap), last 7 days. Before 11-12 they were only on stderr. No row when
+/// there were none.
+fn sms_journal() -> Option<Row> {
+    let text = std::fs::read_to_string(crate::sms_journal::JOURNAL_PATH).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let (zh, en) = sms_journal_text(&v["incidents"], now)?;
+    Some(row("warn", "sms-journal", "短信记录", zh, "SMS journal", en))
+}
+
+fn sms_journal_text(incidents: &serde_json::Value, now: u64) -> Option<(String, String)> {
+    let recent: Vec<&str> = incidents
+        .as_array()?
+        .iter()
+        .filter(|i| i["at"].as_u64().is_some_and(|at| now.saturating_sub(at) <= 7 * 86_400))
+        .filter_map(|i| i["what"].as_str())
+        .collect();
+    let last = recent.last()?;
+    Some((
+        format!("7 天内出过 {} 次问题，最近一次：{last}", recent.len()),
+        format!("{} problem(s) in 7 days, last: {last}", recent.len()),
+    ))
+}
+
 fn sms(c: &Cfg) -> Row {
     let set = std::fs::metadata(format!("{}/sms-to", c.alerts)).is_ok_and(|m| m.len() > 0);
     if set && std::path::Path::new(&c.regress_off).exists() {
@@ -1283,6 +1317,34 @@ fn sms(c: &Cfg) -> Row {
             "No number set: you won't hear if the admin backend dies".into(),
         )
     }
+}
+
+/// The card table (dual-slot-removable.md R11): a row only when a card has waited too long to be
+/// identified (`id` unknown); nothing to say otherwise.
+fn cards(c: &Cfg) -> Option<Row> {
+    let out = sh_raw(&c.wget, &["-q", "-T", "2", "-O", "-", &c.core_url], true);
+    let v: serde_json::Value = serde_json::from_str(&out).ok()?;
+    let (lv, zh, en) = cards_text(&v["blocks"]["cards"]["data"])?;
+    Some(row(lv, "cards", "SIM 卡", zh, "SIM cards", en))
+}
+
+fn cards_text(d: &serde_json::Value) -> Option<(&'static str, String, String)> {
+    let slots: Vec<i64> = d["slots"]
+        .as_array()?
+        .iter()
+        .filter(|s| s["id"] == "unknown")
+        .filter_map(|s| s["slot"].as_i64())
+        .collect();
+    if slots.is_empty() {
+        return None;
+    }
+    let n = slots.iter().map(i64::to_string).collect::<Vec<_>>().join("、");
+    let ne = slots.iter().map(i64::to_string).collect::<Vec<_>>().join(", ");
+    Some((
+        "warn",
+        format!("卡槽 {n} 的卡认不出（读不到 EID，也确认不了是普通卡）；eSIM 操作先不碰它"),
+        format!("the card in slot {ne} is not recognised (no EID, not confirmed a plain card); eSIM leaves it alone"),
+    ))
 }
 
 /// Heat care (thermal-care §4.3), as the core's `heat` block says. No row without the block (an
@@ -1331,11 +1393,32 @@ fn heat_text(d: &serde_json::Value) -> Option<(&'static str, String, String)> {
         "warm" => ("warn", "偏热", "Warm"),
         "hot" => ("warn", "热", "Hot"),
         "critical" => ("bad", "过热", "Too hot"),
-        _ => ("ok", "正常", "Normal"),
+        // the level column already says 正常
+        _ => return Some(("ok", zh, en)),
     };
     Some((lv, format!("{z}：{zh}"), format!("{e}: {en}")))
 }
 
+
+/// How long ago, in the unit a person would say it: 45 秒前, 12 分钟前, 5 小时前, 2 天前.
+pub(crate) fn ago_zh(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} 秒前"),
+        60..5_400 => format!("{} 分钟前", secs / 60),
+        5_400..172_800 => format!("{} 小时前", secs / 3_600),
+        _ => format!("{} 天前", secs / 86_400),
+    }
+}
+
+/// [`ago_zh`] in English.
+pub(crate) fn ago_en(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} s ago"),
+        60..5_400 => format!("{} min ago", secs / 60),
+        5_400..172_800 => format!("{} h ago", secs / 3_600),
+        _ => format!("{} days ago", secs / 86_400),
+    }
+}
 
 /// awk's `$1 + 0`: the longest leading number, else 0.
 fn awk_num(s: &str) -> f64 {
@@ -1503,6 +1586,31 @@ fn disk(c: &Cfg) -> Row {
     }
 }
 
+/// P-10：/tmp（内存盘）是每个程序的日志所在；满了以前会让它们停下（10-26 core 停 50 分钟）。
+/// 只在快满时出现一行（平时不占位置）；读不到也不说（/data 那行已经说过 df 读不到）。
+fn tmp_disk(c: &Cfg) -> Option<Row> {
+    tmp_row(df_free(&sh_raw(&c.df, &["-k", &c.tmp_dir], true))?)
+}
+
+fn tmp_row(kb: i64) -> Option<Row> {
+    let mb = kb / 1024;
+    let lv = if kb < 16 * 1024 {
+        "bad"
+    } else if kb < 64 * 1024 {
+        "warn"
+    } else {
+        return None;
+    };
+    Some(row(
+        lv,
+        "tmp",
+        "/tmp 空间",
+        format!("只剩 {mb} MB（日志都在这里）"),
+        "/tmp space",
+        format!("Only {mb} MB left (every log is here)"),
+    ))
+}
+
 /// R18-P0-04：管理网页的设备 ID 档（核心的 `/control` 用它核对 `expect_device_id`）。
 /// 缺了或读不懂 = 网页带着 ID 的写会全被拒（409 wrong_device）；好的时候不占一行。
 /// The recorder (netrec.rs): only on a device that has it on in core.env or has its files.
@@ -1573,6 +1681,7 @@ pub fn render(mode: Mode, rows: &[Row]) -> (String, i32) {
             Mode::Text => {
                 let s = match r.level {
                     "ok" => '●',
+                    "skip" => '○',
                     "warn" => '▲',
                     _ => '■',
                 };

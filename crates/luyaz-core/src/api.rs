@@ -39,6 +39,7 @@ mod cell_detect;
 mod charge;
 mod health;
 mod chill_jobs;
+pub(crate) mod chill_who;
 mod chill_page;
 pub(crate) mod control;
 mod device_admin;
@@ -239,6 +240,18 @@ impl Compat {
         let net: Arc<netinfo::NetCache> = Arc::default();
         let gate: Arc<std::sync::Mutex<luyaz_api::diagnose::Gate>> = Arc::default();
         let esim = Arc::new(luyaz_esim::Esim::new(src.esim.clone()));
+        // the card table's identities come from the eSIM engine, the one owner of the card's
+        // logical channels (dual-slot R2/D4); it answers from a cache and never waits
+        {
+            let e = esim.clone();
+            crate::cards::set_eid_source(Box::new(move |slot, generation| match e.eid_of_slot(slot, generation) {
+                luyaz_esim::EidAnswer::Found(x) => crate::cards::Eid::Found(x),
+                luyaz_esim::EidAnswer::NotEuicc => crate::cards::Eid::NotEuicc,
+                luyaz_esim::EidAnswer::Later => crate::cards::Eid::Later,
+            }));
+            let e = esim.clone();
+            crate::card_watch::set_esim_busy(Box::new(move || e.busy()));
+        }
         let group = Arc::new(watch::Group::new(
             &root,
             src.hub.clone(),
@@ -525,6 +538,7 @@ impl Compat {
                 .route("/api/esim/job", get(esim::job))
                 .route("/api/esim/switch", post(esim::switch))
                 .route("/api/esim/cancel", post(esim::cancel))
+                .route("/api/esim/reread", post(esim::reread))
                 .route("/api/esim/download", post(esim::download))
                 .route("/api/esim/nickname", post(esim::nickname))
                 .route("/api/esim/delete", post(esim::delete))
@@ -766,12 +780,18 @@ async fn alerts_get(
     let offset = utc_offset().await;
     let dir = c.alerts_dir();
     let cursor = cursor_query(q.as_deref());
+    // the touch screen in Chinese asks for Chinese bodies (luyaz_alerts::for_zh_screen)
+    let zh = cursor.is_none()
+        && q.as_deref().is_some_and(|q| q.split('&').any(|p| p == "lang=zh"));
     let data = tokio::task::spawn_blocking(move || {
         let a = Alerts::at(&dir);
         let mut v = match cursor {
             Some((since, limit)) => a.since(since, limit, luyaz_api::alerts::now(), offset),
             None => a.summary(luyaz_api::alerts::now(), uptime_now(), offset),
         };
+        if zh {
+            luyaz_api::alerts::for_zh_screen(&mut v);
+        }
         // each event's incident, when it has one (eng review round 3 D2)
         crate::longterm::regress::io::tag_alerts(&mut v);
         v
@@ -808,7 +828,8 @@ async fn sim_voice_slot(body: Bytes) -> Response {
     let Some(slot) = slot else {
         return reply(400, json!({"ok": false, "error": "slot must be 1 or 2"}));
     };
-    match tokio::task::spawn_blocking(move || crate::ops::dual_sim::set_voice_slot(slot)).await {
+    // D3: the card in that slot now is the one the setting follows
+    match tokio::task::spawn_blocking(move || crate::card_watch::set_voice(slot)).await {
         Ok(Ok(())) => reply(200, json!({"ok": true, "data": {"slot": slot}})),
         Ok(Err(e)) if e.starts_with("slot") => reply(400, json!({"ok": false, "error": e})),
         Ok(Err(e)) => reply(500, json!({"ok": false, "error": e})),

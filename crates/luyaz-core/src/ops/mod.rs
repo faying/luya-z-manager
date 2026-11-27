@@ -249,7 +249,7 @@ fn data_path(
 
 fn sim_id(sim: &Value) -> SimId {
     SimId {
-        iccid: text(sim, "sim_iccid"),
+        iccid: crate::project::snapshot::data_iccid(sim),
         slot: text(sim, "current_sim_slot").parse().unwrap_or(0),
     }
 }
@@ -1205,11 +1205,16 @@ mod tests {
     #[test]
     fn sim_identity_reads_number_or_string_slot() {
         assert_eq!(
-            sim_id(&json!({"sim_iccid":"8986","current_sim_slot":2})),
+            sim_id(&json!({"sim_iccid":"8986","sim2_iccid":"8985","current_sim_slot":2})),
             SimId {
-                iccid: "8986".into(),
+                iccid: "8985".into(),
                 slot: 2
             }
+        );
+        // T5: data on slot 2 not reported yet is a blank identity, never slot 1's card
+        assert_eq!(
+            sim_id(&json!({"sim_iccid":"8986","current_sim_slot":"2"})).iccid,
+            ""
         );
         assert_eq!(sim_id(&json!({"current_sim_slot":"1"})).slot, 1);
     }

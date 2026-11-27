@@ -517,13 +517,20 @@ pub fn net_hold(h: &mut NetHold, key: u32, now_ms: u32) -> bool {
 }
 
 // ---- which card is in use ----
-fn iccid_len(s: &str) -> usize {
-    s.trim_end_matches(['F', 'f', ' ']).len()
+/// An ICCID as compared (dual-slot R5/D7, the same rule as core's `cards::iccid_norm`): no
+/// blanks, no BCD filler 'F' at the end, upper case.
+pub fn iccid_norm(s: &str) -> String {
+    s.trim().trim_end_matches(['F', 'f']).trim_end().to_ascii_uppercase()
 }
 
+fn iccid_len(s: &str) -> usize {
+    iccid_norm(s).len()
+}
+
+/// Two ICCIDs name the same card; an empty one names nothing (equals nothing, not even itself).
 pub fn iccid_same(a: &str, b: &str) -> bool {
-    let (la, lb) = (iccid_len(a), iccid_len(b));
-    la != 0 && la == lb && a.as_bytes()[..la].eq_ignore_ascii_case(&b.as_bytes()[..lb])
+    let (a, b) = (iccid_norm(a), iccid_norm(b));
+    !a.is_empty() && a == b
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1017,6 +1024,16 @@ mod tests {
         assert!(net_hold(&mut h, 2, 18000));
         assert!(!net_hold(&mut h, 3, 19000) && net_hold(&mut h, 2, 20000));
         assert!(!net_hold(&mut h, 3, 21000) && !net_hold(&mut h, 3, 35000) && net_hold(&mut h, 3, 36000));
+    }
+
+    /// R5: the trailing BCD 'F' (and blanks, and case) never makes the same card two.
+    #[test]
+    fn iccid_trailing_f() {
+        assert_eq!(iccid_norm(" 8986000000000000012f \n"), "8986000000000000012");
+        assert_eq!(iccid_norm("898600000000000001AF"), "898600000000000001A");
+        assert!(iccid_same(" 8986000000000000012F", "8986000000000000012 "));
+        assert!(iccid_same("89860000000000000012ff", "89860000000000000012"));
+        assert!(!iccid_same("F", "") && !iccid_same(" ", " ") && !iccid_same("8986", ""));
     }
 
     #[test]

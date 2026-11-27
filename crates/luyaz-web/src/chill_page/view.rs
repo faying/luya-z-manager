@@ -126,7 +126,12 @@ fn status(g: &Got, l: Lang) -> String {
                 };
                 let meta = [
                     Some(s(v, "version")).filter(|x| !x.is_empty()).map(|x| format!("mihomo {x}")),
-                    Some(s(v, "mode")).filter(|x| !x.is_empty()).map(|x| format!("mode {x}")),
+                    Some(s(v, "mode")).filter(|x| !x.is_empty()).map(|x| match x {
+                        "rule" => l.pick("rule mode", "规则模式").to_owned(),
+                        "global" => l.pick("global mode", "全局模式").to_owned(),
+                        "direct" => l.pick("direct mode", "直连模式").to_owned(),
+                        other => format!("mode {other}"),
+                    }),
                 ]
                 .into_iter()
                 .flatten()
@@ -146,7 +151,18 @@ fn status(g: &Got, l: Lang) -> String {
                         }
                     );
                 }
-                (if stale { "stale" } else { "ok" }, l.pick("Running", "运行中").into(), reason, meta)
+                // core 1.98.8: the egress probe failed lately, so running is not working
+                if v["reach"]["ok"] == false && !stale {
+                    let why = match l {
+                        Lang::En => s(&v["reach"], "why_en"),
+                        Lang::Zh => s(&v["reach"], "why"),
+                    };
+                    let head = l.pick("Running, but nothing gets out through it", "运行中，但出不去");
+                    let reason = if why.is_empty() { reason } else { format!("{reason} · {why}") };
+                    ("warn", head.into(), reason, meta)
+                } else {
+                    (if stale { "stale" } else { "ok" }, l.pick("Running", "运行中").into(), reason, meta)
+                }
             }
             "direct" => {
                 let r = s(v, "reason");
@@ -336,7 +352,7 @@ fn pick(g: &Got, l: Lang, running: bool, which: &str) -> String {
     let (head, desc) = if which == "main" {
         (title(l, tid, "Main exit region", "地区"), l.pick("Main exit for everything on the router.", "全屋默认出口。"))
     } else {
-        (title(l, tid, "AI exit", "AI 出口"), l.pick("Exit used for AI-service traffic specifically.", "AI 服务专用出口,可与主出口不同。"))
+        (title(l, tid, "AI exit", "AI 出口"), l.pick("Exit used for AI-service traffic specifically.", "AI 服务专用出口，可以和主出口不同。"))
     };
     let body = if opts.is_empty() {
         aux(l.pick("No members configured.", "没有配置任何成员。"))
@@ -348,7 +364,7 @@ fn pick(g: &Got, l: Lang, running: bool, which: &str) -> String {
                 "<button type=\"button\" role=\"radio\" class=\"nd-choice\" aria-checked=\"{sel}\"{} data-write=\"{area}\" data-on:click=\"{}\"><span data-data>{}</span></button>",
                 if sel { " data-selected=\"true\"" } else { "" },
                 post_once(&format!("/services/chill/pick/set?g={which}&i={i}&h={}", tag(o))),
-                esc(o)
+                esc(&member_word(o, l))
             );
         }
         b + "</div>"
@@ -432,8 +448,14 @@ fn prov(g: &Got, l: Lang, running: bool, now: i64) -> String {
             Lang::Zh => format!("{nodes} 个节点"),
         };
         let mut sub = Vec::new();
-        if !s(p, "vehicle_type").is_empty() {
-            sub.push(format!("<span data-data>{}</span>", esc(s(p, "vehicle_type"))));
+        let kind = match (s(p, "vehicle_type"), l) {
+            ("File", Lang::Zh) => "本地文件",
+            ("HTTP", Lang::Zh) => "订阅链接",
+            ("Inline", Lang::Zh) => "写在配置里",
+            (k, _) => k,
+        };
+        if !kind.is_empty() {
+            sub.push(format!("<span data-data>{}</span>", esc(kind)));
         }
         sub.push(nodes_t);
         if !s(p, "updated_at").is_empty() {
@@ -492,6 +514,15 @@ fn prov(g: &Got, l: Lang, running: bool, now: i64) -> String {
     )
 }
 
+/// A group member as shown: mihomo's built-in DIRECT / REJECT in words, node names as they are.
+fn member_word(m: &str, l: Lang) -> String {
+    match m {
+        "DIRECT" => l.pick("Direct", "直连").into(),
+        "REJECT" => l.pick("Blocked", "拒绝").into(),
+        o => o.into(),
+    }
+}
+
 fn groups(g: &Got, l: Lang, running: bool) -> String {
     let list = g.status.v.as_ref().filter(|_| running).and_then(|v| v["groups"].as_array()).filter(|a| !a.is_empty());
     let Some(list) = list else {
@@ -507,7 +538,7 @@ fn groups(g: &Got, l: Lang, running: bool) -> String {
                 Lang::En => format!("{n} nodes"),
                 Lang::Zh => format!("{n} 个节点"),
             },
-            esc(Some(s(x, "now")).filter(|n| !n.is_empty()).unwrap_or("—")),
+            esc(&Some(s(x, "now")).filter(|n| !n.is_empty()).map_or("—".into(), |n| member_word(n, l))),
         );
     }
     format!(
@@ -526,7 +557,7 @@ fn bypass(g: &Got, l: Lang) -> String {
     let head = format!(
         "{}<p class=\"nd-aux -mt-1 mb-3 px-1\">{}</p>",
         title(l, "ch-byp-t", "Device bypass", "设备绕行"),
-        l.pick("Devices listed here skip CHILL entirely and go straight out to the internet.", "这里列出的设备完全跳过 CHILL,直接连外网。")
+        l.pick("Devices listed here skip CHILL entirely and go straight out to the internet.", "这里列出的设备完全跳过 CHILL，直接连外网。")
     );
     let warn = if stale_ips.is_empty() {
         String::new()
@@ -619,7 +650,7 @@ fn vitals(g: &Got, l: Lang, known: bool, now: i64) -> String {
             "MB",
             if v["mem_pressure"].as_bool() == Some(true) { l.pick("Under pressure", "内存紧张") } else { "" }
         ),
-        readout(l.pick("Uptime", "运行时间"), &uptime(s(v, "started_at"), now).unwrap_or_default(), "", s(v, "version")),
+        readout(l.pick("Uptime", "运行时间"), &uptime(s(v, "started_at"), now, l).unwrap_or_default(), "", s(v, "version")),
     )
 }
 
@@ -634,7 +665,7 @@ fn dash(l: Lang, running: bool) -> String {
     format!(
         "<section id=\"ch-dash\"><div class=\"nd-group\"><div class=\"nd-row flex-wrap gap-2\"><span class=\"nd-row__text\"><span class=\"nd-row__label\">{}</span><span class=\"nd-row__sub block\">{}</span></span><span class=\"flex flex-wrap gap-2\"><a class=\"nd-btn nd-btn--secondary nd-btn--sm\" href=\"/chill-ui/\" target=\"_blank\" rel=\"noreferrer\" data-attr:href=\"{aurl}\">{}</a><button type=\"button\" class=\"nd-btn nd-btn--ghost nd-btn--sm ch-wide\" aria-expanded=\"false\" data-attr:aria-expanded=\"$_cdo ? 'true' : 'false'\" data-on:click=\"$_cdo = !$_cdo\" data-text=\"$_cdo ? '{}' : '{}'\">{}</button></span></div><div class=\"ch-wide px-4 pb-4\" data-show=\"$_cdo\" style=\"display:none\"><iframe class=\"ch-frame\" title=\"CHILL dashboard\" sandbox=\"allow-scripts allow-same-origin allow-forms allow-popups allow-downloads\" data-attr:src=\"$_cdo &amp;&amp; ({aurl})\"></iframe></div></div></section>", // RESIDUE-OK: HTML markup (class lists, iframe sandbox tokens)
         l.pick("Dashboard", "面板"),
-        l.pick("zashboard — mihomo's own panel, not restyled for CHILL", "zashboard —— mihomo 自带面板,没有为 CHILL 改样式"),
+        l.pick("zashboard: mihomo's own panel, not restyled for CHILL", "zashboard：mihomo 自带的面板，没有按 CHILL 改过样式"),
         l.pick("Open", "打开"),
         l.pick("Collapse", "收起"),
         l.pick("Show here", "在这里展开"),

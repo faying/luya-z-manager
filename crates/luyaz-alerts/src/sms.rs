@@ -45,6 +45,8 @@ const NEVER: &[&str] = &[
     // R18-P2-01 stock anomalies (owner 10-23): inbox and MCP only while false alarms are watched
     "wifi-post-stuck",
     "no-service-long",
+    // P-9: a change whose rollback record /data would not take (the change itself went ahead)
+    "ops-unsaved",
     // regress (10-24): a Wi-Fi the watchdog brought back is no regression; cellular outages stay
     // inbox-only as no-service-long was (eng review R2); "this kind is blind" is inbox-only
     "wifi-takeover",
@@ -52,7 +54,23 @@ const NEVER: &[&str] = &[
     "regress-blind",
     // the 5 GHz channel guard (wifi-dfs-guard): the fallback worked, inbox only; still down is texted
     "wifi-5g-fallback",
+    // CHILL came back on with 全部直连 restored (11-11): a reminder on the screen and web, not a text
+    "chill-direct-kept",
+    // the SMS are held for the clock (11-14): it says so where the owner still looks
+    "sms-held",
+    // dual-slot D2/D3 (owner 11-16): a card that does not carry data changed, or the phone
+    // setting followed / lost its card: inbox only, the data card's change is still texted
+    "sim-standby-changed",
+    "voice-card-followed",
+    "voice-card-missing",
 ];
+
+/// Held this long for the clock, the alert SMS say so once in the inbox (`sms-held`), which the
+/// owner's forwarding shows (11-12: two days held, nobody knew).
+pub const HELD_NOTE_AFTER_S: u64 = 600;
+/// After a hold, an alert older than this is recorded `stale-held` and not texted, as is a regress
+/// alert whose incident already closed: no burst of old news when the clock comes back.
+pub const HELD_STALE_S: u64 = 1800;
 
 /// A regress or point-event alert the device refused (eng review R9) goes again this long after
 /// the first refusal (1st, 2nd, 3rd retry), outside the rate limits; refused a 4th time it is
@@ -673,6 +691,8 @@ impl Alerts {
         let queue = fs::read_to_string(self.path("queue")).unwrap_or_default();
         let Some(ev) = parse_queue(&queue).into_iter().find(|e| e.seq > done) else {
             let _ = fs::remove_file(self.path("sms-sending"));
+            // everything held has been dealt with
+            let _ = fs::remove_file(self.path("sms-held"));
             return Ok(Next::Idle);
         };
         let wall = io.wall();
@@ -733,6 +753,81 @@ impl Alerts {
         {
             let _ = fs::remove_file(self.path("sms-sending"));
         }
+    }
+
+    /// `sms-held`: `<boot id>\t<uptime the hold began>\t<1 once the inbox was told>\t<the
+    /// newest seq queued while held>`. Only alerts up to that seq were held.
+    fn held(&self) -> Option<(String, u64, bool, u64)> {
+        let t = fs::read_to_string(self.path("sms-held")).ok()?;
+        let mut f = t.trim_end().split('\t');
+        Some((
+            f.next()?.to_string(),
+            f.next()?.parse().ok()?,
+            f.next() == Some("1"),
+            f.next().and_then(|n| n.parse().ok()).unwrap_or(u64::MAX),
+        ))
+    }
+
+    /// A round held for the clock: remember since when; past [`HELD_NOTE_AFTER_S`] tell the inbox
+    /// once. A reboot starts the count again.
+    fn note_hold(&self, io: &mut dyn SmsIo) {
+        let (boot, up) = (io.boot_id(), io.uptime());
+        let max = parse_queue(&fs::read_to_string(self.path("queue")).unwrap_or_default())
+            .last()
+            .map_or(0, |e| e.seq);
+        let (since, told) = match self.held() {
+            Some((b, s, told, m)) if b == boot && s <= up => {
+                if m != max
+                    && let Err(e) = self.write_whole(
+                        "sms-held",
+                        &format!("{boot}\t{s}\t{}\t{max}\n", u8::from(told)),
+                    )
+                {
+                    io.log(&format!("sms: alert files: {e}"));
+                }
+                (s, told)
+            }
+            _ => {
+                if let Err(e) = self.write_whole("sms-held", &format!("{boot}\t{up}\t0\t{max}\n")) {
+                    io.log(&format!("sms: alert files: {e}"));
+                }
+                return;
+            }
+        };
+        if told || up - since < HELD_NOTE_AFTER_S {
+            return;
+        }
+        let text = format!(
+            "alert SMS held {} min: the device clock stepped and is not trusted yet",
+            (up - since) / 60
+        );
+        let ok = self.add("sms-held", &text, io.wall(), up).is_ok()
+            && self
+                .write_whole("sms-held", &format!("{boot}\t{since}\t1\t{max}\n"))
+                .is_ok();
+        if !ok {
+            io.log("sms: could not note the held SMS");
+        }
+    }
+
+    /// After a hold, `ev` (held: no newer than the marker's seq) is old news: queued more than
+    /// [`HELD_STALE_S`] ago (or in an earlier boot), or a regress opening whose close is already
+    /// in the queue. What was queued after the hold, a new boot's alerts included, goes as ever.
+    fn stale_after_hold(&self, ev: &Event, io: &mut dyn SmsIo) -> bool {
+        let Some((boot, ..)) = self.held().filter(|h| ev.seq <= h.3) else {
+            return false;
+        };
+        let up = io.uptime();
+        let old = boot != io.boot_id() || ev.uptime > up || up - ev.uptime > HELD_STALE_S;
+        let closed = crate::text_id(&ev.text)
+            .and_then(|id| id.strip_suffix("-open"))
+            .is_some_and(|base| {
+                let close = format!("{base}-close");
+                parse_queue(&fs::read_to_string(self.path("queue")).unwrap_or_default())
+                    .iter()
+                    .any(|e| e.seq > ev.seq && crate::text_id(&e.text) == Some(close.as_str()))
+            });
+        old || closed
     }
 
     /// One round of the alert SMS (guard `sms_round`): every pending alert in order, until one
@@ -816,9 +911,14 @@ impl Alerts {
                     regress && io.regress_sms_off(),
                 )
             };
+            let v = match v {
+                Verdict::Send if self.stale_after_hold(&ev, io) => Verdict::Record("stale-held"),
+                v => v,
+            };
             let result = match v {
                 Verdict::Hold => {
                     self.unclaim(ev.seq, sender, pid);
+                    self.note_hold(io);
                     return if n > 0 { Round::Done(n) } else { Round::Held };
                 }
                 Verdict::Skip => None,

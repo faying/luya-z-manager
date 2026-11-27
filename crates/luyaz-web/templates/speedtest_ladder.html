@@ -1,6 +1,6 @@
 <section aria-labelledby="st-ladder-t"><h2 id="st-ladder-t" class="nd-group-title">{{ v.l.pick("Will this place hold up?", "这里撑得住吗") }}</h2>
 {% if let Some(r) = v.run %}<div class="nd-group">
-<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ r.headline }}</span><span class="nd-row__sub block">{{ v.l.pick("This moment only. Sent from the device; Wi-Fi, call loss and the CHILL path were not tested.", "只代表此刻。从设备发起，没测 Wi-Fi、通话丢包、CHILL 路径。") }}</span></span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label{% if v.here %} ld-printonly{% endif %}">{{ r.headline }}</span><span class="nd-row__sub block">{{ v.l.pick("This moment only. Sent from the device; Wi-Fi, call loss and the CHILL path were not tested.", "只代表此刻。从设备发起，没测 Wi-Fi、通话丢包、CHILL 路径。") }}</span></span></div>
 {% for s in r.steps %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ s.name }}</span>{% if !s.rate.is_empty() %}<span class="nd-row__sub block">{{ s.rate }}</span>{% endif %}{% if !s.detail.is_empty() %}<span class="nd-row__sub block">{{ s.detail }}</span>{% endif %}</span><span class="nd-row__value" data-data>{{ s.delay }}</span></div>{% endfor %}
 {% for f in r.facts %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__sub block">{{ f }}</span></span></div>{% endfor %}
 </div>

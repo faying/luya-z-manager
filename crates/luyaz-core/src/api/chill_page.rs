@@ -58,7 +58,7 @@ pub async fn status(State(c): State<Compat>) -> Response {
             .await
             .and_then(|v| v.get("mode").and_then(Value::as_str).map(str::to_string));
     }
-    let data = ch::status_data(
+    let mut data = ch::status_data(
         st,
         version.as_ref(),
         proxies.as_ref(),
@@ -66,6 +66,14 @@ pub async fn status(State(c): State<Compat>) -> Response {
         super::status::manual_first_summary(&c),
         super::status::home_exit_summary(&c),
     );
+    // the egress probe's last word (null: not measured lately), so "running" is not the whole
+    // story when nothing gets out (11-14: the page stayed green through a 17-minute outage)
+    let why = crate::engines::chill_probe::why();
+    data["reach"] = json!({
+        "ok": crate::engines::chill_probe::now(),
+        "why": why.as_ref().map(|w| w.0.clone()),
+        "why_en": why.map(|w| w.1),
+    });
     reply(200, json!({"ok": true, "data": data}))
 }
 

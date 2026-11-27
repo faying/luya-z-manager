@@ -316,10 +316,22 @@ impl Source for Replay {
     fn versions_check(&mut self) {
         self.acted();
     }
-    /// profile 0 is the one in use; another arms
-    fn esim_select(&mut self, i: usize) -> i32 {
+    /// profile 0 is the one in use (on each card); another arms
+    fn esim_select(&mut self, _card: usize, i: usize) -> i32 {
         self.acted();
         if i == 0 { source::ESIM_SEL_CURRENT } else { source::ESIM_SEL_ARMED }
+    }
+    /// the core said yes at once (LUYAZ_RENDER_REREAD=<error code> says no with it)
+    fn sim_reread(&mut self, _slot: i32) -> bool {
+        self.acted();
+        REREAD_FIX.with(|r| r.set(true));
+        true
+    }
+    fn sim_reread_take(&mut self) -> Option<(i32, String)> {
+        REREAD_FIX.with(|r| r.replace(false)).then(|| match std::env::var("LUYAZ_RENDER_REREAD") {
+            Ok(e) if !e.is_empty() => (409, e),
+            _ => (200, String::new()),
+        })
     }
     fn speedtest_start(&mut self, _chill: bool, _roaming_ok: bool) -> bool {
         self.acted();
@@ -440,6 +452,11 @@ impl Source for Replay {
             _ => None,
         }
     }
+}
+
+thread_local! {
+    /// 重新读取卡槽 in the harness: a request is out
+    static REREAD_FIX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 

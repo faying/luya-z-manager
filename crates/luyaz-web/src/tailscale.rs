@@ -192,6 +192,19 @@ fn fmt_bytes(n: Option<f64>) -> String {
 
 /// Seconds since the epoch of an RFC 3339 time (`2026-09-24T14:02:11Z`, optional fraction and
 /// `±HH:MM`).
+/// tailscaled's BackendState as people read it (11-14 the page showed 「Running」).
+fn backend_word(l: Lang, s: &str) -> String {
+    match s {
+        "Running" => pk(l, "Running", "运行中"),
+        "Stopped" => pk(l, "Stopped", "已停止"),
+        "Starting" => pk(l, "Starting", "正在启动"),
+        "NeedsLogin" => pk(l, "Needs login", "需要登录"),
+        "NeedsMachineAuth" => pk(l, "Waiting for approval", "等待管理员批准"),
+        "NoState" => pk(l, "Not started", "还没启动"),
+        other => other.to_owned(),
+    }
+}
+
 fn parse_rfc3339(t: &str) -> Option<i64> {
     let b = t.as_bytes();
     if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || !matches!(b[10], b'T' | b't' | b' ') {
@@ -575,7 +588,7 @@ impl Poll {
         rows.push_str(&row(&lab("Tailscale name", "Tailscale 名称"), &dash(&me.and_then(|m| m.dns_name.clone())), true));
         rows.push_str(&row(
             &lab("State", "状态"),
-            &dash(&d.backend_state),
+            &dash(&d.backend_state.as_deref().map(|s| backend_word(l, s))),
             false,
         ));
         rows.push_str(&row("IP (v4)", &dash(&v4), true));
@@ -740,8 +753,8 @@ impl Poll {
                     help(l, "ts-direct", l.pick("Talking now", "正在通信"), l.pick("Direct = a peer-to-peer path; relay = through a Tailscale DERP server, slower. Behind strict NAT (some carriers abroad) relay is normal.", "直连 = 点对点路径；中继 = 经 Tailscale 的 DERP 服务器，较慢。在严格 NAT 后面（国外一些运营商）走中继是正常的。"))
                 ),
                 &match l {
-                    Lang::En => format!("{n} · {direct} direct · {} relay", n.saturating_sub(direct)),
-                    Lang::Zh => format!("{n} · {direct} 直连 · {} 中继", n.saturating_sub(direct)),
+                    Lang::En => format!("{n}: {direct} direct, {} relayed", n.saturating_sub(direct)),
+                    Lang::Zh => format!("{n} 台：直连 {direct} 台，中继 {} 台", n.saturating_sub(direct)),
                 },
                 false,
             ));
@@ -761,7 +774,7 @@ impl Poll {
         format!(
             "<div id=\"ts-mesh\" class=\"ts-col\"><section class=\"ts-sec\" aria-labelledby=\"ts-mesh-t\"><h2 id=\"ts-mesh-t\" class=\"nd-group-title\">{}</h2><div class=\"nd-group{st}\">{rows}</div></section><section class=\"ts-sec\" aria-labelledby=\"ts-exit-t\"><h2 id=\"ts-exit-t\" class=\"nd-group-title\">{}</h2><div class=\"nd-group{st}\">{exit}</div></section></div>",
             l.pick("Mesh", "Mesh 网络"),
-            l.pick("Going out through exit node", "正经出口节点上网"),
+            l.pick("Exit node", "出口节点"),
         )
     }
 }
@@ -1012,9 +1025,9 @@ mod tests {
         assert!(pe.contains("↑— ↓2.0 KB") && pe.contains("handshake") && pe.contains(">direct<") && pe.contains("exit node"), "{pe}");
         assert!(pe.contains("Offline") && pe.contains("phone"), "{pe}");
         let m = leaf(&p, "ts-mesh");
-        assert!(m.contains("1 · 1 direct · 0 relay") && m.contains("Traffic goes out directly, not through an exit node."), "{m}");
+        assert!(m.contains("1: 1 direct, 0 relayed") && m.contains("Traffic goes out directly, not through an exit node."), "{m}");
         let z = leaf(&poll(Lang::Zh, Some(sample())), "ts-mesh");
-        assert!(z.contains("1 直连") && z.contains("没走出口节点，直接上网。"), "{z}");
+        assert!(z.contains("1 台：直连 1 台，中继 0 台") && z.contains("没走出口节点，直接上网。"), "{z}");
     }
 
     #[test]

@@ -173,7 +173,13 @@ pub trait Source {
     fn alerts_mark_all_read(&mut self);
     /// 「检查更新」 (component versions)
     fn versions_check(&mut self);
-    fn esim_select(&mut self, i: usize) -> i32;
+    fn esim_select(&mut self, card: usize, i: usize) -> i32;
+    /// 重新读取卡槽 n (an off slot of a dual-slot unit): the request goes out on its own
+    /// thread; false = it could not be sent
+    fn sim_reread(&mut self, slot: i32) -> bool;
+    /// That request's answer, once: (HTTP status, the core's error code); status 0 = core not
+    /// reached. None = still out, or none sent.
+    fn sim_reread_take(&mut self) -> Option<(i32, String)>;
     /// chill: also measure through CHILL (`path:"chill"`); roaming_ok: full while roaming (R11)
     fn speedtest_start(&mut self, chill: bool, roaming_ok: bool) -> bool;
     fn speedtest_stop(&mut self) -> bool;

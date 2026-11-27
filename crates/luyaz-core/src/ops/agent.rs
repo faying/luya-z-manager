@@ -202,7 +202,7 @@ impl Refusal {
 pub struct Ticket {
     pub id: String,
     pub layer: Layer,
-    /// 敏感判定时读到的卡（APN 层；原样的 `sim_iccid`）。
+    /// 敏感判定时读到的数据卡（APN 层；原样的 ICCID）。
     pub iccid: Option<String>,
     /// 这次占位之前的那次（还回去时恢复）。
     prev: Option<u64>,
@@ -245,7 +245,7 @@ pub struct Gate {
 
 /// 卡号的规范写法（按卡设置用）：去空白、去结尾的 F。
 pub fn norm_iccid(s: &str) -> String {
-    s.trim().trim_end_matches(['F', 'f']).to_owned()
+    crate::cards::iccid_norm(s)
 }
 
 /// D6：漫游状态和卡号 → 敏感不敏感。`cheap` 是人标成「漫游不算贵」的卡。
@@ -517,18 +517,16 @@ pub fn gate() -> &'static Gate {
     G.get_or_init(|| Gate::open(super::ops_dir()))
 }
 
-/// D6：现在改 APN 敏不敏感；不敏感时回读到的卡号（原样的 `sim_iccid`，交给事务再核对，O9）。
+/// D6：现在改 APN 敏不敏感；不敏感时回读到的数据卡卡号（原样，交给事务再核对，O9）。
 pub async fn apn_sensitivity() -> Result<String, String> {
     let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await;
     let sim = crate::state::sim_info().await;
     let roaming = net.as_ref().ok().and_then(super::roaming);
+    // the data card's (T5): with data on slot 2 slot 1's card says nothing about this one
     let iccid = sim
         .as_ref()
-        .ok()
-        .and_then(|s| s.get("sim_iccid"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
+        .map(crate::project::snapshot::data_iccid)
+        .unwrap_or_default();
     sensitive(roaming, &iccid, &gate().cheap())?;
     Ok(iccid)
 }
@@ -538,14 +536,19 @@ pub const EVENT_KIND: &str = "agent-change";
 
 /// 记一条 Agent 改动（Agent 经 MCP 的 get_recent_events 读回结果；主人的告警转发也看得到）。尽力而为。
 pub fn event(text: &str) {
+    alert(EVENT_KIND, text);
+}
+
+/// One line in the device's alert queue (inbox; whether it is also texted is `luyaz-alerts`' call).
+pub fn alert(kind: &str, text: &str) {
     let dir = crate::state::host_path(luyaz_api::alerts::DIR);
     let up = std::fs::read_to_string("/proc/uptime")
         .ok()
         .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
         .map_or(0, |s| s as u64);
     let a = luyaz_api::alerts::Alerts::at(std::path::Path::new(&dir));
-    if let Err(e) = a.add(EVENT_KIND, text, luyaz_api::alerts::now(), up) {
-        eprintln!("ops: agent event not queued: {e}");
+    if let Err(e) = a.add(kind, text, luyaz_api::alerts::now(), up) {
+        eprintln!("ops: {kind} event not queued: {e}");
     }
 }
 
@@ -592,6 +595,13 @@ pub fn now_unix() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    /// P-8: the agent limit and the roaming list keep their shape (crate::state_format).
+    #[test]
+    fn the_kept_files_keep_their_format() {
+        crate::state_format::check("agent-limit.json", crate::state_format::serde::<Limits>);
+        crate::state_format::check("roam-cheap.json", crate::state_format::serde::<Cheap>);
+    }
+
     use super::*;
 
     fn boot(seconds: u64) -> BootTime {

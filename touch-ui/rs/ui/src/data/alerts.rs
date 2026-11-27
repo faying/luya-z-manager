@@ -58,7 +58,7 @@ impl Alerts {
                 time: json::get_int(o, "time", 0), // null → 0
                 uptime: json::get_int(o, "uptime", 0),
                 label: json_text(o, "label", 128), // luyaz-core words it
-                text: jstr(o, "text", 128),
+                text: jstr(o, "text", 512), // in Chinese the core's wording (?lang=zh)
                 unread: (jstr(o, "unread", 8) == "true") as i32,
             };
             if e.label.is_empty() {
@@ -160,7 +160,9 @@ impl Alerts {
     }
 
     fn load(&mut self, agent: &mut CoreApi) {
-        let (code, b) = agent.api("GET", "/api/alerts", None, AL_RESP_MAX);
+        // in Chinese, the core words each body (an older core ignores lang and sends English)
+        let path = if lang::is_en() { "/api/alerts" } else { "/api/alerts?lang=zh" };
+        let (code, b) = agent.api("GET", path, None, AL_RESP_MAX);
         if code == 0 {
             self.err = trunc(tr("连不上管理后台"), 96);
             return;

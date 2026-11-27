@@ -177,6 +177,34 @@ pub fn mode_view(st: &St, l: Lang) -> ModeView {
     }
 }
 
+impl ModeView {
+    /// The page-top status block (11-14 ③): the mode now, the manual-operator note, the last
+    /// change. `#nm-now-v` stays on the mode's text and the change link stays in `#nm-now`.
+    pub fn status(&self) -> String {
+        let l = self.l;
+        let tone = match () {
+            _ if self.stale => "stale",
+            _ if self.cur.is_empty() => "neutral",
+            _ => "ok",
+        };
+        let reason = self.manual_sel.then(|| {
+            crate::agent::esc(l.pick(
+                "The operator is chosen by hand (Mobile Network page); this mode only limits which radio it uses.",
+                "运营商是手动选的（在「移动网络」页），这里只限制它用哪种网络。",
+            ))
+        });
+        let meta = self.last.as_ref().map(|(href, t)| {
+            format!(
+                "<a class=\"t-link\" href=\"{}\">{} {} ›</a>",
+                crate::agent::esc(href),
+                l.pick("Last change", "上次改动"),
+                crate::agent::esc(t)
+            )
+        });
+        crate::status_block::html_ided("nm-status", Some("nm-now-v"), tone, &self.now, reason.as_deref(), meta.as_deref())
+    }
+}
+
 #[derive(Template)]
 #[template(path = "netmode_leaves.html")]
 struct ModeLeaves<'a> {

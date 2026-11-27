@@ -14,6 +14,7 @@
 /data/luyaz/core/esim-pending.json device 进行中的 eSIM 写
 /data/luyaz/core/esim-auto-reboot device 重启间隔保护
 /data/luyaz/core/voice-slot device 跟卡的现状走
+/data/luyaz/core/voice-card device 电话设置跟的那张卡（D3），跟 voice-slot 一起走
 /data/luyaz/core/net-tune.want device 开关，文本不会变格式
 /data/luyaz/net-tune.want device 同上
 /data/scenario/state.json device 情景现状
@@ -30,6 +31,9 @@
 /data/luyaz/core/crashwatch.json counter 缓存
 /data/luyaz/core/screen-guard-on counter 标记
 /data/luyaz/core/ims-voice-seen counter 标记
+/data/luyaz/core/ims-voice.json counter 见过语音能用的卡（按 ICCID）
+/data/luyaz/core/voice-unjudged counter 待 volte-keep 试一次的卡
+/data/luyaz/core/cards.json counter 每槽上次认定的卡（开机后比对用；v2，旧版读到当没有、只记不报）
 /data/luyaz/core/poller-state.json counter 事件和确认，丢了重来
 /data/luyaz/core/findings.json counter 重新探测
 /data/luyaz/core/findings.probe-budget.json counter 探测预算

@@ -91,7 +91,10 @@ fn parses_touch_ui_tsv2_sample() {
     }
     let (bad, warn) = counts(&c);
     assert_eq!(
-        bad + warn + c.iter().filter(|x| x.level == "ok").count(),
+        bad + warn
+            + c.iter()
+                .filter(|x| matches!(x.level.as_str(), "ok" | "skip"))
+                .count(),
         rows
     );
 }

@@ -850,6 +850,7 @@
 | NCK 面板·解锁码输入框 | 无；建议 textbox「解锁码 (NCK)」 〔交互后：点 button「网络解锁」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | NCK 面板「解锁 SIM」 | button「解锁 SIM」 〔交互后：点 button「网络解锁」〕 | POST `/api/sim/unlock` `{nck}`（ubus `set_simlock_nck`） | 1 | `/api/sim/lock-trials` `available_trials` / SIM 状态 | 无（只有面板里的警告文字「此操作不可逆…」） | 二（建议复核升三：页面自己写着不可逆） |
 | 各面板「取消」 | button「取消」 〔交互后：点 button「修改 PIN」〕 | 无 | — | — | 无 | —（本地） |
+| 「重新读取卡槽 N」（双卡槽设备、该卡槽未开启时，在「卡槽」组下） | button「重新读取卡槽 N」 | POST `/router/sim/reread?s=N` → core POST `/api/esim/reread` `{slot}`（`qmi_uim_probe simreset N`） | 1，之后刷新本页 | 「卡槽」组的那一行（core 卡表收到卡状态通知就读） | 无（core 拒绝上网卡槽、待机卡槽、20 秒内重复、eSIM 操作中） | 一（只动没在用的卡槽，另一槽不断网） |
 
 写接口假成功风险：全部「否·透传」，页面不看 `data.result`——PIN 输错时固件可能返回失败码而 agent 仍回 ok，页面会提示「PIN 已验证」。
 

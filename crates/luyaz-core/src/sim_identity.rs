@@ -52,7 +52,7 @@ pub struct Identity {
 impl Identity {
     pub fn new(iccid: &str, imsi: &str) -> Self {
         Identity {
-            iccid: iccid.trim().trim_end_matches(['F', 'f']).to_string(),
+            iccid: crate::cards::iccid_norm(iccid),
             imsi: imsi.trim().to_string(),
         }
     }

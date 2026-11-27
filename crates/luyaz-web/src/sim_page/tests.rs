@@ -254,3 +254,42 @@ fn only_the_buttons_that_fit_are_there() {
     p.info = Some(card("modem_waitpuk", "1", "0", "9", None).info);
     assert!(actions(&p).contains("Verify PUK"));
 }
+
+/// Dual-slot units: one row per slot from the `cards` block, tails only, no action for slot 2.
+#[test]
+fn slots_show_each_card_on_a_dual_slot_unit_only() {
+    use serde_json::json;
+    let one = json!({"source": "sim_info", "slots": [{"slot": 1, "present": true, "app": "ready", "provisioned": true,
+        "role": "data", "id": "plain", "iccid_tail": "0001", "eid_tail": ""}]});
+    assert_eq!(slots_html(Some(&one), Lang::Zh), "<div id=\"sim-slots\" hidden></div>");
+    assert_eq!(slots_html(None, Lang::Zh), "<div id=\"sim-slots\" hidden></div>");
+    let two = json!({"source": "uim", "slots": [
+        {"slot": 1, "present": true, "app": "ready", "provisioned": true, "role": "data", "id": "plain", "iccid_tail": "0001", "eid_tail": ""},
+        {"slot": 2, "present": true, "app": "detected", "provisioned": false, "role": "off", "id": "eid", "iccid_tail": "0002", "eid_tail": "5678"}]});
+    let h = slots_html(Some(&two), Lang::Zh);
+    assert!(h.contains("卡槽 1") && h.contains("上网中 · 普通 SIM 卡") && h.contains("ICCID …0001"), "{h}");
+    assert!(h.contains("卡槽 2") && h.contains("未开启 · eSIM 卡") && h.contains("EID <span class=\"nd-mono\" data-data>…5678</span>"), "{h}");
+    assert!(h.contains("只显示状态"), "status only");
+    // the off slot can be read again; the data slot has no such button
+    assert!(h.contains("@post('/router/sim/reread?s=2')") && h.contains("重新读取卡槽 2"), "{h}");
+    assert!(!h.contains("reread?s=1"), "{h}");
+    let dual = json!({"source": "uim", "slots": [
+        {"slot": 1, "present": true, "role": "data", "id": "plain", "iccid_tail": "0001", "eid_tail": ""},
+        {"slot": 2, "present": true, "role": "standby", "id": "eid", "iccid_tail": "0002", "eid_tail": "5678"}]});
+    assert!(!slots_html(Some(&dual), Lang::Zh).contains("<button"), "standby: a restart, not a re-read");
+    let gone = json!({"source": "uim", "slots": [{"slot": 2, "present": false, "role": "off", "id": "none", "iccid_tail": "", "eid_tail": ""}]});
+    assert!(slots_html(Some(&gone), Lang::En).contains("No card"));
+}
+
+/// The re-read's outcome words: every core answer has its own sentence.
+#[test]
+fn reread_words_say_each_answer() {
+    use serde_json::json;
+    assert!(reread_words(2, Ok((200, &json!({"ok": true}))), Lang::Zh).contains("已重新读取卡槽 2"));
+    assert!(reread_words(1, Ok((409, &json!({"error": "data_slot"}))), Lang::Zh).contains("正在上网"));
+    assert!(reread_words(2, Ok((409, &json!({"error": "standby_slot"}))), Lang::Zh).contains("待机"));
+    assert!(reread_words(2, Ok((429, &json!({"error": "too_soon"}))), Lang::En).contains("few seconds"));
+    assert!(reread_words(2, Ok((409, &json!({"error": "operation in progress"}))), Lang::Zh).contains("eSIM"));
+    assert!(reread_words(2, Ok((502, &json!({"error": "reset_failed"}))), Lang::Zh).contains("没有回应"));
+    assert!(reread_words(2, Ok((404, &json!({"error": "single_slot"}))), Lang::Zh).contains("不能"));
+}

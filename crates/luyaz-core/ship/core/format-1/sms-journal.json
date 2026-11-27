@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "generation": "0123456789abcdef",
+  "next_seq": 3,
+  "acked": 1,
+  "baseline_pending": false,
+  "entries": [
+    {"seq": 1, "key": "k1", "fw_id": 7, "sender": "+15550100", "date": "26,11,13,08,00,00,+32", "text": "example",
+     "sim": "s1", "push": true, "at": 1794499000},
+    {"seq": 2, "key": "k2", "fw_id": 8, "sender": "+15550101", "date": "26,11,13,08,01,00,+32", "text": "example",
+     "sim": null, "push": false, "at": 1794499100}
+  ],
+  "seen": [{"key": "k0", "at": 1794498000}],
+  "dropped_unacked": 0,
+  "incidents": [{"at": 1794497000, "what": "example"}]
+}

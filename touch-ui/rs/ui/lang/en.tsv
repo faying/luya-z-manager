@@ -148,7 +148,7 @@ tailscale|节点	Peers
 只有本机在线	Only this device online
 号码	Number
 号码没写在卡里	No number on SIM
-卡 2 不提供号码	SIM 2 reports no number
+卡槽 2 不提供号码	Slot 2 reports no number
 后台数据服务不可用	Data service unavailable
 告警 · %s	Alert · %s
 告警 · 开机后 %ld 分钟	Alert · %ld min after boot
@@ -695,8 +695,8 @@ U60 在充电	U60 charging
 %s · 已 %ld 秒	%s · %ld s
 卡片还在稳定，列表稍后更新	Card settling, list updates soon
 双卡	Dual SIM
-只用卡槽 1（插拔卡）	Slot 1 only (removable)
-只用卡槽 2（内置卡）	Slot 2 only (built-in)
+只用卡槽 1	Slot 1 only
+只用卡槽 2	Slot 2 only
 双卡 · 主卡 卡槽 1	Dual · main slot 1
 双卡 · 主卡 卡槽 2	Dual · main slot 2
 双卡 · 智能切换	Dual · smart switching
@@ -1093,3 +1093,25 @@ CHILL 没在运行	CHILL not running
 完整	Full
 设备上保存最近 30 次；管理网页「负载体检记录」能看全部、对比和导出。	The device keeps the last 30. The admin web's Load Check Runs page lists them all, compares and exports.
 返回	Back
+正在识别卡…	Identifying the card…
+卡刚换过，稍后再读	The card just changed, reading again soon
+卡上已切换，重启设备后生效	Switched on the card; it takes effect after a restart
+另一张卡正在切换	The other card is switching
+这张已经启用	Already enabled
+通话用	calls
+未开启	off
+当前卡槽	Current slots
+卡槽 %d · %s	Slot %d · %s
+实体卡	SIM card
+认不出这张卡	Card not recognised
+卡槽 %d · eSIM 配置	Slot %d · eSIM profiles
+已重读卡槽 %d，几秒后显示读到的卡	Slot %d read; its card shows shortly
+连不上核心，等一下再试	Core not reachable; try again soon
+正在上网，没动它；换卡要重启设备	Carries data; a new card needs a restart
+在待机，没动它；双卡下换卡要重启设备	On standby; a new card needs a restart
+刚读过，过几秒再试	Read just now; try again shortly
+eSIM 正在操作，等它结束再试	An eSIM change is running; try later
+这个卡槽没回应，其他都没变	Slot did not answer; nothing changed
+没读成，其他都没变	Not read; nothing changed
+正在读取，等它做完	Reading; wait for it to finish
+点一下重新读取	tap to read again

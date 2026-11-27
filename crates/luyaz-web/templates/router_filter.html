@@ -6,7 +6,7 @@
 <div class="grid gap-6 tf">
 {{ self.leaf("tf-status")|safe }}{{ self.leaf("tf-cur")|safe }}
 <section aria-labelledby="tf-q-t"><h2 id="tf-q-t" class="nd-group-title">{{ l.pick("Quick Block", "快速拦截") }}</h2>
-<div class="nd-group grid gap-3 p-4"><p class="nd-body">{{ l.pick("Known ZTE telemetry:", "已知 ZTE 遥测：") }} <span class="nd-mono">{{ self.known() }}</span></p>
+<div class="nd-group grid gap-3 p-4"><p class="nd-body">{% match l %}{% when crate::i18n::Lang::En %}Blocks the {{ self.known_n() }} known ZTE telemetry domains.{% else %}拦下已知的 {{ self.known_n() }} 个 ZTE 遥测域名。{% endmatch %}</p>
 {{ self.leaf("tf-quickbtn")|safe }}</div>
 {{ quick_op|safe }}</section>
 <section aria-labelledby="tf-a-t"><h2 id="tf-a-t" class="nd-group-title">{{ l.pick("Add Domain", "添加域名") }}</h2>

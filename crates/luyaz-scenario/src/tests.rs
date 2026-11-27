@@ -268,6 +268,25 @@ fn config_routes_validate_and_persist() {
 }
 
 #[test]
+fn a_config_that_does_not_read_at_start_is_kept_aside_and_said() {
+    let f = Fake::new("badcfg");
+    std::fs::write(f.file(CONFIG_FILE), "{\"scenarios\": [").unwrap();
+    std::fs::write(f.file(RESTORE_FILE), "not json").unwrap();
+    let e = Engine::new(f.clone());
+    assert_eq!(e.http_get().1["data"]["config"]["scenarios"], json!([]));
+    let dir = std::path::Path::new(&f.file(CONFIG_FILE)).parent().unwrap().to_owned();
+    let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|d| d.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(names.iter().any(|n| n.starts_with("scenarios.json.corrupt-")), "{names:?}");
+    let aside = names.iter().find(|n| n.starts_with("scenarios.json.corrupt-")).unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join(aside)).unwrap(), "{\"scenarios\": [", "the owner's text kept");
+    assert!(e.http_log().1["data"]["log"].as_str().unwrap().contains("does not read"));
+    assert!(e.pending().is_empty());
+    let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|d| d.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(names.iter().any(|n| n.starts_with("restore.json.corrupt-")), "{names:?}");
+    assert!(e.http_log().1["data"]["log"].as_str().unwrap().contains("pending restores"));
+}
+
+#[test]
 fn the_run_loop_beats_and_stops_once_taken_back() {
     struct Stopping(Arc<Fake>, std::sync::atomic::AtomicU32);
     impl luyaz_wifi::Host for Stopping {

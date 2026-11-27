@@ -73,6 +73,7 @@ curl  http://127.0.0.1:9199/__mock/state                  # shared state + route
 | `home-network` | `/api/netinfo` says not roaming (`roaming: false`); the v2 speed test then runs in full. Default is roaming, where the mock core runs the coarse 5 s test. |
 | `speed-v1` | `/api/speedtest/*` answer as an old core (before core 1.48.0): no `method_version` or other v2 fields. |
 | `speed-short` | the v2 speed test ends `sample_short: true`, without a verdict. |
+| `esim-dual1` / `esim-dual2` | `/api/esim/*` as on a dual-slot unit (luyaz-esim `pick`): `esim-dual1` = a plain SIM in slot 1 and a second eUICC ("card B") in slot 2; `esim-dual2` = the persona's card in slot 1 and card B in slot 2. Reads name the card with `?slot=` (or `?eid=`), writes with `slot` (or `eid`) in the body; without either the only eSIM card answers (dual1) or 400 `two eSIM cards: say which one (eid)` (dual2); a slot without an eSIM card or an unknown EID is 404; answers carry `slot` and `eid`. Stricter than the core on purpose: a write naming no card is refused (400). Pair with luyaz-web mock `POST /mock/cards?set=dual1|dual2`. |
 | `mf-alldown` | CHILL's manual-first notice says the hand-picked node and its fallback are both down (`notice_kind: "alldown"`), in `/api/public/status` and `/api/services/chill`. |
 
 Scenarios combine, e.g. `weak,missing` or `carriers8,stale`.

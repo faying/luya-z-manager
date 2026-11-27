@@ -17,7 +17,9 @@
 .hm-why a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
 .hm-carrier { flex-wrap: wrap; row-gap: 4px; }
 .hm-carrier .nd-row__label { width: 4rem; flex-shrink: 0; }
-.hm-carrier .nd-row__value { flex: 1; text-align: start; white-space: nowrap; }
+/* one line where it fits; on a phone "n78 100 MHz · −112 dBm · RSRQ −11 · SINR 7 dB" ran past the edge (11-14) */
+.hm-carrier .nd-row__value { flex: 1; text-align: start; min-width: 0; }
+@media (min-width: 640px) { .hm-carrier .nd-row__value { white-space: nowrap; } }
 .hm-carrier .nd-aux { width: 100%; min-width: 0; }
 /* One empty marker per card group says "these numbers are not updating" (a pushed attribute, so the
    cards themselves are never replaced): dim the values like .nd-stale. */

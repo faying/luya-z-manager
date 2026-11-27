@@ -125,11 +125,64 @@ pub struct View {
     pub cell_id: String,
     pub nr_lock: String,
     pub lte_lock: String,
-    /// "the modem is still on PCI x (locked y)" / "now on PCI y".
+    /// "the modem is still on PCI x (locked y)" / "now on PCI y" (shown in the status block;
+    /// kept here for the tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub on_cell: Option<(String, bool)>,
     pub dis: bool,
     pub why: Option<String>,
     pub txn: Option<String>,
+    /// The page-top status block (`cl-status`).
+    pub status: String,
+}
+
+/// The status block: locked or not, and on which cell (11-14 ③). Locked and on the locked
+/// cell is ok; locked but elsewhere is warn (the note says where).
+fn status(
+    l: Lang,
+    sig: Option<(&Value, bool)>,
+    serving: Option<&crate::view::Carrier>,
+    locks: (&Option<Lock>, &Option<Lock>),
+    on_cell: Option<&(String, bool)>,
+) -> String {
+    let Some((_, stale)) = sig else {
+        return crate::status_block::html("cl-status", "neutral", l.pick("Reading the cell…", "正在读取小区…"), None, None);
+    };
+    let cell = serving.map(|c| {
+        let band = if c.band.is_empty() {
+            String::new()
+        } else {
+            format!(" {}{}", if c.nr { "n" } else { "B" }, c.band)
+        };
+        let pci = c.pci.map_or(String::new(), |p| format!(" · PCI {p}"));
+        format!("{}{band}{pci}", if c.nr { "NR" } else { "LTE" })
+    });
+    let (tone, state) = match (locks, cell) {
+        ((Some(k), _), _) => (
+            if on_cell.is_some_and(|o| !o.1) { "warn" } else { "ok" },
+            match l {
+                Lang::En => format!("Locked to NR {}", k.text(true)),
+                Lang::Zh => format!("锁在 NR {}", k.text(true)),
+            },
+        ),
+        ((None, Some(k)), _) => (
+            if on_cell.is_some_and(|o| !o.1) { "warn" } else { "ok" },
+            match l {
+                Lang::En => format!("Locked to LTE {}", k.text(false)),
+                Lang::Zh => format!("锁在 LTE {}", k.text(false)),
+            },
+        ),
+        ((None, None), Some(c)) => (
+            "ok",
+            match l {
+                Lang::En => format!("No cell lock: {c}"),
+                Lang::Zh => format!("没锁小区：{c}"),
+            },
+        ),
+        ((None, None), None) => ("warn", l.pick("No cell lock, and no serving cell now", "没锁小区，现在也没有服务小区").to_owned()),
+    };
+    let reason = on_cell.map(|o| crate::agent::esc(&o.0));
+    crate::status_block::html("cl-status", if stale { "stale" } else { tone }, &state, reason.as_deref(), None)
 }
 
 pub fn view(st: &St, l: Lang) -> View {
@@ -165,6 +218,7 @@ pub fn view(st: &St, l: Lang) -> View {
         })
     });
     let txn = crate::follow::running(st, &["cell.", "band."], l);
+    let status = status(l, sig, serving.as_ref(), (&nr_l, &lte_l), on_cell.as_ref());
     View {
         l,
         stale: sig.is_some_and(|(_, s)| s),
@@ -192,6 +246,7 @@ pub fn view(st: &St, l: Lang) -> View {
         dis: st.stuck || txn.is_some() || sig.is_none(),
         why: st.stuck.then(|| stuck_reason(l).to_string()),
         txn,
+        status,
     }
 }
 

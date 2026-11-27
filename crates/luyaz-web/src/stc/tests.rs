@@ -74,10 +74,10 @@ fn the_three_states_of_the_page() {
     p.params_fail = Some(b27());
     assert!(p.unsupported() && !p.down());
     assert!(leaf(&p, "stc-status").contains("Not available on this firmware") && !leaf(&p, "stc-status").contains("Retry"));
-    assert!(!leaf(&p, "stc-switch").contains("data-on:click"));
-    assert!(leaf(&p, "stc-params").contains("readonly") && !leaf(&p, "stc-params").contains("data-on:input"));
-    assert!(leaf(&p, "stc-params").contains(" disabled>") || leaf(&p, "stc-params").matches("disabled").count() >= 5);
-    assert!(leaf(&p, "stc-resetbtn").contains(" disabled"));
+    // the status block says it; switch, parameters and reset are empty hidden shells, no 「—」 (11-14)
+    for id in ["stc-switch", "stc-params", "stc-resetbtn"] {
+        assert_eq!(leaf(&p, id), format!("<div id=\"{id}\" hidden></div>"), "{id}");
+    }
 
     // service down: switch and parameters locked, the reset stays, Retry is offered
     let mut p = Poll::new(who(), l);
