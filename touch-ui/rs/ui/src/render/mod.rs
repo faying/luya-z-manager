@@ -176,6 +176,8 @@ struct Replay {
     /// the hash of the model last handed out
     cur: Rc<RefCell<String>>,
     next: Option<Rc<Model>>,
+    /// real sysfs backlight for --brightcheck; None in fixture replays
+    bl: Option<plat::backlight::Backlight>,
 }
 
 impl Replay {
@@ -232,19 +234,19 @@ impl Source for Replay {
         m.boot_s
     }
     fn bl_is_on(&self, m: &Model) -> bool {
-        m.bl_is_on != 0
+        self.bl.as_ref().map_or(m.bl_is_on != 0, |b| b.is_on())
     }
     fn bl_panel_lit(&self, m: &Model) -> bool {
-        m.bl_panel_lit != 0
+        self.bl.as_ref().map_or(m.bl_panel_lit != 0, |b| b.panel_lit())
     }
     fn bl_is_lit(&mut self, m: &Model) -> bool {
-        m.bl_is_lit != 0
+        self.bl.as_mut().map_or(m.bl_is_lit != 0, |b| b.is_lit())
     }
     fn bl_get(&self, m: &Model) -> i32 {
-        m.bl_get
+        self.bl.as_ref().map_or(m.bl_get, |b| b.get())
     }
     fn bl_max(&self, m: &Model) -> i32 {
-        m.bl_max
+        self.bl.as_ref().map_or(m.bl_max, |b| b.max())
     }
     fn frames(&self, m: &Model) -> u64 {
         m.frames
@@ -263,15 +265,36 @@ impl Source for Replay {
     }
     // the backlight's effect comes as the model line after the step
     fn bl_on(&mut self) {
+        if let Some(b) = &mut self.bl {
+            b.on();
+        }
         self.acted();
     }
     fn bl_off(&mut self) {
+        if let Some(b) = &mut self.bl {
+            b.off();
+        }
         self.acted();
     }
-    fn bl_set(&mut self, _level: i32) {
+    fn bl_set(&mut self, level: i32) {
+        if let Some(b) = &mut self.bl {
+            b.set(level);
+        }
         self.acted();
     }
-    fn bl_remember(&mut self, _level: i32) {}
+    fn bl_remember(&mut self, level: i32) {
+        if let Some(b) = &mut self.bl {
+            b.remember(level);
+        }
+    }
+    fn bl_release(&mut self, why: &str) {
+        if let Some(b) = &mut self.bl {
+            b.release(why);
+        }
+    }
+    fn bl_held(&self) -> bool {
+        self.bl.as_ref().is_some_and(plat::backlight::Backlight::is_held)
+    }
     fn key_poll(&mut self, _now_ms: u32) -> i32 {
         source::KEY_EV_NONE
     }
@@ -634,6 +657,102 @@ fn arg(args: &[String], k: &str) -> Option<String> {
 /// `luyaz-ui --hitcheck` (eng review round 3 D5): Home, every tab and every subpage with the ▲
 /// shown (an open incident can keep it lit for days): nothing tappable may sit under its 44×44
 /// box. One line per page, "HIT ok <page>" or "HIT FAIL <page>: <what> at x,y w×h"; exit 1 on any.
+/// At boot the vendor UI leaves sysfs `led:lcd/brightness` at preset index `3` (which the aw9x-led
+/// kernel driver maps to PWM 64), while `ui.conf` holds the user's saved PWM level (`bright=`,
+/// 10..=255). Starting with a lit panel must apply `conf.bright` to the panel and build the system
+/// tab slider at that level (issue #10). `--hold`: the same start held dark until the first frame
+/// (issue #11, as a fresh start on the device does): the panel stays dark through `ui::create`, the
+/// marker keeps the vendor's 3 (what the sentinel would hand back), and the release lights 232.
+/// Prints BRIGHT ok / BRIGHT FAIL lines; exit 1 on failure.
+pub fn brightcheck(args: &[String]) -> i32 {
+    let held = args.iter().any(|a| a == "--hold");
+    // SAFETY: LVGL is set up once, on this thread; FB outlives it
+    unsafe {
+        sys::lv_init();
+        sys::lv_tick_set_cb(Some(tick_cb));
+        let disp = sys::lv_display_create(W as i32, H as i32);
+        sys::lv_display_set_flush_cb(disp, Some(flush_cb));
+        sys::lv_display_set_buffers(
+            disp,
+            (&raw mut FB).cast(),
+            std::ptr::null_mut(),
+            (W * H * 2) as u32,
+            sys::lv_display_render_mode_t::LV_DISPLAY_RENDER_MODE_DIRECT,
+        );
+    }
+    let dir = std::env::temp_dir().join(format!("ui-brightcheck-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("brightness"), "3\n").unwrap();
+    std::fs::write(dir.join("max_brightness"), "255\n").unwrap();
+    let marker = dir.join("ui-bl-hold");
+    let _ = std::fs::remove_file(&marker);
+    // SAFETY: single-threaded startup before Backlight::init (the hold's timer thread only
+    // starts inside hold_dark, after the variables are read)
+    unsafe {
+        std::env::set_var("LUYAZ_UI_BACKLIGHT_DIR", &dir);
+        std::env::set_var("LUYAZ_UI_BL_HOLD", &marker);
+    }
+    let hold = if held { plat::backlight::hold_dark() } else { None };
+    let mut bl = plat::backlight::Backlight::init();
+    unsafe {
+        std::env::remove_var("LUYAZ_UI_BACKLIGHT_DIR");
+        std::env::remove_var("LUYAZ_UI_BL_HOLD");
+    }
+    let mut bad = 0;
+    if held {
+        match hold {
+            Some(h) => bl.hold(h),
+            None => {
+                println!("BRIGHT FAIL --hold: no hold taken from a panel at 3");
+                bad += 1;
+            }
+        }
+    }
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(),
+        step: Rc::new(RefCell::new(None)),
+        cur: Rc::new(RefCell::new(String::new())),
+        next: None,
+        bl: Some(bl),
+    });
+    ui::create(
+        Conf::parse("appearance=light\nautooff=0\nbright=232\n"),
+        logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(Model::default()),
+        src,
+        "luyaz-ui",
+    );
+    settle(200);
+    let read = || -> i32 { std::fs::read_to_string(dir.join("brightness")).unwrap().trim().parse().unwrap() };
+    let mark = || std::fs::read_to_string(&marker).ok().map(|s| s.trim().to_string());
+    if held {
+        let (sysfs, m, still) = (read(), mark(), ui::with(|u| u.src.bl_held()));
+        if sysfs == 0 && m.as_deref() == Some("3") && still {
+            println!("BRIGHT ok --hold: dark through ui::create (sysfs 0), marker keeps the vendor's 3");
+        } else {
+            println!("BRIGHT FAIL --hold before the first frame: sysfs {sysfs}, marker {m:?}, held {still}; want 0, \"3\", true");
+            bad += 1;
+        }
+        ui::with(|u| u.src.bl_release("after first frame"));
+    }
+    let sysfs = read();
+    let m = mark();
+    let _ = std::fs::remove_dir_all(&dir);
+    let got = ui::with(|u| u.bright_probe());
+    if held && m.is_some() {
+        println!("BRIGHT FAIL --hold: marker {m:?} left after the release");
+        bad += 1;
+    }
+    if sysfs == 232 && got.0 == 232 && got.1 == "90%" {
+        println!("BRIGHT ok boot preset 3 replaced by ui.conf bright=232: sysfs {sysfs}, slider {} \"{}\"", got.0, got.1);
+    } else {
+        println!("BRIGHT FAIL boot preset 3 with ui.conf bright=232: sysfs {sysfs}, slider {} \"{}\", want 232 \"90%\"", got.0, got.1);
+        bad += 1;
+    }
+    println!("BRIGHTCHECK {bad} failures");
+    (bad > 0) as i32
+}
+
 pub fn hitcheck(args: &[String]) -> i32 {
     let dark = args.iter().any(|a| a == "--dark");
     // SAFETY: LVGL is set up once, on this thread; FB outlives it
@@ -656,6 +775,7 @@ pub fn hitcheck(args: &[String]) -> i32 {
         step: Rc::new(RefCell::new(None)),
         cur: Rc::new(RefCell::new(String::new())),
         next: None,
+        bl: None,
     });
     ui::create(conf, logic::launch_parse(&["luyaz-ui"]), Rc::new(Model::default()), src, "luyaz-ui");
     settle(200);
@@ -870,7 +990,7 @@ pub fn run(args: &[String]) -> i32 {
     }
     // the model an action inside the current step leaves (the C log's model line right after it)
     let pending: Pending = Rc::new(RefCell::new(None));
-    let mut replay = Some(Box::new(Replay { feed: feed_models, step: pending.clone(), cur: cur.clone(), next: None }));
+    let mut replay = Some(Box::new(Replay { feed: feed_models, step: pending.clone(), cur: cur.clone(), next: None, bl: None }));
 
     let mut checks = Checks::default();
     checks.dump = args.iter().any(|a| a == "--dump");

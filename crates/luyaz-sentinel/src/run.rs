@@ -473,6 +473,24 @@ impl Rt {
         }
     }
 
+    /// The panel goes to the vendor UI or the explanation: a level luyaz-ui held dark and never
+    /// lit again comes back. Not while a luyaz-ui still runs (a stop that did not finish, a ship
+    /// trial): it would race that UI's own writes; the marker waits for the next hand-back.
+    fn bl_hold_restore(&mut self) {
+        if let Some(pid) = sys::find_ui() {
+            if std::path::Path::new(sys::BL_HOLD).exists() {
+                self.log(&format!(
+                    "backlight: luyaz-ui pid {pid} still runs, its hold is left to it"
+                ));
+            }
+            return;
+        }
+        match sys::bl_hold_restore() {
+            sys::BlRestore::NoMarker => {}
+            r => self.log(&r.to_string()),
+        }
+    }
+
     fn would(&mut self, a: &Act) {
         let line = format!("would {a:?}");
         if self.seen.fresh(&line, sys::mono_ms() / 1000) {
@@ -524,6 +542,7 @@ impl Rt {
                 }
                 Act::Explain => {
                     wait_drm_free(&|m| sys::uid_log(m));
+                    self.bl_hold_restore();
                     let en = sys::ui_conf().is_some_and(|c| {
                         c.lines()
                             .filter_map(|l| l.strip_prefix("lang="))
@@ -537,6 +556,7 @@ impl Rt {
                 }
                 Act::StartVendor => {
                     wait_drm_free(&|m| sys::uid_log(m));
+                    self.bl_hold_restore();
                     self.log("starting the vendor UI");
                     sh(&format!("{VENDOR_INIT} start >/dev/null 2>&1"));
                 }

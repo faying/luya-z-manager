@@ -22,9 +22,13 @@
 #             backlight's, stdin /dev/null, output appended to the log, its own session; one
 #             argument, --offscreen: there is no panel here), as luyaz-ui.test, with ui.conf and the fonts at the device's own paths: the
 #             conf is read, the fonts found, the comm, it ends on SIGTERM
-#   exec      exec_self's checks on the binary (same pid and comm, no fd kept, the
-#             launch arguments; a binary replaced on disk refused); the static one also runs
-#             in a bare busybox container
+#   exec      exec_self's checks on the binary (same pid and comm, only the handed DRM fd
+#             kept, the launch arguments; a binary replaced on disk refused; a failed execve
+#             leaves the handed fd close-on-exec again); the static one also runs in a bare
+#             busybox container
+#   bright    --brightcheck, plain and --hold: the vendor's boot preset 3 replaced by ui.conf's
+#             bright=232 (issue #10); held dark until the first frame (issue #11), the panel stays
+#             dark through ui::create, the marker keeps the 3, the release lights 232
 #
 #   LUYAZ_DEVICE_FONTS=… LUYAZ_NUNITO_DIR=… sh rs/smoke.sh [OUT_DIR]
 #
@@ -35,7 +39,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-/tmp/u60-smoke}
 mkdir -p "$out"; out=$(cd "$out" && pwd)
-rm -f "$out"/*.texts "$out"/*.png "$out"/*.core "$out"/*.agent "$out"/*.ui "$out"/*.out "$out"/*.bl "$out"/exec.log
+rm -f "$out"/*.texts "$out"/*.png "$out"/*.core "$out"/*.agent "$out"/*.ui "$out"/*.out "$out"/*.bl "$out"/exec.log "$out"/bright.log
 bin=/t/aarch64-unknown-linux-musl/release-device/luyaz-ui
 [ "${SMOKE_BIN:-}" = native ] && bin=/t/release-device/luyaz-ui
 docker run --rm -v u60-ui-rs-target:/t:ro -v "$here/smoke":/smoke:ro -v "$out":/o \
@@ -82,15 +86,20 @@ printf "speed_bits=1\nautooff=0\nbright=200\nappearance=dark\nappearance_dark_fr
 cp $bin /data/luyaz/ui/luyaz-ui.test
 python3 -I /smoke/fake_core.py /o/sentinel.core & d=$!
 sleep 0.5
+echo 3 >/tmp/bl/brightness
 (cd /data/luyaz/ui && LUYAZ_UI_BACKLIGHT_DIR=/tmp/bl setsid /data/luyaz/ui/luyaz-ui.test --offscreen </dev/null >>/o/sentinel.ui 2>&1) &
 sleep 6
+cat /tmp/bl/brightness >/o/sentinel.bl
 ui=$(pidof luyaz-ui.test || pidof luyaz-ui.te || true)
 echo "comm=$(cat /proc/$ui/comm 2>/dev/null) cwd=$(readlink /proc/$ui/cwd 2>/dev/null)" >>/o/sentinel.ui
 [ -n "$ui" ] && kill -TERM $ui; sleep 1.5; [ -n "$ui" ] && [ -d /proc/$ui ] && echo "still running" >>/o/sentinel.ui
 kill $d; wait $d 2>/dev/null
 mkdir -p /tmp/x && cp $bin /tmp/x/luyaz-ui.test
 LUYAZ_UI_EXEC_SELFTEST=1 /tmp/x/luyaz-ui.test >/o/exec.log 2>&1; echo "exit $?" >>/o/exec.log
+LUYAZ_UI_EXEC_SELFTEST=noexec /tmp/x/luyaz-ui.test >>/o/exec.log 2>&1; echo "exit $?" >>/o/exec.log
 LUYAZ_UI_EXEC_SELFTEST=delete /tmp/x/luyaz-ui.test >>/o/exec.log 2>&1; echo "exit $?" >>/o/exec.log
+env $fonts $bin --brightcheck >/o/bright.log 2>&1; echo "exit $?" >>/o/bright.log
+env $fonts $bin --brightcheck --hold >>/o/bright.log 2>&1; echo "exit $?" >>/o/bright.log
 ' sh "$bin"
 fail=0
 check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
@@ -98,6 +107,7 @@ o=$out
 pushes() { sed -n 's/^loop: flushes [0-9]* pushes \([0-9]*\).*/\1/p' "$1"; }
 echo "## lit"
 check "SIGTERM: a clean exit" "grep -q '^exit 0$' '$o/lit.ui'"
+check "offscreen takes no dark start (no hold; lit at ui.conf's default bright=232)" "[ \"\$(cat '$o/lit.bl')\" = 232 ] && ! grep -q '^bl: ' '$o/lit.ui'"
 check "the quiet loop engaged" "grep -Eq 'loop: .* quiet [1-9]' '$o/lit.ui'"
 check "GET /v2/state, /v2/events, /v2/screen" "grep -q 'GET /v2/state' '$o/lit.core' && grep -q 'GET /v2/events' '$o/lit.core' && grep -q 'GET /v2/screen' '$o/lit.core'"
 check "Home: the verdict from /v2/screen (顺畅)" "grep -qx '顺畅' '$o/lit.texts'"
@@ -128,14 +138,17 @@ check "Home current at the end (顺畅, 66), no banner" "grep -qx '顺畅' '$o/r
 check "exit 0" "grep -q '^exit 0$' '$o/restart.ui'"
 echo "## sentinel"
 check "ui.conf read from /data/luyaz/ui (appearance=dark)" "grep -q 'appearance=dark dark=1' '$o/sentinel.ui'"
+check "boot preset 3 replaced by ui.conf bright=200" "[ \"\$(cat '$o/sentinel.bl')\" = 200 ]"
 check "fonts at the device's own paths" "grep -q 'fonts cjk=device numerals=nunito' '$o/sentinel.ui'"
 check "comm luyaz-ui.test, cwd the UI dir (R5)" "grep -q 'comm=luyaz-ui.test cwd=/data/luyaz/ui' '$o/sentinel.ui'"
 check "core read, the pace sent" "grep -q 'GET /v2/events' '$o/sentinel.core' && grep -q 'state.set_interval' '$o/sentinel.core'"
 check "ended on SIGTERM" "grep -q 'first refresh done' '$o/sentinel.ui' && grep -q '^comm=luyaz-ui' '$o/sentinel.ui' && ! grep -q 'still running' '$o/sentinel.ui'"
 echo "## exec"
-check "exec self-test (pid, comm, fds, arguments; a replaced binary refused)" "! grep -q FAIL '$o/exec.log' && [ \$(grep -c '^exit 0$' '$o/exec.log') = 2 ]"
+check "exec self-test (pid, comm, fds, arguments; a replaced binary refused; a failed execve)" "! grep -q FAIL '$o/exec.log' && [ \$(grep -c '^exit 0$' '$o/exec.log') = 3 ]"
 if [ "${SMOKE_BIN:-}" != native ]; then
     check "static: runs in a bare busybox container" "docker run --rm -v u60-ui-rs-target:/t:ro -e LUYAZ_UI_EXEC_SELFTEST=1 busybox:latest $bin 2>&1 | grep -q 'exec selftest: failed 0'"
 fi
+echo "## bright"
+check "brightcheck: preset 3 -> 232, plain and held dark until the first frame" "! grep -q FAIL '$o/bright.log' && grep -q 'BRIGHT ok --hold' '$o/bright.log' && [ \$(grep -c '^exit 0$' '$o/bright.log') = 2 ]"
 echo "lit texts: $(tr '\n' '|' <"$o/lit.texts" | cut -c1-300)"
 exit $fail

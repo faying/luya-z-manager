@@ -44,6 +44,8 @@
 
 详见 [README](../README.md#构建)，简单说：
 
+不在维护者自己的工作区时，先建镜像并把 `LUYAZ_RS_IMAGE` 设成它（做法见 README）。
+
 1. `rs/setup-src.sh` 跑一次：把打好补丁的 LVGL 9.5.0 和 FreeType 源码放进一个 Docker 卷。
 2. `rs/build.sh device [FILE]`：在共用构建镜像里用 cargo-zigbuild 编出静态的 aarch64-musl `luyaz-ui`（这几个 crate 是 manager Cargo workspace 的成员）。
 3. 上设备用 `luyaz ship touch`，它只编 `rs/`。这个命令是维护者自己电脑上的工具，不在本仓库里；它驱动的设备端是 `scripts/luyaz-ship.sh`（装到 `/data/luyaz/scripts/luyaz-ship.sh`）。其他人用 `onboard/` 里的装机包安装。

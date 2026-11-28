@@ -793,8 +793,13 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
     let mut src = src;
     if launch.bright > 0 {
         src.bl_remember(launch.bright);
-    } else if !src.bl_panel_lit(&model) && conf.bright > 0 {
-        src.bl_remember(conf.bright); // started dark: wake to the saved level, not max
+    } else if conf.bright > 0 {
+        // started dark: wake to the saved level, not max; held dark until the first frame: the
+        // panel comes up at it (the hold's own release, not a write here that would end it)
+        src.bl_remember(conf.bright);
+        if src.bl_panel_lit(&model) && !src.bl_held() {
+            src.bl_on(); // started lit: replace the vendor boot preset (1..5) with the saved level
+        }
     }
     let (mut auto_slept, mut wake_guard) = (false, false);
     if launch.screen_off != 0 && !src.bl_panel_lit(&model) {

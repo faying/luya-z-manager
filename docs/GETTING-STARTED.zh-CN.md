@@ -104,6 +104,9 @@ cd luya-z-manager
 也可以分开编，再告诉 `build-kit.sh` 用现成的文件：
 
 ```sh
+# 前两行建触屏要用的构建镜像
+docker build -t luyaz-build -f onboard/build.Dockerfile onboard
+export LUYAZ_RS_IMAGE=luyaz-build
 (cd touch-ui && rs/setup-src.sh && rs/build.sh device out/luyaz-ui)   # 默认就读这里
 CORE_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # 用别处编好的核心，不现编 luyaz-core
 ```

@@ -53,6 +53,9 @@ fn main() {
     if args.iter().any(|a| a == "--hitcheck") {
         std::process::exit(luyaz_ui::render::hitcheck(&args));
     }
+    if args.iter().any(|a| a == "--brightcheck") {
+        std::process::exit(luyaz_ui::render::brightcheck(&args));
+    }
     if args.iter().any(|a| a == "--render") {
         std::process::exit(luyaz_ui::render::run(&args));
     }

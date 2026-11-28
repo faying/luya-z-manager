@@ -136,11 +136,13 @@ pub struct Launch {
     pub autooff_ms: i32,
     pub bright: i32,
     pub hist: ExecHist,
+    /// the open card handed over (`--drm=`): filled by the exec itself, never carried on
+    pub drm: Option<plat::drm::Handoff>,
 }
 
 impl Default for Launch {
     fn default() -> Self {
-        Launch { tab: -1, scroll_y: 0, screen_off: 0, autooff_ms: -1, bright: -1, hist: ExecHist::default() }
+        Launch { tab: -1, scroll_y: 0, screen_off: 0, autooff_ms: -1, bright: -1, hist: ExecHist::default(), drm: None }
     }
 }
 
@@ -186,6 +188,8 @@ pub fn launch_parse<S: AsRef<str>>(argv: &[S]) -> Launch {
             && v <= 100
         {
             out.hist.count = v as i32;
+        } else if let Some(v) = a.strip_prefix("--drm=") {
+            out.drm = plat::drm::Handoff::parse(v);
         }
     }
     let h = &mut out.hist;
@@ -219,7 +223,32 @@ pub fn launch_argv(l: &Launch) -> Vec<String> {
         v.push(format!("--exec-last={}", l.hist.last_s));
         v.push(format!("--exec-n={}", l.hist.count));
     }
+    if let Some(h) = l.drm {
+        v.push(h.arg());
+    }
     v
+}
+
+/// The main loop's wait for the first frame (dark until then, issue #11), one pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstFrame {
+    /// still dark, nothing pushed yet
+    Wait,
+    /// a whole frame reached the panel: light it, once
+    Release,
+    /// the hold ended without us (a key, the timeout): stop waiting
+    Done,
+}
+
+/// `pushed`: a frame reached the panel; `held`: the backlight still waits.
+pub fn first_frame(pushed: bool, held: bool) -> FirstFrame {
+    if pushed {
+        FirstFrame::Release
+    } else if held {
+        FirstFrame::Wait
+    } else {
+        FirstFrame::Done
+    }
 }
 
 pub const CLOCK_SANE_AFTER: i64 = 1704067200;
@@ -828,11 +857,22 @@ mod tests {
         assert_eq!(launch_parse(&["x", "--exec-n=2", "--exec-first=900", "--exec-last=100"]).hist, ExecHist::default());
         assert_eq!(launch_parse(&["x", "--exec-first=900", "--exec-last=950"]).hist, ExecHist::default());
 
-        let src = Launch { tab: 2, scroll_y: 340, screen_off: 1, autooff_ms: 30000, bright: 232, hist: ExecHist { first_s: 1000, last_s: 1300, count: 2 } };
+        let src = Launch { tab: 2, scroll_y: 340, screen_off: 1, autooff_ms: 30000, bright: 232, hist: ExecHist { first_s: 1000, last_s: 1300, count: 2 }, drm: None };
         let mut a = vec!["luyaz-ui".to_string()];
         a.extend(launch_argv(&src));
         assert_eq!(a.len(), 9);
         assert_eq!(launch_parse(&a), src);
+        // the handed-over card: round trip; junk is dropped, the rest kept
+        let h = plat::drm::Handoff { fd: 9, handle: 1, fb: 40, pitch: 640, size: 307200 };
+        let with = Launch { drm: Some(h), ..src };
+        let mut a = vec!["luyaz-ui".to_string()];
+        a.extend(launch_argv(&with));
+        assert_eq!(a.last().map(String::as_str), Some("--drm=9:1:40:640:307200"));
+        assert_eq!(launch_parse(&a), with);
+        for junk in ["--drm=", "--drm=9:1:40", "--drm=x:1:40:640:307200", "--drm=9:1:40:640:307200:1"] {
+            let g = launch_parse(&["x", "--tab=2", junk]);
+            assert!(g.drm.is_none() && g.tab == 2, "{junk}");
+        }
         assert!(launch_argv(&Launch::default()).is_empty());
         let keyoff = Launch { tab: 1, screen_off: 2, autooff_ms: 30000, ..Launch::default() };
         let mut a = vec!["x".to_string()];
@@ -843,6 +883,14 @@ mod tests {
         a.extend(launch_argv(&off0));
         let b = launch_parse(&a);
         assert!(b.autooff_ms == 0 && b.tab == 0);
+    }
+
+    #[test]
+    fn the_first_frame_gate() {
+        assert_eq!(first_frame(false, true), FirstFrame::Wait, "nothing on the panel yet: dark");
+        assert_eq!(first_frame(true, true), FirstFrame::Release);
+        assert_eq!(first_frame(true, false), FirstFrame::Release, "pushed: a release is harmless when the hold already ended");
+        assert_eq!(first_frame(false, false), FirstFrame::Done, "a key or the timeout ended it");
     }
 
     #[test]

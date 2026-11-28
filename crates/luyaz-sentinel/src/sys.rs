@@ -1596,6 +1596,148 @@ pub fn ctl_open(path: &str) -> Option<(File, File)> {
     Some((r, w))
 }
 
+// ── the backlight luyaz-ui held dark (issue #11) ─────────────────────────────
+
+/// The level luyaz-ui's dark start took from the panel, left while it waits for its first frame.
+/// touch-ui's `plat::backlight::HOLD_MARKER` is the same path: keep the two equal.
+pub const BL_HOLD: &str = "/tmp/luyaz/ui-bl-hold";
+/// The panel's LED class device (touch-ui's `plat::backlight` uses the same).
+pub const BL_DIR: &str = "/sys/class/leds/led:lcd";
+
+/// What [`bl_hold_restore`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BlRestore {
+    /// no marker: luyaz-ui left nothing dark
+    NoMarker,
+    /// the marker held no level (removed, nothing written)
+    Junk(String),
+    /// the panel was lit already (marker removed)
+    Lit(i64),
+    /// written back (marker removed)
+    Restored(i64),
+    /// could not be written (marker kept for the next try)
+    Failed(String),
+}
+
+impl std::fmt::Display for BlRestore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlRestore::NoMarker => write!(f, "backlight: no hold left"),
+            BlRestore::Junk(v) => write!(f, "backlight: hold marker {v:?} holds no level, removed"),
+            BlRestore::Lit(l) => write!(f, "backlight: hold marker removed (the panel is lit, {l})"),
+            BlRestore::Restored(l) => write!(f, "backlight: back to {l}, which luyaz-ui held dark"),
+            BlRestore::Failed(e) => write!(f, "backlight: cannot restore the held level ({e}), marker kept"),
+        }
+    }
+}
+
+/// Before the vendor UI (or the explanation) gets the panel: a level luyaz-ui held dark and never
+/// lit again (it died waiting for its first frame) is written back. Only what luyaz-ui dimmed
+/// itself: no marker, nothing done.
+pub fn bl_hold_restore() -> BlRestore {
+    bl_hold_restore_at(std::path::Path::new(BL_HOLD), std::path::Path::new(BL_DIR))
+}
+
+fn bl_hold_restore_at(marker: &std::path::Path, dir: &std::path::Path) -> BlRestore {
+    let Ok(raw) = fs::read_to_string(marker) else {
+        return BlRestore::NoMarker;
+    };
+    let num = |p: std::path::PathBuf| -> Option<i64> {
+        fs::read_to_string(p)
+            .ok()?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    };
+    let Some(level) = raw.trim().parse::<i64>().ok().filter(|&v| v > 0) else {
+        let _ = fs::remove_file(marker);
+        return BlRestore::Junk(raw.trim().chars().take(16).collect());
+    };
+    let file = dir.join("brightness");
+    if let Some(cur) = num(file.clone()).filter(|&c| c > 0) {
+        let _ = fs::remove_file(marker);
+        return BlRestore::Lit(cur);
+    }
+    let max = num(dir.join("max_brightness"))
+        .filter(|&m| m > 0)
+        .unwrap_or(255);
+    let level = level.min(max);
+    let written = fs::write(&file, level.to_string()).and_then(|()| match num(file.clone()) {
+        Some(v) if v > 0 => Ok(()),
+        v => Err(std::io::Error::other(format!("read back {v:?}"))),
+    });
+    match written {
+        Ok(()) => {
+            let _ = fs::remove_file(marker);
+            BlRestore::Restored(level)
+        }
+        Err(e) => BlRestore::Failed(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod bl_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    /// A panel directory at `cur`/`max` and a marker holding `m` (None: no marker).
+    fn case(tag: &str, cur: &str, max: &str, m: Option<&str>) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("sentinel-bl-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("brightness"), cur).unwrap();
+        fs::write(dir.join("max_brightness"), max).unwrap();
+        let marker = dir.join("ui-bl-hold");
+        if let Some(m) = m {
+            fs::write(&marker, m).unwrap();
+        }
+        (dir, marker)
+    }
+
+    fn cur(dir: &Path) -> String {
+        fs::read_to_string(dir.join("brightness"))
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn restores_only_what_the_ui_held() {
+        type Row<'a> = (&'a str, &'a str, Option<&'a str>, BlRestore, &'a str, bool);
+        // panel, max, marker → result, panel after, marker still there
+        let rows: [Row; 8] = [
+            ("0", "255", None, BlRestore::NoMarker, "0", false),
+            ("0", "255", Some("120\n"), BlRestore::Restored(120), "120", false),
+            ("200", "255", Some("120\n"), BlRestore::Lit(200), "200", false),
+            ("0", "100", Some("180\n"), BlRestore::Restored(100), "100", false),
+            ("0", "255", Some("0\n"), BlRestore::Junk("0".into()), "0", false),
+            ("0", "255", Some("-5"), BlRestore::Junk("-5".into()), "0", false),
+            ("0", "255", Some("abc"), BlRestore::Junk("abc".into()), "0", false),
+            ("0", "junk", Some("90"), BlRestore::Restored(90), "90", false),
+        ];
+        for (i, (panel, max, m, want, after, kept)) in rows.into_iter().enumerate() {
+            let (dir, marker) = case(&format!("row{i}"), panel, max, m);
+            assert_eq!(bl_hold_restore_at(&marker, &dir), want, "row {i}");
+            assert_eq!(cur(&dir), after, "row {i}");
+            assert_eq!(marker.exists(), kept, "row {i}");
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_marker() {
+        let (dir, marker) = case("fail", "0", "255", Some("120\n"));
+        let gone = dir.join("no-such-led");
+        assert!(matches!(
+            bl_hold_restore_at(&marker, &gone),
+            BlRestore::Failed(_)
+        ));
+        assert!(marker.exists(), "kept for the next try");
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 // ── the explanation frame on DRM ───────────────────────────────────────────
 // The kernel's drm_mode.h structs (aarch64 layout, repr(C)) for a dumb buffer,
 // plus SET_MASTER/DROP_MASTER: the frame is drawn only when this process

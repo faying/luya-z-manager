@@ -44,6 +44,8 @@ Who owns the screen is not decided here: that is `crates/luyaz-sentinel`. Visual
 
 Details in the [README](../README.md#构建); in short:
 
+Outside the maintainer's workspace, build the image first and set `LUYAZ_RS_IMAGE` to it (see the README).
+
 1. `rs/setup-src.sh`, once: puts the patched LVGL 9.5.0 and FreeType sources into a Docker volume.
 2. `rs/build.sh device [FILE]`: builds the static aarch64-musl `luyaz-ui` with cargo-zigbuild in the shared build image (the crates are members of the manager Cargo workspace).
 3. To put it on a device, use `luyaz ship touch`, which builds only `rs/`. That command is the maintainer's own workstation tool and is not in this repo; the device half it drives is `scripts/luyaz-ship.sh` (installed as `/data/luyaz/scripts/luyaz-ship.sh`). Everyone else installs with the kit in `onboard/`.

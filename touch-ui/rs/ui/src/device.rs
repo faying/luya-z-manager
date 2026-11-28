@@ -13,7 +13,13 @@
 //! SIGTERM / SIGINT end it cleanly: the core's pace back to 1 s, the backlight off only when we
 //! started a shutdown, the DRM buffer released.
 //!
-//!   luyaz-ui [--tab=N] [--scroll=Y] [--screen-off[=key]] [--autooff=MS] [--bright=N] [--exec-…]
+//! The panel (issue #11): a theme exec hands the open card over (`--drm=`, nothing on the panel
+//! changes until our first frame covers the old one); any other start opens it afresh with the
+//! backlight dark from before the card is let go until the first frame is pushed (8 s at most).
+//! LUYAZ_UI_DRM_HANDOFF=0 refuses a handed card; LUYAZ_UI_FIRSTFRAME_DELAY_MS=N holds the first
+//! frame back N ms (both for device tests only).
+//!
+//!   luyaz-ui [--tab=N] [--scroll=Y] [--screen-off[=key]] [--autooff=MS] [--bright=N] [--exec-…] [--drm=…]
 //!   luyaz-ui --offscreen [--exit-after=MS] [--texts=FILE] [--png=FILE]   (no panel, no input)
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -35,6 +41,8 @@ static INVAL: AtomicBool = AtomicBool::new(false);
 static PUSHES: AtomicU64 = AtomicU64::new(0);
 /// the panel holds the black frame put up when the backlight went off
 static BLANKED: AtomicBool = AtomicBool::new(false);
+/// a whole frame reached the panel (every DIRTYFB of a refresh succeeded)
+static FIRST_PUSHED: AtomicBool = AtomicBool::new(false);
 
 pub fn frames() -> u64 {
     FRAMES.load(Ordering::Relaxed)
@@ -53,6 +61,11 @@ pub fn blank() {
             BLANKED.store(true, Ordering::Relaxed);
         }
     });
+}
+
+/// The card and buffer a theme exec hands to the next image (None offscreen).
+pub fn drm_handoff() -> Option<plat::drm::Handoff> {
+    PANEL.with(|p| p.borrow().as_ref().and_then(Panel::handoff))
 }
 
 /// Before the backlight comes on: the whole screen drawn again over the black frame.
@@ -115,6 +128,9 @@ unsafe extern "C" fn flush_cb(d: *mut sys::lv_display_t, a: *const sys::lv_area_
                 p.put(Rect { x: a.x1 as usize, y: a.y1 as usize, w, h }, pix, w);
                 if last {
                     p.commit();
+                    if p.take_frame_ok() {
+                        FIRST_PUSHED.store(true, Ordering::Relaxed);
+                    }
                 }
                 PUSHES.fetch_add(p.pushes - before, Ordering::Relaxed);
             }
@@ -232,21 +248,52 @@ fn arg(args: &[String], k: &str) -> Option<String> {
     args.iter().find_map(|a| a.strip_prefix(k).map(String::from))
 }
 
+/// The panel: the card a theme exec handed over (`--drm=`), else opened afresh with the backlight
+/// dark until the first frame (the hold). A handed card that cannot be used is closed only once
+/// the panel is dark, then the card is opened again. Err: no panel (a hold taken here comes undone
+/// on the way out).
+fn open_panel(args: &[String]) -> std::io::Result<(Panel, Option<plat::backlight::Hold>)> {
+    let mut stray = None;
+    if let Some(v) = arg(args, "--drm=") {
+        match plat::drm::inherit(&v) {
+            Ok(inh) if std::env::var("LUYAZ_UI_DRM_HANDOFF").is_ok_and(|v| v == "0") => {
+                eprintln!("drm: handed card refused (LUYAZ_UI_DRM_HANDOFF=0), opening it afresh");
+                stray = Some(inh.into_file());
+            }
+            Ok(inh) => match Panel::adopt(inh) {
+                Ok(p) => return Ok((p, None)),
+                Err((e, card)) => {
+                    eprintln!("drm: handed card not used ({e}), opening it afresh");
+                    stray = Some(card);
+                }
+            },
+            // not ours to close
+            Err(e) => eprintln!("drm: handed card not used ({e})"),
+        }
+    }
+    let hold = plat::backlight::hold_dark();
+    drop(stray);
+    let p = Panel::drm()?;
+    Ok((p, hold))
+}
+
 /// The device program. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     trap_stop_signals();
     let offscreen = args.iter().any(|a| a == "--offscreen");
     let exit_after: Option<u32> = arg(args, "--exit-after=").and_then(|v| v.parse().ok());
-    let panel = match offscreen {
-        true => Panel::offscreen(),
-        false => match Panel::drm() {
-            Ok(panel) => panel,
+    let (panel, hold) = match offscreen {
+        true => (Panel::offscreen(), None),
+        false => match open_panel(args) {
+            Ok(v) => v,
             Err(e) => {
                 eprintln!("luyaz-ui: no panel ({e}), giving up");
                 return 1;
             }
         },
     };
+    // dark until the first frame is on the panel
+    let mut holding = hold.is_some();
     PANEL.with(|p| *p.borrow_mut() = Some(panel));
     // without a touchscreen the screen still shows everything; only taps are lost
     let (tw, th) = (W as i32, H as i32);
@@ -296,8 +343,19 @@ pub fn run(args: &[String]) -> i32 {
     let conf = Conf::load(CONF_FILE);
     let key = if offscreen { plat::key::Key::default() } else { plat::key::Key::open() };
     let mut live = Live::new(key);
+    if let Some(h) = hold {
+        // before the model and the UI: both must see a lit screen, not a dark start
+        live.bl_hold(h);
+    }
     let model = std::rc::Rc::new(live.build());
     ui::create(conf, launch, model, Box::new(live), &argv0);
+    if holding && let Some(ms) = std::env::var("LUYAZ_UI_FIRSTFRAME_DELAY_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
+        eprintln!("ui: first frame held back {ms} ms (LUYAZ_UI_FIRSTFRAME_DELAY_MS)");
+        let t0 = std::time::Instant::now();
+        while RUN.load(Ordering::Relaxed) && t0.elapsed().as_millis() < u128::from(ms) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 
     // SAFETY: LVGL's own timers for this display and input
     let (refr_timer, read_timer) = unsafe { (lv::Timer(sys::lv_display_get_refr_timer(disp)), lv::Timer(sys::lv_indev_get_read_timer(indev))) };
@@ -339,6 +397,16 @@ pub fn run(args: &[String]) -> i32 {
             timer_us = timer_us.max(us);
             over_20ms += (us > 20_000) as u64;
             passes += 1;
+        }
+        if holding {
+            match logic::first_frame(FIRST_PUSHED.load(Ordering::Relaxed), ui::with(|u| u.src.bl_held())) {
+                logic::FirstFrame::Release => {
+                    holding = false;
+                    ui::with(|u| u.src.bl_release("after first frame"));
+                }
+                logic::FirstFrame::Done => holding = false,
+                logic::FirstFrame::Wait => {}
+            }
         }
         if !offscreen {
             maybe_dump_fb();
@@ -409,6 +477,7 @@ pub fn run(args: &[String]) -> i32 {
             let busy = frames() != last_frames
                 || unsafe { sys::lv_anim_count_running() } > 0
                 || held
+                || holding
                 || unsafe { sys::lv_indev_get_state(indev) } == sys::lv_indev_state_t::LV_INDEV_STATE_PRESSED
                 || unsafe { !sys::lv_indev_get_scroll_obj(indev).is_null() };
             last_frames = frames();
@@ -453,6 +522,9 @@ pub fn run(args: &[String]) -> i32 {
     let down = ui::with(|u| u.powering_down());
     if down {
         ui::with(|u| u.src.bl_off());
+    } else {
+        // still dark waiting for a first frame: back on (nothing when no hold is on)
+        ui::with(|u| u.src.bl_release("at exit"));
     }
     PANEL.with(|p| *p.borrow_mut() = None);
     TOUCH.with(|t| *t.borrow_mut() = None);

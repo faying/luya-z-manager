@@ -459,6 +459,11 @@ impl Ui {
         self.conf.save();
     }
 
+    /// What the brightness row shows: the slider's value and its percentage text (--brightcheck).
+    pub fn bright_probe(&self) -> (i32, String) {
+        (self.sys.bright.slider_value(), String::from_utf8_lossy(&self.sys.bright_v.text()).into_owned())
+    }
+
     fn bright_label(&mut self) {
         let mx = self.src.bl_max(&self.model);
         let max = if mx > 0 { mx } else { 255 };

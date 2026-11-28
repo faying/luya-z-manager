@@ -104,6 +104,9 @@ Before packaging, the script checks: the touch program must be the Rust build; t
 You can also build the pieces separately and point `build-kit.sh` at the existing files:
 
 ```sh
+# the first two lines make the touch UI's build image
+docker build -t luyaz-build -f onboard/build.Dockerfile onboard
+export LUYAZ_RS_IMAGE=luyaz-build
 (cd touch-ui && rs/setup-src.sh && rs/build.sh device out/luyaz-ui)   # read from here by default
 CORE_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # a core built elsewhere instead of building luyaz-core
 ```

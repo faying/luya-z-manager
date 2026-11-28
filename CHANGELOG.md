@@ -21,7 +21,17 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- touch: for the black, noise, black when the touch UI takes the screen over (issue #11; to be confirmed on the device). On a cold boot (or any fresh start) the backlight goes dark before the panel is opened and comes back once the first frame has really reached the panel (a failed push does not count); 8 s at most, then it comes on anyway. It comes back at `ui.conf`'s `bright=` (1.34.2's replacement of the stock UI's boot preset, now written then instead of before: the panel stays dark until the first frame); the level the panel had is lit again only without one. Anything written to the panel by someone else in that window is replaced by that level, not taken over. A power key in that window still turns the screen off, and the next wake is at the saved level. The level the panel had (the stock UI's own, e.g. its preset `3`) is kept in `/tmp/luyaz/ui-bl-hold` first (no marker written, no dark start), so a UI that dies in the window leaves it to the next one or to the sentinel, which hands the stock UI back its own level. A theme or language switch now hands the open `/dev/dri/card0` to the new image (`--drm=`): no modeset, no clear, the old page stays on the panel until the new one is drawn over it, instead of going black. A handed card that does not check out (not a DRM device, bad values) is closed only after the backlight is dark, then the card is opened afresh; fds that are not a DRM card are never closed. For device tests only: `LUYAZ_UI_DRM_HANDOFF=0` refuses the handed card, `LUYAZ_UI_FIRSTFRAME_DELAY_MS=N` holds the first frame back.
+- sentinel: before the vendor UI or the explanation frame gets the screen, a backlight level the touch UI held dark and never lit again (`/tmp/luyaz/ui-bl-hold`) is written back (held to `max_brightness`; a marker without a level is only removed; a failed write keeps the marker). Skipped while a luyaz-ui still runs, so it never races that UI's own writes; with no marker nothing changes.
 - esim bundle: `qmi_uim_probe` gains `close <chan> [slot]`, `iccid [slot]` (card session 6/7; read-only check on u60g 11-16: session 7 is slot 2) and per-slot USIM for `apps`/`provision`; its usage line names `close <chan> [slot]`, and core closes by slot only when it sees that (an older probe would close on slot 1, so it does not). The kit reads the EID in both slots, and no longer uses `flock -w` (the device's busybox has no `-w`, so that read always came back empty).
+
+## touch 1.34.2 — 2026-11-28
+
+- starting with the screen lit applies the saved brightness from `ui.conf` (`bright=`) to `/sys/class/leds/led:lcd/brightness`, instead of keeping the `3` left by the stock UI at boot (`aw9x-led` treats `1..=5` as preset indices `16..=255`, while `6..=255` are direct PWM values; reading `3` back clamped the slider to its floor `10` = `3%` while the panel stayed bright, and the first drag dropped to PWM `10`). Replaces 1.34.1's tab-visit re-read.
+
+## touch 1.34.1 — 2026-11-28
+
+- the brightness slider on the system tab follows the panel: after a reboot it showed 3% while the panel was at full, and dragging first dimmed the screen. The UI took the level it read at start; it now reads the panel again whenever the tab is shown (not while a finger is on the slider). `luyaz-ui --brightcheck` checks it offscreen.
 
 ## core 1.106.5 — 2026-11-25
 

@@ -20,7 +20,9 @@ cargo zigbuild --target aarch64-unknown-linux-musl --profile release-device -p l
 cargo zigbuild --target aarch64-unknown-linux-musl --release -p luyaz-web
 ```
 
-The touch UI builds with `touch-ui/rs/build.sh device`. [DEPLOY.md](DEPLOY.md) covers putting a
+The touch UI builds with `touch-ui/rs/setup-src.sh` (once) and `touch-ui/rs/build.sh device`; both
+need `LUYAZ_RS_IMAGE` set to the image built from that Dockerfile
+([touch-ui/README.md](touch-ui/README.md#build)). [DEPLOY.md](DEPLOY.md) covers putting a
 build on a device.
 
 ## Pull request checklist

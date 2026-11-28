@@ -64,11 +64,19 @@ pub struct Panel {
     /// UI-space copy of what is on the panel, for --png (empty = not kept: the device runs
     /// measure without it)
     shadow: Vec<u16>,
+    /// a DIRTYFB failed since the last [`Panel::take_frame_ok`]
+    push_err: bool,
+    /// a DIRTYFB failure (or its absence) was logged once
+    push_logged: bool,
 }
 
 impl Panel {
     pub fn offscreen() -> Panel {
-        Panel { drm: None, mem: vec![0; W * H], rotate: true, pushed_px: 0, pushes: 0, rects: 0, pending: None, each: each(), shadow: vec![0; W * H] }
+        Panel::with(None, vec![0; W * H], vec![0; W * H])
+    }
+
+    fn with(drm: Option<drm::Drm>, mem: Vec<u16>, shadow: Vec<u16>) -> Panel {
+        Panel { drm, mem, rotate: true, pushed_px: 0, pushes: 0, rects: 0, pending: None, each: each(), shadow, push_err: false, push_logged: false }
     }
 
     pub fn drm() -> std::io::Result<Panel> {
@@ -76,7 +84,22 @@ impl Panel {
         if (d.width, d.height) != (W, H) {
             return Err(std::io::Error::other(format!("panel is {}x{}, not {W}x{H}", d.width, d.height)));
         }
-        Ok(Panel { drm: Some(d), mem: Vec::new(), rotate: true, pushed_px: 0, pushes: 0, rects: 0, pending: None, each: each(), shadow: Vec::new() })
+        Ok(Panel::with(Some(d), Vec::new(), Vec::new()))
+    }
+
+    /// The card a theme exec handed over ([`drm::Drm::adopt`]); failed: the card back, to close.
+    pub fn adopt(inh: drm::Inherited) -> Result<Panel, (std::io::Error, std::fs::File)> {
+        drm::Drm::adopt(inh).map(|d| Panel::with(Some(d), Vec::new(), Vec::new()))
+    }
+
+    /// What a theme exec passes on; None offscreen.
+    pub fn handoff(&self) -> Option<drm::Handoff> {
+        self.drm.as_ref().map(drm::Drm::handoff)
+    }
+
+    /// Every push since the last call reached the panel (ENOSYS counts: that driver needs none).
+    pub fn take_frame_ok(&mut self) -> bool {
+        !std::mem::take(&mut self.push_err)
     }
 
     /// A real panel (not an offscreen run).
@@ -135,7 +158,20 @@ impl Panel {
     pub fn commit(&mut self) {
         let Some((x1, y1, x2, y2)) = self.pending.take() else { return };
         if let Some(d) = &self.drm {
-            d.dirty(x1, y1, x2, y2);
+            match d.dirty(x1, y1, x2, y2) {
+                Ok(()) => {}
+                Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => {
+                    if !std::mem::replace(&mut self.push_logged, true) {
+                        eprintln!("drm: no DIRTYFB on this driver (ENOSYS): frames go out as drawn");
+                    }
+                }
+                Err(e) => {
+                    self.push_err = true;
+                    if !std::mem::replace(&mut self.push_logged, true) {
+                        eprintln!("drm: DIRTYFB failed: {e} (logged once)");
+                    }
+                }
+            }
         }
         self.pushed_px += ((x2 - x1) * (y2 - y1)) as u64;
         self.pushes += 1;

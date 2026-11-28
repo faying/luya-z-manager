@@ -17,7 +17,7 @@ cargo zigbuild --target aarch64-unknown-linux-musl --profile release-device -p l
 cargo zigbuild --target aarch64-unknown-linux-musl --release -p luyaz-web
 ```
 
-触屏界面用 `touch-ui/rs/build.sh device` 编。编好的程序怎么装上设备，看 [DEPLOY.md](DEPLOY.md)。
+触屏界面用 `touch-ui/rs/setup-src.sh`（一次）和 `touch-ui/rs/build.sh device` 编，两个脚本都要把 `LUYAZ_RS_IMAGE` 设成用那份 Dockerfile 建的镜像（见 [touch-ui/README.zh-CN.md](touch-ui/README.zh-CN.md#构建)）。编好的程序怎么装上设备，看 [DEPLOY.md](DEPLOY.md)。
 
 ## PR 自查
 

@@ -97,6 +97,12 @@ impl Live {
         woke || changed
     }
 
+    /// Dark until the first frame ([`plat::backlight::hold_dark`]): before [`Live::build`] and
+    /// `ui::create`, so both see a lit screen at the held level.
+    pub fn bl_hold(&mut self, h: plat::backlight::Hold) {
+        self.bl.hold(h);
+    }
+
     /// The view model from the getters.
     pub fn build(&mut self) -> Model {
         let (data_ok, data) = self.core.refresh();
@@ -386,6 +392,12 @@ impl Source for Live {
     fn bl_remember(&mut self, level: i32) {
         self.bl.remember(level);
     }
+    fn bl_release(&mut self, why: &str) {
+        self.bl.release(why);
+    }
+    fn bl_held(&self) -> bool {
+        self.bl.is_held()
+    }
 
     fn key_poll(&mut self, now_ms: u32) -> i32 {
         self.key.poll(now_ms)
@@ -553,7 +565,16 @@ impl Source for Live {
 
     fn exec(&mut self, l: &Launch) -> i32 {
         let argv0 = std::env::args().next().unwrap_or_default();
-        crate::exec::exec_self(&argv0, l)
+        let mut l = *l;
+        // the card goes with the exec; still dark waiting for the first frame, it does not: the
+        // next image opens it afresh and takes the hold over from its marker
+        l.drm = if self.bl.is_held() {
+            eprintln!("ui: exec before the first frame: the card is opened afresh, the panel stays dark");
+            None
+        } else {
+            crate::device::drm_handoff()
+        };
+        crate::exec::exec_self(&argv0, &l)
     }
     /// Opening a FIFO for writing with O_NONBLOCK fails (ENXIO) when nobody reads it: exactly
     /// "the screen's owner is not running".

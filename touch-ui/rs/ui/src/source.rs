@@ -149,6 +149,13 @@ pub trait Source {
     fn bl_off(&mut self);
     fn bl_set(&mut self, level: i32);
     fn bl_remember(&mut self, level: i32);
+    /// Dark until the first frame: the first frame is up (or the program ends; `why` says which,
+    /// for the log), the panel on. Nothing when no hold is on.
+    fn bl_release(&mut self, _why: &str) {}
+    /// Still dark waiting for the first frame.
+    fn bl_held(&self) -> bool {
+        false
+    }
 
     // ---- the power key ----
     fn key_poll(&mut self, now_ms: u32) -> i32;
